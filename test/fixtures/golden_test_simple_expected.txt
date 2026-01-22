@@ -1,0 +1,27 @@
+=== GOLDEN TEST START ===
+1. Comments: OK
+2. Simple commands: OK
+3. Variables: bar
+4. Arithmetic: 8
+5. Let: 15
+6. Arrays: one two three
+       2
+1
+2
+3
+1
+2
+3
+10. If: true
+11. If-else: equals 2
+12. Case: apple
+13. Function: OK
+test
+14. Compound &&: OK
+15. Compound ||: OK
+16. Test -gt: OK
+17. Negation: OK
+18. Arithmetic vars: 15
+19. Subshell: OK
+20. Assignments: 1 2 3
+=== GOLDEN TEST END ===

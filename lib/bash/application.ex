@@ -1,0 +1,17 @@
+defmodule Bash.Application do
+  @moduledoc false
+
+  use Application
+
+  @impl true
+  def start(_type, _args) do
+    children = [
+      {Registry, keys: :unique, name: Bash.SessionRegistry},
+      Bash.SessionSupervisor,
+      Bash.OrphanSupervisor
+    ]
+
+    opts = [strategy: :one_for_one, name: Bash.Supervisor]
+    Supervisor.start_link(children, opts)
+  end
+end

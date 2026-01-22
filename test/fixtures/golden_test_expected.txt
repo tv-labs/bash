@@ -1,0 +1,76 @@
+=== GOLDEN TEST START ===
+1. Comments: OK
+2. Simple commands: OK
+3. Variables: FOO=bar
+4. Export: BAZ=qux
+5. Command substitution: command substitution
+6. Arithmetic: 5 + 3 = 8
+7. Let: 10 + 5 = 15
+8. Arrays: one two three
+9. Array expansion: one two three
+       2
+10. Pipeline: word count = 2
+redirect test
+11. Redirect: OK
+12. For loop: 1 2 3
+13. While loop: 1 2 3
+14. If statement: condition true
+15. If-elif-else: val is 2
+16. Test -n: string is not empty
+17. Test [[...]]: strings match
+18. Case: found apple
+19. Function: called successfully
+19. Function return code: 42
+20. Function params: Hello World
+test
+21. Compound &&: both executed
+22. Compound ||: second executed
+23. Compound ;: both executed
+24. Logical AND: both conditions true
+25. Logical OR: second condition true
+26. Test -f: file exists
+27. Test -d: directory exists
+28. Test negation: file does not exist
+29. String comparison: abc < def
+30. Numeric comparison: 5 > 3
+31. Arithmetic complex: 10 * 2 + 5 - 3 = 22
+32. Arithmetic variables: 5 * 3 = 15
+33. Increment: N++ = 11
+34. Subshell: executed in subshell
+35. Subshell inner: OUTER=inner
+35. Subshell outer: OUTER=outer
+36. Exit code true: 0
+37. Exit code false: 1
+38. Type builtin: echo is a builtin
+39. CD/PWD: changed to /tmp
+40. Multiple assignments: A=1 B=2 C=3
+41. Variable as command: OK
+42. Quoted strings: double and single
+43. Escape sequences: $VAR `cmd`
+44. Test -z: variable is empty
+45. Default value: default
+46. String length: 5
+47. Array length: 4 elements
+48. For with array: a b c d
+49. Nested if: both conditions true
+50. For with range: 1 2 3
+51. Break: 1 2 (stopped at 3)
+52. Continue: 1 2 4 5 (skipped 3)
+53. Local inside: local_value
+53. Local outside: global_value
+54. Readonly: constant
+55. Shift: first=A after_shift=B
+56. Printf: formatted 42
+57. Declare -i: 8
+58. Nested loops: 1a 1b 2a 2b
+59. Case glob: shell script
+60. Array append: first second third
+61. Associative array: value1 value2
+62. Nested cmd sub: nested
+63. Arithmetic condition: 5 > 3
+64. Return value: returned_value
+65. set -e: reached end
+66. Brace expansion: a b c
+67. Sequence: 1 2 3
+=== GOLDEN TEST END ===
+Exit code: 0
