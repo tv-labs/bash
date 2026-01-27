@@ -291,7 +291,7 @@ end
 iex> ScriptMonitor.start_link()
 {:ok, #PID<...>}
 
-iex> ~b"sleep 4"o
+iex> ~b"sleep 4"O
 11:51:26.658 [warning] Slow command: sleep took 4017ms
 11:51:26.658 [info] Script completed in 4018ms (exit: 0)
 ```
@@ -324,7 +324,7 @@ defmodule GitHelper do
     echo "Branch: $(git branch --show-current)"
     echo "Status:"
     git status --short
-    """o
+    """O
   end
 end
 ```
