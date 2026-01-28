@@ -1,5 +1,14 @@
 # Bash
 
+[![Hex.pm Version](http://img.shields.io/hexpm/v/bash.svg)](https://hex.pm/packages/bash)
+[![Hex docs](http://img.shields.io/badge/hex.pm-docs-blue.svg?style=flat)](https://hexdocs.pm/bash)
+[![License: Apache](https://img.shields.io/badge/License-Apache-yellow.svg)](./LICENSE.md)
+
+You're currently looking at the main branch. [Check out the docs for the latest
+published version.](https://hexdocs.pm/bash)
+
+---
+
 <!-- MDOC -->
 
 A Bash interpreter written in pure Elixir.
@@ -23,8 +32,8 @@ Bash.stdout(result)
 # Start a session and run many commands
 result = Bash.with_session(fn session ->
   session
-  |> Bash.run(~b"echo hello")
-  |> Bash.run(~b"echo uhoh >&2")
+  |> Bash.run("echo hello")
+  |> Bash.run("echo uhoh >&2")
   |> Bash.stdout()
 end)
 #=> "hello\n"
