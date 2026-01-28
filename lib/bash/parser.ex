@@ -56,6 +56,10 @@ defmodule Bash.Parser do
     end
   end
 
+  # Check if a token terminates a statement list (closing delimiters, keywords that
+  # end blocks). Used by parse_statement_list and peek_for_statement.
+  defguardp is_statement_terminator(token) when elem(token, 0) in ~w[eof rbrace rparen fi done esac elif else then do dsemi dsemi_and semi_and]a
+
   # Resolve a heredoc in accumulated statements using tokenizer-provided content
   # Statements are in reverse order (most recent first)
   defp resolve_heredoc_in_statements(acc, content, delimiter) do
@@ -296,7 +300,6 @@ defmodule Bash.Parser do
     {shebang, state} =
       case current_token(state) do
         {:shebang, interpreter, _, _} ->
-          # Skip the shebang token and any following newline
           state = advance(state)
 
           state =
@@ -331,51 +334,10 @@ defmodule Bash.Parser do
     {_seps, state} = collect_separators(state, [])
 
     case current_token(state) do
-      {:eof, _, _} ->
-        {:ok, Enum.reverse(acc), state}
-
-      # Stop at closing tokens for compound commands
-      {:rbrace, _, _} ->
-        {:ok, Enum.reverse(acc), state}
-
-      {:rparen, _, _} ->
-        {:ok, Enum.reverse(acc), state}
-
-      {:fi, _, _} ->
-        {:ok, Enum.reverse(acc), state}
-
-      {:done, _, _} ->
-        {:ok, Enum.reverse(acc), state}
-
-      {:esac, _, _} ->
-        {:ok, Enum.reverse(acc), state}
-
-      {:elif, _, _} ->
-        {:ok, Enum.reverse(acc), state}
-
-      {:else, _, _} ->
-        {:ok, Enum.reverse(acc), state}
-
-      {:then, _, _} ->
-        {:ok, Enum.reverse(acc), state}
-
-      {:do, _, _} ->
-        {:ok, Enum.reverse(acc), state}
-
       # Heredoc content - resolve pending heredocs in accumulated statements
       {:heredoc_content, content, delimiter, _strip_tabs} ->
         resolved_acc = resolve_heredoc_in_statements(acc, content, delimiter)
         parse_statement_list(advance(state), resolved_acc)
-
-      # Case clause terminators
-      {:dsemi, _, _} ->
-        {:ok, Enum.reverse(acc), state}
-
-      {:dsemi_and, _, _} ->
-        {:ok, Enum.reverse(acc), state}
-
-      {:semi_and, _, _} ->
-        {:ok, Enum.reverse(acc), state}
 
       # Handle standalone comment
       {:comment, text, line, col} ->
@@ -404,7 +366,11 @@ defmodule Bash.Parser do
 
         parse_statement_list(state, new_acc)
 
-      _ ->
+      token when is_statement_terminator(token) ->
+        # Stop at EOF, closing tokens, and case clause terminators
+        {:ok, Enum.reverse(acc), state}
+
+      _token ->
         case parse_complete_statement(state) do
           {:ok, statement, new_state} ->
             # Collect separators after statement
@@ -432,28 +398,12 @@ defmodule Bash.Parser do
 
           {:error, _, _, _} = err ->
             err
-        end
+      end
     end
   end
 
-  # Check if there's a potential statement following (not EOF or closing token)
   defp peek_for_statement(state) do
-    case current_token(state) do
-      {:eof, _, _} -> false
-      {:rbrace, _, _} -> false
-      {:rparen, _, _} -> false
-      {:fi, _, _} -> false
-      {:done, _, _} -> false
-      {:esac, _, _} -> false
-      {:elif, _, _} -> false
-      {:else, _, _} -> false
-      {:then, _, _} -> false
-      {:do, _, _} -> false
-      {:dsemi, _, _} -> false
-      {:dsemi_and, _, _} -> false
-      {:semi_and, _, _} -> false
-      _ -> true
-    end
+    not is_statement_terminator(current_token(state))
   end
 
   # Collect separators and return them along with new state
@@ -484,26 +434,16 @@ defmodule Bash.Parser do
   # Parse && and || operators
   defp parse_logical_continuation(left, state) do
     case current_token(state) do
-      {:and_if, line, col} ->
-        state = advance(state)
-        state = skip_newlines(state)
+      {token, line, col} when token in ~w[and_if or_if]a ->
+        op = if token == :and_if, do: :and, else: :or
 
-        case parse_pipeline(state) do
+        state
+        |> advance()
+        |> skip_newlines()
+        |> parse_pipeline()
+        |> case do
           {:ok, right, new_state} ->
-            compound = merge_compound_operand(left, :and, right, line, col)
-            parse_logical_continuation(compound, new_state)
-
-          {:error, _, _, _} = err ->
-            err
-        end
-
-      {:or_if, line, col} ->
-        state = advance(state)
-        state = skip_newlines(state)
-
-        case parse_pipeline(state) do
-          {:ok, right, new_state} ->
-            compound = merge_compound_operand(left, :or, right, line, col)
+            compound = merge_compound_operand(left, op, right, line, col)
             parse_logical_continuation(compound, new_state)
 
           {:error, _, _, _} = err ->
@@ -548,12 +488,12 @@ defmodule Bash.Parser do
          %AST.Compound{kind: :operand, statements: stmts},
          op,
          nil,
-         _line,
-         _col
+         line,
+         col
        ) do
     # Trailing operator (like &) - no right side
     %AST.Compound{
-      meta: AST.meta(1, 1),
+      meta: AST.meta(line, col),
       kind: :operand,
       statements: stmts ++ [{:operator, op}]
     }
@@ -563,11 +503,11 @@ defmodule Bash.Parser do
          %AST.Compound{kind: :operand, statements: stmts},
          op,
          right,
-         _line,
-         _col
+         line,
+         col
        ) do
     %AST.Compound{
-      meta: AST.meta(1, 1),
+      meta: AST.meta(line, col),
       kind: :operand,
       statements: stmts ++ [{:operator, op}, right]
     }
@@ -610,10 +550,11 @@ defmodule Bash.Parser do
   defp parse_pipeline_continuation(first_cmd, state, commands, negate) do
     case current_token(state) do
       {:pipe, _line, _col} ->
-        state = advance(state)
-        state = skip_newlines(state)
-
-        case parse_command(state) do
+        state
+        |> advance()
+        |> skip_newlines()
+        |> parse_command()
+        |> case do
           {:ok, cmd, new_state} ->
             parse_pipeline_continuation(first_cmd, new_state, [cmd | commands], negate)
 
@@ -621,22 +562,21 @@ defmodule Bash.Parser do
             err
         end
 
+      _ when length(commands) == 1 and not negate ->
+        # Single command without negation - return as-is
+        {:ok, first_cmd, state}
+
       _ ->
-        if length(commands) == 1 and not negate do
-          # Single command without negation - return as-is
-          {:ok, first_cmd, state}
-        else
-          # Either a pipeline or a negated command - wrap in Pipeline
-          {line, col} = get_meta_position(first_cmd)
+        # Either a pipeline or a negated command - wrap in Pipeline
+        {line, col} = get_meta_position(first_cmd)
 
-          pipeline = %AST.Pipeline{
-            meta: AST.meta(line, col),
-            commands: Enum.reverse(commands),
-            negate: negate
-          }
+        pipeline = %AST.Pipeline{
+          meta: AST.meta(line, col),
+          commands: Enum.reverse(commands),
+          negate: negate
+        }
 
-          {:ok, pipeline, state}
-        end
+        {:ok, pipeline, state}
     end
   end
 
@@ -680,20 +620,14 @@ defmodule Bash.Parser do
               {:rparen, _, _} ->
                 state = advance(state)
                 state = skip_newlines(state)
-                # This is a function definition
-                case parse_function_body(state) do
-                  {:ok, body, new_state} ->
-                    func = %Function{
-                      meta: AST.meta(line, col),
-                      name: name_str,
-                      body: body
-                    }
+                # This is a function definition - check for SC1064
+                parse_function_body_with_check(state, name_str, line, col)
 
-                    {:ok, func, new_state}
-
-                  {:error, _, _, _} = err ->
-                    err
-                end
+              # SC1065: Content between () - bash functions don't take parameters
+              {:word, _, wline, wcol} ->
+                {:error,
+                 "(SC1065) Bash function definition doesn't take parameters. Remove content from `()` or declare them locally inside the function",
+                 wline, wcol}
 
               _ ->
                 # lparen without rparen - treat as subshell or error
@@ -769,6 +703,12 @@ defmodule Bash.Parser do
 
           {:ok, compound, state}
         end
+
+      # SC1133: Pipe at start of line (should end previous line)
+      {:pipe, tline, tcol} ->
+        {:error,
+         "(SC1133) Unexpected `|` at start of line. The pipe should be at the end of the previous line, not the start of this one.",
+         tline, tcol}
 
       token ->
         {tline, tcol} = token_position(token)
@@ -908,9 +848,9 @@ defmodule Bash.Parser do
         key_word = build_word(key_parts, key_line, key_col)
         state = advance(state)
 
-        # Expect closing bracket
+        # Expect closing bracket (rbracket_no_space is fine here - SC1020 only for test brackets)
         case current_token(state) do
-          {:rbracket, _, _} ->
+          rbracket when elem(rbracket, 0) in [:rbracket, :rbracket_no_space] ->
             state = advance(state)
 
             # Expect =value (as a word starting with =)
@@ -999,7 +939,8 @@ defmodule Bash.Parser do
   end
 
   # Reserved words that should be treated as literal words in argument position
-  @reserved_as_arg [:done, :fi, :esac, :then, :do, :elif, :else, :in, :rbrace]
+  @reserved_as_arg ~w[done fi esac then do elif else in rbrace]a
+  @redirect_tokens ~w[less greater dgreater lessand greaterand lessgreat andgreat anddgreat dless dlessdash tless io_number]a
 
   defp parse_command_args(state, args, redirects) do
     case current_token(state) do
@@ -1012,111 +953,9 @@ defmodule Bash.Parser do
         word = build_word([{:literal, Atom.to_string(reserved)}], line, col)
         parse_command_args(advance(state), [word | args], redirects)
 
-      # Redirects - token format is {:type, fd, line, col}
-      {:less, _fd, line, col} ->
-        case parse_redirect(:input, 0, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_command_args(new_state, args, [redirect | redirects])
-
-          err ->
-            err
-        end
-
-      {:greater, fd, line, col} ->
-        case parse_redirect(:output, fd, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_command_args(new_state, args, [redirect | redirects])
-
-          err ->
-            err
-        end
-
-      {:dgreater, fd, line, col} ->
-        case parse_redirect(:append, fd, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_command_args(new_state, args, [redirect | redirects])
-
-          err ->
-            err
-        end
-
-      {:lessand, _fd, line, col} ->
-        case parse_redirect(:duplicate, 0, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_command_args(new_state, args, [redirect | redirects])
-
-          err ->
-            err
-        end
-
-      {:greaterand, fd, line, col} ->
-        case parse_redirect(:duplicate, fd, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_command_args(new_state, args, [redirect | redirects])
-
-          err ->
-            err
-        end
-
-      {:lessgreat, _fd, line, col} ->
-        case parse_redirect(:read_write, 0, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_command_args(new_state, args, [redirect | redirects])
-
-          err ->
-            err
-        end
-
-      {:andgreat, line, col} ->
-        # &> redirects both stdout and stderr to file
-        case parse_redirect(:output, :both, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_command_args(new_state, args, [redirect | redirects])
-
-          err ->
-            err
-        end
-
-      {:anddgreat, line, col} ->
-        # &>> appends both stdout and stderr to file
-        case parse_redirect(:append, :both, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_command_args(new_state, args, [redirect | redirects])
-
-          err ->
-            err
-        end
-
-      {:dless, fd, line, col} ->
-        case parse_heredoc(:heredoc, fd, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_command_args(new_state, args, [redirect | redirects])
-
-          err ->
-            err
-        end
-
-      {:dlessdash, fd, line, col} ->
-        case parse_heredoc(:heredoc_strip, fd, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_command_args(new_state, args, [redirect | redirects])
-
-          err ->
-            err
-        end
-
-      {:tless, fd, line, col} ->
-        case parse_herestring(fd, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_command_args(new_state, args, [redirect | redirects])
-
-          err ->
-            err
-        end
-
-      # File descriptor redirects with explicit fd like 2>&1
-      {:io_number, fd, line, col} ->
-        case parse_fd_redirect(fd, line, col, advance(state)) do
+      # Redirects and file descriptor redirects
+      token when elem(token, 0) in @redirect_tokens ->
+        case parse_classified_redirect(state, classify_redirect_token(token)) do
           {:ok, redirect, new_state} ->
             parse_command_args(new_state, args, [redirect | redirects])
 
@@ -1463,124 +1302,20 @@ defmodule Bash.Parser do
   # Parse trailing redirects after compound commands (while, for, until, etc.)
   # These only collect redirects, not command arguments
   defp parse_trailing_redirects(state, redirects) do
-    case current_token(state) do
-      {:less, _fd, line, col} ->
-        case parse_redirect(:input, 0, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_trailing_redirects(new_state, [redirect | redirects])
-
-          {:error, _, _, _} = err ->
-            err
-        end
-
-      {:greater, fd, line, col} ->
-        case parse_redirect(:output, fd, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_trailing_redirects(new_state, [redirect | redirects])
-
-          {:error, _, _, _} = err ->
-            err
-        end
-
-      {:dgreater, fd, line, col} ->
-        case parse_redirect(:append, fd, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_trailing_redirects(new_state, [redirect | redirects])
-
-          {:error, _, _, _} = err ->
-            err
-        end
-
-      {:lessand, _fd, line, col} ->
-        case parse_redirect(:duplicate, 0, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_trailing_redirects(new_state, [redirect | redirects])
-
-          {:error, _, _, _} = err ->
-            err
-        end
-
-      {:greaterand, fd, line, col} ->
-        case parse_redirect(:duplicate, fd, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_trailing_redirects(new_state, [redirect | redirects])
-
-          {:error, _, _, _} = err ->
-            err
-        end
-
-      {:lessgreat, _fd, line, col} ->
-        case parse_redirect(:read_write, 0, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_trailing_redirects(new_state, [redirect | redirects])
-
-          {:error, _, _, _} = err ->
-            err
-        end
-
-      {:andgreat, line, col} ->
-        case parse_redirect(:output, :both, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_trailing_redirects(new_state, [redirect | redirects])
-
-          {:error, _, _, _} = err ->
-            err
-        end
-
-      {:anddgreat, line, col} ->
-        case parse_redirect(:append, :both, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_trailing_redirects(new_state, [redirect | redirects])
-
-          {:error, _, _, _} = err ->
-            err
-        end
-
-      {:dless, fd, line, col} ->
-        case parse_heredoc(:heredoc, fd, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_trailing_redirects(new_state, [redirect | redirects])
-
-          {:error, _, _, _} = err ->
-            err
-        end
-
-      {:dlessdash, fd, line, col} ->
-        case parse_heredoc(:heredoc_strip, fd, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_trailing_redirects(new_state, [redirect | redirects])
-
-          {:error, _, _, _} = err ->
-            err
-        end
-
-      {:tless, fd, line, col} ->
-        case parse_herestring(fd, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_trailing_redirects(new_state, [redirect | redirects])
-
-          {:error, _, _, _} = err ->
-            err
-        end
-
-      {:io_number, fd, line, col} ->
-        case parse_fd_redirect(fd, line, col, advance(state)) do
-          {:ok, redirect, new_state} ->
-            parse_trailing_redirects(new_state, [redirect | redirects])
-
-          {:error, _, _, _} = err ->
-            err
-        end
-
-      _ ->
-        # No more redirects - return what we've collected
+    case classify_redirect_token(current_token(state)) do
+      :not_redirect ->
         {:ok, Enum.reverse(redirects), state}
+
+      classification ->
+        case parse_classified_redirect(state, classification) do
+          {:ok, redirect, new_state} ->
+            parse_trailing_redirects(new_state, [redirect | redirects])
+
+          {:error, _, _, _} = err ->
+            err
+        end
     end
   end
-
-  # ===========================================================================
-  # Control Flow Parsing
-  # ===========================================================================
 
   defp parse_if(state) do
     {line, col} = current_position(state)
@@ -1661,15 +1396,21 @@ defmodule Bash.Parser do
                 err
             end
 
-          {:else, _, _} ->
+          {:else, else_line, else_col} ->
             new_state = advance(new_state)
 
             # SC1053: Semicolon immediately after 'else' is not allowed
+            # SC1075: 'else if' should be 'elif'
             case current_token(new_state) do
               {:semi, sline, scol} ->
                 {:error,
                  "(SC1053) Semicolons directly after `else` are not allowed. Remove the `;`",
                  sline, scol}
+
+              {:if, _, _} ->
+                {:error,
+                 "(SC1075) Use `elif` instead of `else if`. `else if` requires an extra `fi`",
+                 else_line, else_col}
 
               _ ->
                 case parse_statement_list(new_state, []) do
@@ -1751,15 +1492,21 @@ defmodule Bash.Parser do
                 err
             end
 
-          {:else, _, _} ->
+          {:else, else_line, else_col} ->
             new_state = advance(new_state)
 
             # SC1053: Semicolon immediately after 'else' is not allowed
+            # SC1075: 'else if' should be 'elif'
             case current_token(new_state) do
               {:semi, sline, scol} ->
                 {:error,
                  "(SC1053) Semicolons directly after `else` are not allowed. Remove the `;`",
                  sline, scol}
+
+              {:if, _, _} ->
+                {:error,
+                 "(SC1075) Use `elif` instead of `else if`. `else if` requires an extra `fi`",
+                 else_line, else_col}
 
               _ ->
                 case parse_statement_list(new_state, []) do
@@ -1817,18 +1564,10 @@ defmodule Bash.Parser do
     executable = Enum.reject(stmts, &match?({:separator, _}, &1))
 
     case executable do
-      [single] ->
+      [single] when length(stmts) == 1 ->
         # Single executable statement - return it directly
         # Include separators in compound for formatting if there are any
-        if length(stmts) == 1 do
-          single
-        else
-          %AST.Compound{
-            meta: AST.meta(1, 1),
-            kind: :sequential,
-            statements: stmts
-          }
-        end
+        single
 
       _ ->
         %AST.Compound{
@@ -1849,9 +1588,14 @@ defmodule Bash.Parser do
       {:arith_command, content, _, _} ->
         parse_c_style_for(state, content, line, col)
 
+      # SC1086: Don't use $ on the for loop variable
+      {:word, [{:variable, var_name}], wline, wcol} ->
+        {:error,
+         "(SC1086) Don't use `$` on for loop variable `#{var_name}`. Use `for #{var_name} in ...` not `for $#{var_name} in ...`",
+         wline, wcol}
+
       {:word, [{:literal, var_name}], _, _} ->
-        state = advance(state)
-        state = skip_newlines(state)
+        state = state |> advance() |> skip_newlines()
 
         # Check for 'in' (optional - if missing, uses positional params)
         {items, state} =
@@ -1898,6 +1642,12 @@ defmodule Bash.Parser do
             {:error, "expected 'do' in for loop", tline, tcol}
         end
 
+      # SC1137: Single ( after for - missing second ( for C-style loop
+      {:lparen, tline, tcol} ->
+        {:error,
+         "(SC1137) Missing second `(` for C-style for loop. Use `for ((i=0; i<10; i++))` with double parentheses.",
+         tline, tcol}
+
       token ->
         {tline, tcol} = token_position(token)
         {:error, "expected variable name after 'for'", tline, tcol}
@@ -1907,8 +1657,7 @@ defmodule Bash.Parser do
   # Parse C-style for loop: for ((init; cond; update)); do ... done
   defp parse_c_style_for(state, content, line, col) do
     # Skip the arith_command token
-    state = advance(state)
-    state = skip_separators(state)
+    state = state |> advance() |> skip_separators()
 
     # Parse the content into init, condition, update
     # Content is like "i=0;i<3;i++" or "i=0; i<3; i++"
@@ -1961,8 +1710,7 @@ defmodule Bash.Parser do
   defp parse_word_list(state, acc) do
     case current_token(state) do
       {:word, parts, line, col} ->
-        word = build_word(parts, line, col)
-        parse_word_list(advance(state), [word | acc])
+        parse_word_list(advance(state), [build_word(parts, line, col)| acc])
 
       _ ->
         {Enum.reverse(acc), state}
@@ -2113,15 +1861,34 @@ defmodule Bash.Parser do
             case parse_statement_list(new_state, []) do
               {:ok, body, newer_state} ->
                 # Expect ;; or ;;& or ;& - store the terminator type
-                {terminator, newer_state} =
-                  case current_token(newer_state) do
-                    {:dsemi, _, _} -> {:break, advance(newer_state)}
-                    {:dsemi_and, _, _} -> {:continue_matching, advance(newer_state)}
-                    {:semi_and, _, _} -> {:fallthrough, advance(newer_state)}
-                    _ -> {:break, newer_state}
-                  end
+                case current_token(newer_state) do
+                  {:dsemi, _, _} ->
+                    parse_case_items(advance(newer_state), [{patterns, body, :break} | acc])
 
-                parse_case_items(newer_state, [{patterns, body, terminator} | acc])
+                  {:dsemi_and, _, _} ->
+                    parse_case_items(advance(newer_state), [
+                      {patterns, body, :continue_matching} | acc
+                    ])
+
+                  {:semi_and, _, _} ->
+                    parse_case_items(advance(newer_state), [{patterns, body, :fallthrough} | acc])
+
+                  {:esac, _, _} ->
+                    # Last case item, no terminator needed
+                    parse_case_items(newer_state, [{patterns, body, :break} | acc])
+
+                  # SC1074: Missing ;; between case items
+                  token when body != [] ->
+                    {tline, tcol} = token_position(token)
+
+                    {:error,
+                     "(SC1074) Missing `;;` between case items. Did you forget to add `;;` after this case branch?",
+                     tline, tcol}
+
+                  _ ->
+                    # Empty body, no terminator needed
+                    parse_case_items(newer_state, [{patterns, body, :break} | acc])
+                end
 
               {:error, _, _, _} = err ->
                 err
@@ -2194,7 +1961,7 @@ defmodule Bash.Parser do
     {parts, state} = collect_bracket_pattern_parts(state, [])
 
     case current_token(state) do
-      {:rbracket, _, _} ->
+      rbracket when elem(rbracket, 0) in [:rbracket, :rbracket_no_space] ->
         pattern_content = Enum.map_join(parts, "", fn text -> text end)
         {:ok, {:glob, "[#{pattern_content}]"}, advance(state)}
 
@@ -2206,7 +1973,7 @@ defmodule Bash.Parser do
 
   defp collect_bracket_pattern_parts(state, acc) do
     case current_token(state) do
-      {:rbracket, _, _} ->
+      rbracket when elem(rbracket, 0) in [:rbracket, :rbracket_no_space] ->
         {Enum.reverse(acc), state}
 
       {:word, [{:literal, text}], _, _} ->
@@ -2231,89 +1998,12 @@ defmodule Bash.Parser do
     end
   end
 
-  # ===========================================================================
-  # Compound Commands
-  # ===========================================================================
-
   defp parse_brace_group(state) do
-    {line, col} = current_position(state)
-    # skip '{'
-    state = advance(state)
-
-    case parse_statement_list(state, []) do
-      {:ok, stmts, new_state} ->
-        case current_token(new_state) do
-          {:rbrace, rline, rcol} ->
-            # SC1055: Empty brace group needs at least one command
-            if stmts == [] do
-              {:error,
-               "(SC1055) Brace groups need at least one command. Use `true` as a no-op if needed",
-               rline, rcol}
-            else
-              new_state = advance(new_state)
-
-              # Collect any redirections after the brace group
-              case parse_trailing_redirects(new_state, []) do
-                {:ok, redirects, final_state} ->
-                  compound = %AST.Compound{
-                    meta: AST.meta(line, col),
-                    kind: :group,
-                    statements: stmts,
-                    redirects: redirects
-                  }
-
-                  {:ok, compound, final_state}
-
-                {:error, _, _, _} = err ->
-                  err
-              end
-            end
-
-          token ->
-            {tline, tcol} = token_position(token)
-            {:error, "expected '}' to close brace group", tline, tcol}
-        end
-
-      {:error, _, _, _} = err ->
-        err
-    end
+    parse_delimited_compound(state, :rbrace, :group, "}")
   end
 
   defp parse_subshell(state) do
-    {line, col} = current_position(state)
-    # skip '('
-    state = advance(state)
-
-    case parse_statement_list(state, []) do
-      {:ok, stmts, new_state} ->
-        case current_token(new_state) do
-          {:rparen, _, _} ->
-            new_state = advance(new_state)
-
-            # Collect any redirections after the subshell
-            case parse_trailing_redirects(new_state, []) do
-              {:ok, redirects, final_state} ->
-                compound = %AST.Compound{
-                  meta: AST.meta(line, col),
-                  kind: :subshell,
-                  statements: stmts,
-                  redirects: redirects
-                }
-
-                {:ok, compound, final_state}
-
-              {:error, _, _, _} = err ->
-                err
-            end
-
-          token ->
-            {tline, tcol} = token_position(token)
-            {:error, "expected ')' to close subshell", tline, tcol}
-        end
-
-      {:error, _, _, _} = err ->
-        err
-    end
+    parse_delimited_compound(state, :rparen, :subshell, ")")
   end
 
   defp parse_arithmetic_command(state) do
@@ -2421,6 +2111,9 @@ defmodule Bash.Parser do
       {:rbracket, line, col} ->
         {:error, "(SC1033) [[ was closed with ] instead of ]] - use ]] to close [[", line, col}
 
+      {:rbracket_no_space, line, col} ->
+        {:error, "(SC1033) [[ was closed with ] instead of ]] - use ]] to close [[", line, col}
+
       # SC1026: Using [ for grouping inside [[ ]] - use ( ) instead
       {:lbracket, line, col} ->
         {:error,
@@ -2522,6 +2215,11 @@ defmodule Bash.Parser do
         # Don't include ] in args - TestCommand serializer adds it
         {:ok, Enum.reverse(acc), advance(state)}
 
+      # SC1020: Missing space before ]
+      {:rbracket_no_space, line, col} ->
+        {:error, "(SC1020) Missing space before ]. Use `[ condition ]` not `[ condition]`", line,
+         col}
+
       # SC1034: [ closed with ]] instead of ]
       {:drbracket, line, col} ->
         {:error, "(SC1034) [ was closed with ]] instead of ] - use ] to close [", line, col}
@@ -2583,10 +2281,7 @@ defmodule Bash.Parser do
     end
   end
 
-  # Unary test operators that require an argument
   @unary_test_operators ~w(-a -b -c -d -e -f -g -h -k -L -n -N -O -G -p -r -s -S -t -u -w -x -z)
-
-  # Binary test operators that require arguments on both sides
   @binary_test_operators ~w(= == != -eq -ne -lt -le -gt -ge -nt -ot -ef =~)
 
   # Validate test command arguments for common errors
@@ -2687,41 +2382,74 @@ defmodule Bash.Parser do
           state = advance(state)
 
           # Optional ()
-          state =
-            case current_token(state) do
-              {:lparen, _, _} ->
-                state = advance(state)
+          case current_token(state) do
+            {:lparen, _pline, _pcol} ->
+              state = advance(state)
 
-                case current_token(state) do
-                  {:rparen, _, _} -> advance(state)
-                  _ -> state
-                end
+              case current_token(state) do
+                {:rparen, _, _} ->
+                  state = advance(state)
+                  state = skip_newlines(state)
+                  parse_function_body_with_check(state, name, line, col)
 
-              _ ->
-                state
-            end
+                # SC1065: Content between () - bash functions don't take parameters
+                token ->
+                  {tline, tcol} = token_position(token)
 
-          state = skip_newlines(state)
+                  {:error,
+                   "(SC1065) Bash function definition doesn't take parameters. Remove content from `()` or declare them locally inside the function",
+                   tline, tcol}
+              end
 
-          # Parse body (usually { ... })
-          case parse_function_body(state) do
-            {:ok, body, new_state} ->
-              func = %Function{
-                meta: AST.meta(line, col),
-                name: name,
-                body: body
-              }
-
-              {:ok, func, new_state}
-
-            {:error, _, _, _} = err ->
-              err
+            _ ->
+              state = skip_newlines(state)
+              parse_function_body_with_check(state, name, line, col)
           end
         end
 
       token ->
         {tline, tcol} = token_position(token)
         {:error, "expected function name", tline, tcol}
+    end
+  end
+
+  # Parse function body with SC1064 check
+  # Ensures function body starts with a compound command
+  defp parse_function_body_with_check(state, func_name, line, col) do
+    # SC1064: Function body must be a compound command (usually { ... } or (...))
+    case current_token(state) do
+      {:lbrace, _, _} ->
+        parse_function_body_and_build(state, func_name, line, col)
+
+      {:lparen, _, _} ->
+        parse_function_body_and_build(state, func_name, line, col)
+
+      # Also allow other compound commands like if, while, for, case
+      {kw, _, _} when kw in [:if, :while, :until, :for, :case] ->
+        parse_function_body_and_build(state, func_name, line, col)
+
+      token ->
+        {tline, tcol} = token_position(token)
+
+        {:error,
+         "(SC1064) Expected `{` to open function body. Use `#{func_name}() { ...; }` not `#{func_name}() command`",
+         tline, tcol}
+    end
+  end
+
+  defp parse_function_body_and_build(state, func_name, line, col) do
+    case parse_function_body(state) do
+      {:ok, body, new_state} ->
+        func = %Function{
+          meta: AST.meta(line, col),
+          name: func_name,
+          body: body
+        }
+
+        {:ok, func, new_state}
+
+      {:error, _, _, _} = err ->
+        err
     end
   end
 
@@ -2981,21 +2709,11 @@ defmodule Bash.Parser do
     %{state | pos: pos + 1}
   end
 
-  defp current_position(state) do
-    case current_token(state) do
-      {_, line, col} -> {line, col}
-      {_, _, line, col} -> {line, col}
-      _ -> {1, 1}
-    end
-  end
+  defp current_position(state), do: token_position(current_token(state))
 
-  defp token_position(token) do
-    case token do
-      {_, line, col} -> {line, col}
-      {_, _, line, col} -> {line, col}
-      _ -> {1, 1}
-    end
-  end
+  defp token_position({_, line, col}), do: {line, col}
+  defp token_position({_, _, line, col}), do: {line, col}
+  defp token_position(_), do: {1, 1}
 
   defp get_meta_position(%{meta: %{line: line, column: col}}), do: {line, col}
   defp get_meta_position(_), do: {1, 1}
@@ -3014,6 +2732,88 @@ defmodule Bash.Parser do
       {:newline, _, _} -> skip_newlines(advance(state))
       {:comment, _, _, _} -> skip_newlines(advance(state))
       _ -> state
+    end
+  end
+
+  # Classify a token as a redirect operation, returning {direction, fd, line, col, parse_fn}
+  # or :not_redirect. Consolidates the repeated redirect token matching in
+  # parse_command_args and parse_trailing_redirects.
+  defp classify_redirect_token(token) do
+    case token do
+      {:less, _fd, line, col} -> {:redirect, :input, 0, line, col}
+      {:greater, fd, line, col} -> {:redirect, :output, fd, line, col}
+      {:dgreater, fd, line, col} -> {:redirect, :append, fd, line, col}
+      {:lessand, _fd, line, col} -> {:redirect, :duplicate, 0, line, col}
+      {:greaterand, fd, line, col} -> {:redirect, :duplicate, fd, line, col}
+      {:lessgreat, _fd, line, col} -> {:redirect, :read_write, 0, line, col}
+      {:andgreat, line, col} -> {:redirect, :output, :both, line, col}
+      {:anddgreat, line, col} -> {:redirect, :append, :both, line, col}
+      {:dless, fd, line, col} -> {:heredoc, :heredoc, fd, line, col}
+      {:dlessdash, fd, line, col} -> {:heredoc, :heredoc_strip, fd, line, col}
+      {:tless, fd, line, col} -> {:herestring, nil, fd, line, col}
+      {:io_number, fd, line, col} -> {:fd_redirect, nil, fd, line, col}
+      _ -> :not_redirect
+    end
+  end
+
+  defp parse_classified_redirect(state, classification) do
+    state = advance(state)
+
+    case classification do
+      {:redirect, direction, fd, line, col} ->
+        parse_redirect(direction, fd, line, col, state)
+
+      {:heredoc, kind, fd, line, col} ->
+        parse_heredoc(kind, fd, line, col, state)
+
+      {:herestring, _, fd, line, col} ->
+        parse_herestring(fd, line, col, state)
+
+      {:fd_redirect, _, fd, line, col} ->
+        parse_fd_redirect(fd, line, col, state)
+    end
+  end
+
+  defp parse_delimited_compound(state, close_token, kind, close_label) do
+    {line, col} = current_position(state)
+    state = advance(state)
+
+    case parse_statement_list(state, []) do
+      {:ok, stmts, new_state} ->
+        case current_token(new_state) do
+          {^close_token, _, _} ->
+            if kind == :group and stmts == [] do
+              {rline, rcol} = current_position(new_state)
+
+              {:error,
+               "(SC1055) Brace groups need at least one command. Use `true` as a no-op if needed",
+               rline, rcol}
+            else
+              new_state = advance(new_state)
+
+              case parse_trailing_redirects(new_state, []) do
+                {:ok, redirects, final_state} ->
+                  compound = %AST.Compound{
+                    meta: AST.meta(line, col),
+                    kind: kind,
+                    statements: stmts,
+                    redirects: redirects
+                  }
+
+                  {:ok, compound, final_state}
+
+                {:error, _, _, _} = err ->
+                  err
+              end
+            end
+
+          token ->
+            {tline, tcol} = token_position(token)
+            {:error, "expected '#{close_label}' to close #{kind}", tline, tcol}
+        end
+
+      {:error, _, _, _} = err ->
+        err
     end
   end
 end

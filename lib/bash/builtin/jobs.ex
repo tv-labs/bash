@@ -120,13 +120,17 @@ defmodule Bash.Builtin.Jobs do
         :done -> "Done"
       end
 
-    # Pad status to align
-    status_padded = String.pad_trailing(status_str, 23)
+    # Pad status to align with bash output format
+    # Bash pads status field to align commands at a fixed column
+    status_padded = String.pad_trailing(status_str, 27)
 
-    base = "[#{job.job_number}]#{marker}  #{status_padded} #{job.command}"
+    # Background jobs display with trailing &
+    command_with_bg = "#{job.command} &"
+
+    base = "[#{job.job_number}]#{marker}  #{status_padded}#{command_with_bg}"
 
     if flags.long and job.os_pid do
-      "[#{job.job_number}]#{marker}  #{job.os_pid} #{status_padded} #{job.command}\n"
+      "[#{job.job_number}]#{marker}  #{job.os_pid} #{status_padded}#{command_with_bg}\n"
     else
       base <> "\n"
     end

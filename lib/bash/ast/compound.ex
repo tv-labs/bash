@@ -189,31 +189,41 @@ defmodule Bash.AST.Compound do
   # - && (and): execute next only if previous succeeded (exit_code == 0)
   # - || (or): execute next only if previous failed (exit_code != 0)
   # Output goes directly to sinks during execution
-  # Tracks both env_updates (strings) and var_updates (Variable structs) separately
-  defp execute_compound_operand([], _session_state, env_updates, var_updates) do
+  # Tracks env_updates (strings), var_updates (Variable structs), and working_dir separately
+  defp execute_compound_operand(statements, session_state, env_updates, var_updates) do
+    execute_compound_operand(statements, session_state, env_updates, var_updates, nil)
+  end
+
+  defp execute_compound_operand([], _session_state, env_updates, var_updates, working_dir) do
     # No statements left - return success with empty result
+    updates = %{env_updates: env_updates, var_updates: var_updates}
+    updates = if working_dir, do: Map.put(updates, :working_dir, working_dir), else: updates
+
     {:ok,
      %CommandResult{
        command: nil,
        exit_code: 0,
        error: nil
-     }, %{env_updates: env_updates, var_updates: var_updates}}
+     }, updates}
   end
 
-  defp execute_compound_operand([statement], session_state, env_updates, var_updates) do
+  defp execute_compound_operand([statement], session_state, env_updates, var_updates, working_dir) do
     # Last statement - execute and return result
-    updated_session = apply_updates_to_session(session_state, env_updates, var_updates)
+    updated_session =
+      apply_updates_to_session(session_state, env_updates, var_updates, working_dir)
 
     case Executor.execute(statement, updated_session, nil) do
       {:ok, result, updates} ->
         env_from_stmt = Map.get(updates, :env_updates, %{})
         var_from_stmt = Map.get(updates, :var_updates, %{})
+        wd_from_stmt = Map.get(updates, :working_dir)
         merged_env = Map.merge(env_updates, env_from_stmt)
         merged_var = Map.merge(var_updates, var_from_stmt)
-        {:ok, result, %{env_updates: merged_env, var_updates: merged_var}}
+        final_wd = wd_from_stmt || working_dir
+        build_result({:ok, result}, merged_env, merged_var, final_wd)
 
       {:ok, result} ->
-        {:ok, result, %{env_updates: env_updates, var_updates: var_updates}}
+        build_result({:ok, result}, env_updates, var_updates, working_dir)
 
       {:error, result} ->
         {:error, result}
@@ -234,17 +244,21 @@ defmodule Bash.AST.Compound do
          [statement, {:operator, operator} | rest],
          session_state,
          env_updates,
-         var_updates
+         var_updates,
+         working_dir
        ) do
     # Execute statement, then decide based on operator whether to continue
-    updated_session = apply_updates_to_session(session_state, env_updates, var_updates)
+    updated_session =
+      apply_updates_to_session(session_state, env_updates, var_updates, working_dir)
 
     case Executor.execute(statement, updated_session, nil) do
       {:ok, result, updates} ->
         env_from_stmt = Map.get(updates, :env_updates, %{})
         var_from_stmt = Map.get(updates, :var_updates, %{})
+        wd_from_stmt = Map.get(updates, :working_dir)
         merged_env = Map.merge(env_updates, env_from_stmt)
         merged_var = Map.merge(var_updates, var_from_stmt)
+        merged_wd = wd_from_stmt || working_dir
 
         decide_continue(
           result.exit_code,
@@ -253,6 +267,7 @@ defmodule Bash.AST.Compound do
           session_state,
           merged_env,
           merged_var,
+          merged_wd,
           result
         )
 
@@ -264,6 +279,26 @@ defmodule Bash.AST.Compound do
           session_state,
           env_updates,
           var_updates,
+          working_dir,
+          result
+        )
+
+      {:error, result, updates} ->
+        env_from_stmt = Map.get(updates, :env_updates, %{})
+        var_from_stmt = Map.get(updates, :var_updates, %{})
+        wd_from_stmt = Map.get(updates, :working_dir)
+        merged_env = Map.merge(env_updates, env_from_stmt)
+        merged_var = Map.merge(var_updates, var_from_stmt)
+        merged_wd = wd_from_stmt || working_dir
+
+        decide_continue(
+          result.exit_code || 1,
+          operator,
+          rest,
+          session_state,
+          merged_env,
+          merged_var,
+          merged_wd,
           result
         )
 
@@ -276,6 +311,7 @@ defmodule Bash.AST.Compound do
           session_state,
           env_updates,
           var_updates,
+          working_dir,
           result
         )
 
@@ -291,18 +327,27 @@ defmodule Bash.AST.Compound do
     end
   end
 
-  # Apply both env_updates and var_updates to session state
-  defp apply_updates_to_session(session_state, env_updates, var_updates) do
+  # Build final result with all accumulated updates
+  defp build_result({status, result}, env_updates, var_updates, working_dir) do
+    updates = %{env_updates: env_updates, var_updates: var_updates}
+    updates = if working_dir, do: Map.put(updates, :working_dir, working_dir), else: updates
+    {status, result, updates}
+  end
+
+  # Apply env_updates, var_updates, and working_dir to session state
+  defp apply_updates_to_session(session_state, env_updates, var_updates, working_dir) do
     # env_updates: string values that need Variable.new()
     # var_updates: already Variable structs (preserved for arrays like BASH_REMATCH)
     env_vars = Map.new(env_updates, fn {k, v} -> {k, Variable.new(v)} end)
     new_variables = session_state.variables |> Map.merge(env_vars) |> Map.merge(var_updates)
-    %{session_state | variables: new_variables}
+    session = %{session_state | variables: new_variables}
+    if working_dir, do: %{session | working_dir: working_dir}, else: session
   end
 
   # Decide whether to continue based on exit code and operator
-  # When we short-circuit (skip a command), we still need to check remaining operators
-  # Now tracks both env_updates and var_updates separately
+  # Implements short-circuit evaluation for && and ||
+  # - && continues on success (exit_code == 0)
+  # - || continues on failure (exit_code != 0)
   defp decide_continue(
          exit_code,
          operator,
@@ -310,194 +355,71 @@ defmodule Bash.AST.Compound do
          session_state,
          env_updates,
          var_updates,
-         _last_result
-       )
-       when exit_code == 0 and operator == :and do
-    execute_compound_operand(rest, session_state, env_updates, var_updates)
+         working_dir,
+         last_result
+       ) do
+    cond do
+      # Should execute next command?
+      should_execute?(exit_code, operator) ->
+        execute_compound_operand(rest, session_state, env_updates, var_updates, working_dir)
+
+      # No more statements - return current result
+      rest == [] ->
+        build_result({:ok, last_result}, env_updates, var_updates, working_dir)
+
+      # Skip command and check next operator
+      true ->
+        skip_and_continue(
+          exit_code,
+          rest,
+          session_state,
+          env_updates,
+          var_updates,
+          working_dir,
+          last_result
+        )
+    end
   end
 
-  defp decide_continue(
+  # Determine if we should execute the next command based on exit code and operator
+  defp should_execute?(exit_code, :and), do: exit_code == 0
+  defp should_execute?(exit_code, :or), do: exit_code != 0
+
+  # Skip the current command and continue with the next operator if present
+  defp skip_and_continue(
          exit_code,
-         operator,
          rest,
          session_state,
          env_updates,
          var_updates,
-         _last_result
-       )
-       when exit_code != 0 and operator == :or do
-    execute_compound_operand(rest, session_state, env_updates, var_updates)
+         working_dir,
+         last_result
+       ) do
+    case find_next_operator(rest) do
+      {next_op, remaining} ->
+        decide_continue(
+          exit_code,
+          next_op,
+          remaining,
+          session_state,
+          env_updates,
+          var_updates,
+          working_dir,
+          last_result
+        )
+
+      nil ->
+        # No more operators - return current result
+        build_result({:ok, last_result}, env_updates, var_updates, working_dir)
+    end
   end
 
-  defp decide_continue(
-         exit_code,
-         _operator,
-         rest,
-         _session_state,
-         env_updates,
-         var_updates,
-         last_result
-       )
-       when exit_code == 0 and rest == [] do
-    # No more commands - return current result
-    {:ok, last_result, %{env_updates: env_updates, var_updates: var_updates}}
-  end
-
-  defp decide_continue(
-         exit_code,
-         operator,
-         [_] = _rest,
-         _session_state,
-         env_updates,
-         var_updates,
-         last_result
-       )
-       when exit_code == 0 and operator == :or do
-    # Success with || - skip the next command and return success
-    {:ok, last_result, %{env_updates: env_updates, var_updates: var_updates}}
-  end
-
-  defp decide_continue(
-         exit_code,
-         operator,
-         [_] = _rest,
-         _session_state,
-         env_updates,
-         var_updates,
-         last_result
-       )
-       when exit_code != 0 and operator == :and do
-    # Failure with && - skip the next command but return success with non-zero exit code
-    # This is not an error, just a short-circuit
-    {:ok, last_result, %{env_updates: env_updates, var_updates: var_updates}}
-  end
-
-  defp decide_continue(
-         exit_code,
-         _operator,
-         [_] = _rest,
-         _session_state,
-         env_updates,
-         var_updates,
-         last_result
-       )
-       when exit_code != 0 do
-    # Only one more command and we're skipping it - return success with non-zero exit code
-    {:ok, last_result, %{env_updates: env_updates, var_updates: var_updates}}
-  end
-
-  # Skip a command and continue with the next operator (success with || case)
-  defp decide_continue(
-         exit_code,
-         operator,
-         [_skipped_cmd, {:operator, next_op} | rest],
-         session_state,
-         env_updates,
-         var_updates,
-         last_result
-       )
-       when exit_code == 0 and operator == :or do
-    # Success with || - skip command and continue evaluating with next operator
-    decide_continue(
-      exit_code,
-      next_op,
-      rest,
-      session_state,
-      env_updates,
-      var_updates,
-      last_result
-    )
-  end
-
-  # Skip a command and continue with the next operator (failure with && case)
-  defp decide_continue(
-         exit_code,
-         operator,
-         [_skipped_cmd, {:operator, next_op} | rest],
-         session_state,
-         env_updates,
-         var_updates,
-         last_result
-       )
-       when exit_code != 0 and operator == :and do
-    # Failure with && - skip command and continue evaluating with next operator
-    decide_continue(
-      exit_code,
-      next_op,
-      rest,
-      session_state,
-      env_updates,
-      var_updates,
-      last_result
-    )
-  end
-
-  defp decide_continue(
-         exit_code,
-         operator,
-         [{:operator, next_op} | rest],
-         session_state,
-         env_updates,
-         var_updates,
-         last_result
-       )
-       when exit_code == 0 and operator == :or do
-    # Success with || - skip and check next operator
-    decide_continue(
-      exit_code,
-      next_op,
-      rest,
-      session_state,
-      env_updates,
-      var_updates,
-      last_result
-    )
-  end
-
-  defp decide_continue(
-         exit_code,
-         operator,
-         [{:operator, next_op} | rest],
-         session_state,
-         env_updates,
-         var_updates,
-         last_result
-       )
-       when exit_code != 0 and operator == :and do
-    # Failure with && - skip and check next operator
-    decide_continue(
-      exit_code,
-      next_op,
-      rest,
-      session_state,
-      env_updates,
-      var_updates,
-      last_result
-    )
-  end
-
-  defp decide_continue(
-         exit_code,
-         _operator,
-         [{:operator, next_op} | rest],
-         session_state,
-         env_updates,
-         var_updates,
-         last_result
-       )
-       when exit_code != 0 do
-    # There's another operator after the skipped command
-    # Check if we should continue with the remaining based on current exit_code
-    decide_continue(
-      exit_code,
-      next_op,
-      rest,
-      session_state,
-      env_updates,
-      var_updates,
-      last_result
-    )
-  end
+  # Find the next operator in the statement list, skipping the command before it
+  defp find_next_operator([]), do: nil
+  defp find_next_operator([{:operator, op} | rest]), do: {op, rest}
+  defp find_next_operator([_cmd]), do: nil
+  defp find_next_operator([_cmd, {:operator, op} | rest]), do: {op, rest}
+  defp find_next_operator([_cmd | rest]), do: find_next_operator(rest)
 
   # Set up stdin device for command groups receiving piped input
   # Opens a StringIO device that read builtin can consume line by line

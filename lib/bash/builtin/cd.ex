@@ -112,8 +112,9 @@ defmodule Bash.Builtin.Cd do
               {:error, _} -> Path.expand(resolved_path)
             end
           else
-            # Logical path - just expand
-            Path.expand(resolved_path)
+            # Logical path - normalize without resolving symlinks
+            # Path.expand resolves symlinks, so we use our own normalization
+            normalize_logical_path(resolved_path, session_state.working_dir)
           end
 
         # Print new directory if cd -
@@ -217,6 +218,31 @@ defmodule Bash.Builtin.Cd do
       {:error, :einval} -> {:ok, path}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  # Normalize a path for logical mode (no symlink resolution)
+  # Handles . and .. components but preserves symlinks
+  defp normalize_logical_path(path, working_dir) do
+    # Make absolute if relative
+    abs_path =
+      if String.starts_with?(path, "/") do
+        path
+      else
+        Path.join(working_dir, path)
+      end
+
+    # Split into components and normalize
+    components =
+      abs_path
+      |> String.split("/", trim: true)
+      |> Enum.reduce([], fn
+        ".", acc -> acc
+        "..", [] -> []
+        "..", acc -> Enum.drop(acc, -1)
+        component, acc -> acc ++ [component]
+      end)
+
+    "/" <> Enum.join(components, "/")
   end
 
   # Return error result

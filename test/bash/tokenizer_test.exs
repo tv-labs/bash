@@ -906,9 +906,142 @@ defmodule Bash.TokenizerTest do
       assert msg =~ "em-dash"
     end
 
+    test "rejects acute accent as backtick (SC1077)" do
+      # U+00B4 acute accent instead of backtick
+      assert {:error, msg, 1, 6} = Tokenizer.tokenize("echo \u00B4hello\u00B4")
+      assert msg =~ "SC1077"
+      assert msg =~ "backtick"
+    end
+
     test "accepts valid ASCII quotes" do
       assert {:ok, _tokens} = Tokenizer.tokenize("echo \"hello\"")
       assert {:ok, _tokens} = Tokenizer.tokenize("echo 'hello'")
+    end
+  end
+
+  describe "trailing spaces after backslash (SC1101)" do
+    test "rejects backslash followed by spaces then newline" do
+      # The backslash at column 10 (after "echo foo ")
+      assert {:error, msg, 1, 10} = Tokenizer.tokenize("echo foo \\ \nbar")
+      assert msg =~ "SC1101"
+      assert msg =~ "Trailing spaces"
+    end
+
+    test "rejects backslash followed by tab then newline" do
+      assert {:error, msg, 1, 10} = Tokenizer.tokenize("echo foo \\\t\nbar")
+      assert msg =~ "SC1101"
+    end
+
+    test "accepts valid line continuation (backslash-newline)" do
+      assert {:ok, _tokens} = Tokenizer.tokenize("echo foo \\\nbar")
+    end
+
+    test "accepts backslash followed by non-whitespace" do
+      # Backslash escaping a letter
+      assert {:ok, _tokens} = Tokenizer.tokenize("echo \\n")
+    end
+  end
+
+  describe "chars after bracket (SC1136)" do
+    test "rejects ]foo - word immediately after ]" do
+      assert {:error, msg, 1, 12} = Tokenizer.tokenize("[ -f file ]foo")
+      assert msg =~ "SC1136"
+      assert msg =~ "after `]`"
+    end
+
+    test "accepts ]= - equals after ] for array subscripts" do
+      # ]= is valid for array subscript syntax like [key]=value
+      assert {:ok, _tokens} = Tokenizer.tokenize("[ -f file ]=x")
+    end
+
+    test "rejects ]$var - variable after ]" do
+      assert {:error, msg, 1, 12} = Tokenizer.tokenize("[ -f file ]$x")
+      assert msg =~ "SC1136"
+    end
+
+    test "accepts ] && - space before operator" do
+      assert {:ok, _tokens} = Tokenizer.tokenize("[ -f file ] && echo yes")
+    end
+
+    test "accepts ]&& - operator directly after ]" do
+      assert {:ok, _tokens} = Tokenizer.tokenize("[ -f file ]&& echo yes")
+    end
+
+    test "accepts ]; - semicolon after ]" do
+      assert {:ok, _tokens} = Tokenizer.tokenize("[ -f file ]; echo yes")
+    end
+
+    test "accepts ] at end of line" do
+      assert {:ok, _tokens} = Tokenizer.tokenize("[ -f file ]\necho yes")
+    end
+  end
+
+  describe "HTML entity detection (SC1109)" do
+    test "rejects &amp; - HTML ampersand" do
+      # & at column 6
+      assert {:error, msg, 1, 6} = Tokenizer.tokenize("echo &amp;")
+      assert msg =~ "SC1109"
+      assert msg =~ "&amp;"
+      assert msg =~ "copy"
+    end
+
+    test "rejects &lt; - HTML less than" do
+      # & at column 5
+      assert {:error, msg, 1, 5} = Tokenizer.tokenize("foo &lt; bar")
+      assert msg =~ "SC1109"
+      assert msg =~ "&lt;"
+    end
+
+    test "rejects &gt; - HTML greater than" do
+      # & at column 5
+      assert {:error, msg, 1, 5} = Tokenizer.tokenize("foo &gt; bar")
+      assert msg =~ "SC1109"
+      assert msg =~ "&gt;"
+    end
+
+    test "rejects &nbsp; - HTML non-breaking space" do
+      # & at column 5 (after "echo")
+      assert {:error, msg, 1, 5} = Tokenizer.tokenize("echo&nbsp;foo")
+      assert msg =~ "SC1109"
+      assert msg =~ "&nbsp;"
+    end
+
+    test "rejects &quot; - HTML quote" do
+      assert {:error, msg, 1, 6} = Tokenizer.tokenize("echo &quot;hello&quot;")
+      assert msg =~ "SC1109"
+      assert msg =~ "&quot;"
+    end
+
+    test "accepts normal & in commands" do
+      assert {:ok, _tokens} = Tokenizer.tokenize("echo foo & echo bar")
+      assert {:ok, _tokens} = Tokenizer.tokenize("echo foo && echo bar")
+    end
+  end
+
+  describe "ampersand termination (SC1132)" do
+    test "rejects foo&bar - & between words" do
+      # & at column 4 (after "foo")
+      assert {:error, msg, 1, 4} = Tokenizer.tokenize("foo&bar")
+      assert msg =~ "SC1132"
+      assert msg =~ "terminates"
+    end
+
+    test "rejects echo&pwd - & between commands" do
+      assert {:error, msg, 1, 5} = Tokenizer.tokenize("echo&pwd")
+      assert msg =~ "SC1132"
+    end
+
+    test "accepts foo & bar - space after &" do
+      assert {:ok, _tokens} = Tokenizer.tokenize("foo & bar")
+    end
+
+    test "accepts foo& - & at end" do
+      assert {:ok, _tokens} = Tokenizer.tokenize("foo&")
+    end
+
+    test "accepts foo &bar - space before &" do
+      # Space before & means intentional background
+      assert {:ok, _tokens} = Tokenizer.tokenize("foo &bar")
     end
   end
 
@@ -970,6 +1103,50 @@ defmodule Bash.TokenizerTest do
     end
   end
 
+  describe "assignment comparison confusion (SC1097)" do
+    test "rejects VAR==value" do
+      assert {:error, msg, 1, 1} = Tokenizer.tokenize("VAR==hello")
+      assert msg =~ "SC1097"
+      assert msg =~ "VAR=value"
+    end
+
+    test "rejects FOO==bar" do
+      assert {:error, msg, 1, 1} = Tokenizer.tokenize("FOO==bar")
+      assert msg =~ "SC1097"
+    end
+
+    test "accepts single = for assignment" do
+      assert {:ok, _tokens} = Tokenizer.tokenize("VAR=hello")
+      assert {:ok, _tokens} = Tokenizer.tokenize("FOO=bar")
+    end
+
+    test "accepts == in test expressions" do
+      # In [[ ]] context, == is valid
+      assert {:ok, _tokens} = Tokenizer.tokenize("[[ $a == $b ]]")
+    end
+  end
+
+  describe "array access error detection (SC1087)" do
+    test "rejects $arr[0] without braces" do
+      assert {:error, msg, 1, 6} = Tokenizer.tokenize("echo $arr[0]")
+      assert msg =~ "SC1087"
+      assert msg =~ "${arr["
+    end
+
+    test "rejects $array[index] without braces" do
+      assert {:error, msg, 1, 1} = Tokenizer.tokenize("$array[1]")
+      assert msg =~ "SC1087"
+    end
+
+    test "accepts ${arr[0]} with braces" do
+      assert {:ok, _tokens} = Tokenizer.tokenize("echo ${arr[0]}")
+    end
+
+    test "accepts ${array[@]} for all elements" do
+      assert {:ok, _tokens} = Tokenizer.tokenize("echo ${array[@]}")
+    end
+  end
+
   describe "shebang validation" do
     test "SC1082: rejects UTF-8 BOM at start" do
       # UTF-8 BOM followed by shebang
@@ -1015,6 +1192,50 @@ defmodule Bash.TokenizerTest do
 
     test "accepts script without shebang" do
       assert {:ok, _tokens} = Tokenizer.tokenize("echo hello")
+    end
+
+    test "SC1104: rejects !/bin/bash (missing #)" do
+      assert {:error, msg, 1, 1} = Tokenizer.tokenize("!/bin/bash\necho hello")
+      assert msg =~ "SC1104"
+      assert msg =~ "Add `#`"
+    end
+
+    test "SC1113: rejects #/bin/bash (missing !)" do
+      assert {:error, msg, 1, 1} = Tokenizer.tokenize("#/bin/bash\necho hello")
+      assert msg =~ "SC1113"
+      assert msg =~ "Add `!`"
+    end
+
+    test "SC1113: rejects # /bin/bash with space (missing !)" do
+      assert {:error, msg, 1, 1} = Tokenizer.tokenize("# /bin/bash\necho hello")
+      assert msg =~ "SC1113"
+    end
+
+    test "SC1008: rejects unrecognized shebang interpreter" do
+      assert {:error, msg, 1, 1} = Tokenizer.tokenize("#!/usr/bin/python\nprint('hello')")
+      assert msg =~ "SC1008"
+      assert msg =~ "python"
+    end
+
+    test "SC1008: rejects #!/bin/sed" do
+      assert {:error, msg, 1, 1} = Tokenizer.tokenize("#!/bin/sed -f\n")
+      assert msg =~ "SC1008"
+      assert msg =~ "sed"
+    end
+
+    test "accepts #!/usr/bin/env bash" do
+      assert {:ok, tokens} = Tokenizer.tokenize("#!/usr/bin/env bash\necho hello")
+      assert [{:shebang, "/usr/bin/env bash", 1, 1} | _] = tokens
+    end
+
+    test "accepts #!/bin/sh" do
+      assert {:ok, tokens} = Tokenizer.tokenize("#!/bin/sh\necho hello")
+      assert [{:shebang, "/bin/sh", 1, 1} | _] = tokens
+    end
+
+    test "accepts #!/usr/bin/zsh" do
+      assert {:ok, tokens} = Tokenizer.tokenize("#!/usr/bin/zsh\necho hello")
+      assert [{:shebang, "/usr/bin/zsh", 1, 1} | _] = tokens
     end
   end
 
@@ -1154,6 +1375,45 @@ defmodule Bash.TokenizerTest do
       assert msg =~ "SC1122"
     end
 
+    test "SC1039: rejects indented end token with <<" do
+      script = """
+      cat <<EOF
+      hello
+        EOF
+      """
+
+      assert {:error, msg, _line, _col} = Tokenizer.tokenize(script)
+      assert msg =~ "SC1039"
+      assert msg =~ "Remove indentation"
+    end
+
+    test "SC1039: rejects tab-indented end token with <<" do
+      script = "cat <<EOF\nhello\n\tEOF\n"
+
+      assert {:error, msg, _line, _col} = Tokenizer.tokenize(script)
+      assert msg =~ "SC1039"
+    end
+
+    test "SC1040: rejects space-indented end token with <<-" do
+      script = """
+      cat <<-EOF
+      hello
+        EOF
+      """
+
+      assert {:error, msg, _line, _col} = Tokenizer.tokenize(script)
+      assert msg =~ "SC1040"
+      assert msg =~ "tabs instead of spaces"
+    end
+
+    test "SC1040: rejects mixed tabs and spaces with <<-" do
+      # Tab followed by space
+      script = "cat <<-EOF\nhello\n\t EOF\n"
+
+      assert {:error, msg, _line, _col} = Tokenizer.tokenize(script)
+      assert msg =~ "SC1040"
+    end
+
     test "accepts valid heredoc" do
       script = """
       cat <<EOF
@@ -1231,6 +1491,46 @@ defmodule Bash.TokenizerTest do
     test "SC1069: keyword with space before [ is valid" do
       assert {:ok, _tokens} = Tokenizer.tokenize("if [ -f file ]")
       assert {:ok, _tokens} = Tokenizer.tokenize("while [ true ]")
+    end
+
+    test "SC1129: missing space before ! after if" do
+      assert {:error, msg, 1, _col} = Tokenizer.tokenize("if! true; then echo; fi")
+      assert msg =~ "SC1129"
+      assert msg =~ "if !"
+    end
+
+    test "SC1129: missing space before ! after while" do
+      assert {:error, msg, 1, _col} = Tokenizer.tokenize("while! false; do echo; done")
+      assert msg =~ "SC1129"
+      assert msg =~ "while !"
+    end
+
+    test "SC1129: missing space before ! after until" do
+      assert {:error, msg, 1, _col} = Tokenizer.tokenize("until! true; do echo; done")
+      assert msg =~ "SC1129"
+      assert msg =~ "until !"
+    end
+
+    test "SC1129: keyword with space before ! is valid" do
+      assert {:ok, _tokens} = Tokenizer.tokenize("if ! true; then echo; fi")
+      assert {:ok, _tokens} = Tokenizer.tokenize("while ! false; do echo; done")
+    end
+
+    test "SC1130: missing space before : after if" do
+      assert {:error, msg, 1, _col} = Tokenizer.tokenize("if: then echo; fi")
+      assert msg =~ "SC1130"
+      assert msg =~ "if :"
+    end
+
+    test "SC1130: missing space before : after while" do
+      assert {:error, msg, 1, _col} = Tokenizer.tokenize("while: do echo; done")
+      assert msg =~ "SC1130"
+      assert msg =~ "while :"
+    end
+
+    test "SC1130: keyword with space before : is valid" do
+      assert {:ok, _tokens} = Tokenizer.tokenize("if :; then echo; fi")
+      assert {:ok, _tokens} = Tokenizer.tokenize("while :; do echo; done")
     end
   end
 end

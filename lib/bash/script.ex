@@ -20,8 +20,11 @@ defmodule Bash.Script do
   """
 
   alias Bash.AST
+  alias Bash.AST.Helpers
   alias Bash.AST.Pipeline
+  alias Bash.Builtin.Trap
   alias Bash.Executor
+  alias Bash.Parser
   alias Bash.Variable
 
   @type separator :: {:separator, String.t()}
@@ -86,35 +89,181 @@ defmodule Bash.Script do
     # Remove pending_background from updates before returning (it's handled separately)
     clean_updates = Map.delete(merged_updates, :pending_background)
 
+    # Get the final session state with all accumulated updates for EXIT trap
+    final_session = apply_updates_to_session(session_state, merged_updates)
+
+    # Execute EXIT trap before returning (unless it's a background job or job control)
     case final_result do
       :ok when pending_bg != nil ->
         # Script completed but there's a background job to start
         {:background, executed_script, clean_updates, {:background, pending_bg, session_state}}
 
       :ok ->
+        execute_exit_trap(final_session)
         {:ok, executed_script, clean_updates}
 
       :exit ->
+        execute_exit_trap(final_session)
         {:exit, executed_script, clean_updates}
 
       :exec ->
+        # Don't run EXIT trap for exec (shell is being replaced)
         {:exec, executed_script, clean_updates}
 
       :error ->
+        execute_exit_trap(final_session)
         {:error, executed_script, clean_updates}
 
-      # Job control builtins - pass through directly for Session to handle
-      {:wait_for_jobs, _job_specs} = wait_result ->
-        wait_result
+      # Job control builtins - include executed_script so Session can return it
+      {:wait_for_jobs, job_specs} ->
+        {:wait_for_jobs, job_specs, executed_script, clean_updates}
 
-      {:signal_jobs, _signal, _targets} = signal_result ->
-        signal_result
+      {:signal_jobs, signal, targets} ->
+        {:signal_jobs, signal, targets, executed_script, clean_updates}
 
-      {:foreground_job, _job_number} = fg_result ->
-        fg_result
+      {:foreground_job, job_number} ->
+        {:foreground_job, job_number, executed_script, clean_updates}
 
-      {:background_job, _job_numbers} = bg_job_result ->
-        bg_job_result
+      {:background_job, job_numbers} ->
+        {:background_job, job_numbers, executed_script, clean_updates}
+    end
+  end
+
+  @doc """
+  Continue executing a script from where it left off (after wait, fg, etc).
+
+  This finds the first unexecuted statement (exit_code: nil) and continues
+  from there. Used by Session to resume scripts after job control operations.
+  """
+  def continue_execution(%__MODULE__{statements: statements} = script, session_state) do
+    # Find the split point: executed statements have exit_code set
+    {executed_stmts, remaining_stmts} = split_at_unexecuted(statements)
+
+    if remaining_stmts == [] do
+      # Nothing more to execute
+      {:ok, script, %{}}
+    else
+      # Continue executing remaining statements
+      {new_statements, final_exit_code, _output, merged_updates, final_result} =
+        execute_statements(
+          remaining_stmts,
+          session_state,
+          Enum.reverse(executed_stmts),
+          0,
+          [],
+          %{}
+        )
+
+      executed_script = %{
+        script
+        | statements: new_statements,
+          exit_code: final_exit_code,
+          state_updates: Map.merge(script.state_updates, merged_updates)
+      }
+
+      clean_updates = Map.delete(merged_updates, :pending_background)
+
+      case final_result do
+        :ok ->
+          final_session = apply_updates_to_session(session_state, merged_updates)
+          execute_exit_trap(final_session)
+          {:ok, executed_script, clean_updates}
+
+        :exit ->
+          final_session = apply_updates_to_session(session_state, merged_updates)
+          execute_exit_trap(final_session)
+          {:exit, executed_script, clean_updates}
+
+        :exec ->
+          {:exec, executed_script, clean_updates}
+
+        :error ->
+          final_session = apply_updates_to_session(session_state, merged_updates)
+          execute_exit_trap(final_session)
+          {:error, executed_script, clean_updates}
+
+        # Further job control - return for Session to handle
+        {:wait_for_jobs, job_specs} ->
+          {:wait_for_jobs, job_specs, executed_script, clean_updates}
+
+        {:signal_jobs, signal, targets} ->
+          {:signal_jobs, signal, targets, executed_script, clean_updates}
+
+        {:foreground_job, job_number} ->
+          {:foreground_job, job_number, executed_script, clean_updates}
+
+        {:background_job, job_numbers} ->
+          {:background_job, job_numbers, executed_script, clean_updates}
+      end
+    end
+  end
+
+  @doc """
+  Split a script's statements into executed and remaining (unexecuted).
+  Public wrapper for debugging script continuation.
+  """
+  def split_executed(%__MODULE__{statements: statements}) do
+    split_at_unexecuted(statements)
+  end
+
+  # Split statements into executed and remaining
+  # Executed statements have exit_code set (not nil), remaining have nil
+  defp split_at_unexecuted(statements) do
+    split_at_unexecuted(statements, [])
+  end
+
+  defp split_at_unexecuted([], executed) do
+    {Enum.reverse(executed), []}
+  end
+
+  defp split_at_unexecuted([{:separator, _} = sep | rest], executed) do
+    # Separators count as executed
+    split_at_unexecuted(rest, [sep | executed])
+  end
+
+  defp split_at_unexecuted([stmt | rest] = remaining, executed) do
+    if stmt_executed?(stmt) do
+      split_at_unexecuted(rest, [stmt | executed])
+    else
+      {Enum.reverse(executed), remaining}
+    end
+  end
+
+  defp stmt_executed?(%{exit_code: nil}), do: false
+  defp stmt_executed?(%{exit_code: _}), do: true
+  # Comments, etc.
+  defp stmt_executed?(_), do: true
+
+  # Mark a statement as executed with the given exit code
+  defp mark_executed(%{exit_code: _} = stmt, code), do: %{stmt | exit_code: code}
+  defp mark_executed(stmt, _code), do: stmt
+
+  # Execute EXIT trap if one is set
+  # The EXIT trap runs when the shell exits (script finishes)
+  defp execute_exit_trap(session_state) do
+    # Skip if already executing a trap (prevent infinite recursion)
+    if Map.get(session_state, :in_trap, false) do
+      :ok
+    else
+      case Trap.get_exit_trap(session_state) do
+        nil ->
+          :ok
+
+        :ignore ->
+          :ok
+
+        trap_command when is_binary(trap_command) ->
+          # Parse and execute the trap command
+          case Parser.parse(trap_command) do
+            {:ok, ast} ->
+              # Execute trap with in_trap flag to prevent recursion
+              trap_session = Map.put(session_state, :in_trap, true)
+              Helpers.execute_body(ast.statements, trap_session, %{})
+
+            {:error, _, _, _} ->
+              :ok
+          end
+      end
     end
   end
 
@@ -296,18 +445,72 @@ defmodule Bash.Script do
               )
           end
 
-        # Job control builtins - pass through to Session for special handling
+        # Job control builtins - handle based on sync vs async behavior
+        # wait and fg are async (need to wait for jobs) - stop execution
+        # Mark statement as executed (exit_code: 0) so continuation doesn't re-run it
         {:wait_for_jobs, _job_specs} = wait_result ->
-          {Enum.reverse([stmt | executed]) ++ rest, 0, output, updates, wait_result}
-
-        {:signal_jobs, _signal, _targets} = signal_result ->
-          {Enum.reverse([stmt | executed]) ++ rest, 0, output, updates, signal_result}
+          executed_stmt = mark_executed(stmt, 0)
+          all_stmts = Enum.reverse([executed_stmt | executed]) ++ rest
+          {all_stmts, 0, output, updates, wait_result}
 
         {:foreground_job, _job_number} = fg_result ->
-          {Enum.reverse([stmt | executed]) ++ rest, 0, output, updates, fg_result}
+          executed_stmt = mark_executed(stmt, 0)
+          {Enum.reverse([executed_stmt | executed]) ++ rest, 0, output, updates, fg_result}
 
-        {:background_job, _job_numbers} = bg_job_result ->
-          {Enum.reverse([stmt | executed]) ++ rest, 0, output, updates, bg_job_result}
+        # kill sends signals immediately via callback
+        {:signal_jobs, signal, targets} ->
+          case Map.get(session_state, :signal_jobs_fn) do
+            nil ->
+              # No callback - fall back to deferred execution (legacy path)
+              new_updates =
+                Map.update(updates, :pending_signals, [{signal, targets}], &[
+                  {signal, targets} | &1
+                ])
+
+              executed_stmt = mark_executed(stmt, 0)
+
+              execute_statements(
+                rest,
+                session_state,
+                [executed_stmt | executed],
+                0,
+                output,
+                new_updates
+              )
+
+            signal_fn when is_function(signal_fn, 3) ->
+              # Send signals immediately
+              exit_code =
+                case signal_fn.(signal, targets, session_state) do
+                  {:ok, code} -> code
+                  {:error, code, _msg} -> code
+                end
+
+              executed_stmt = mark_executed(stmt, exit_code)
+
+              execute_statements(
+                rest,
+                session_state,
+                [executed_stmt | executed],
+                exit_code,
+                output,
+                updates
+              )
+          end
+
+        {:background_job, job_numbers} ->
+          # Store for Session to handle after script completes, continue execution
+          new_updates = Map.update(updates, :pending_bg_jobs, [job_numbers], &[job_numbers | &1])
+          executed_stmt = mark_executed(stmt, 0)
+
+          execute_statements(
+            rest,
+            session_state,
+            [executed_stmt | executed],
+            0,
+            output,
+            new_updates
+          )
 
         # Background command - start job immediately to get $! before continuing
         {:background, foreground_ast, bg_session_state} ->
@@ -316,11 +519,12 @@ defmodule Bash.Script do
             nil ->
               # No callback - fall back to deferred execution (legacy path)
               bg_updates = Map.put(updates, :pending_background, foreground_ast)
+              executed_stmt = mark_executed(stmt, 0)
 
               execute_statements(
                 rest,
                 session_state,
-                [stmt | executed],
+                [executed_stmt | executed],
                 0,
                 output,
                 bg_updates
@@ -332,11 +536,13 @@ defmodule Bash.Script do
                 {:ok, _os_pid_str, updated_session_state, job_state_updates} ->
                   # Merge job state updates into the accumulated updates
                   merged_updates = Map.merge(updates, job_state_updates)
+                  # Mark statement as executed so continuation doesn't re-run it
+                  executed_stmt = mark_executed(stmt, 0)
                   # Continue with updated session_state that has $! set
                   execute_statements(
                     rest,
                     updated_session_state,
-                    [stmt | executed],
+                    [executed_stmt | executed],
                     0,
                     output,
                     merged_updates
@@ -344,10 +550,12 @@ defmodule Bash.Script do
 
                 {:error, _reason} ->
                   # Job failed to start, continue with exit code 1
+                  executed_stmt = mark_executed(stmt, 1)
+
                   execute_statements(
                     rest,
                     session_state,
-                    [stmt | executed],
+                    [executed_stmt | executed],
                     1,
                     output,
                     updates
@@ -566,6 +774,26 @@ defmodule Bash.Script do
         Map.get(session_state, :working_dir)
       end
 
+    # Update traps if present (from trap builtin)
+    traps_updates = Map.get(updates, :traps, nil)
+
+    new_traps =
+      if traps_updates do
+        traps_updates
+      else
+        Map.get(session_state, :traps, %{})
+      end
+
+    # Update dir_stack if present (from pushd/popd builtins)
+    dir_stack_update = Map.get(updates, :dir_stack, nil)
+
+    new_dir_stack =
+      if dir_stack_update do
+        dir_stack_update
+      else
+        Map.get(session_state, :dir_stack, [])
+      end
+
     session_state
     |> maybe_update(:variables, new_variables, session_state.variables)
     |> maybe_update(:functions, new_functions, Map.get(session_state, :functions, %{}))
@@ -577,6 +805,8 @@ defmodule Bash.Script do
       Map.get(session_state, :positional_params, [[]])
     )
     |> maybe_update(:working_dir, new_working_dir, Map.get(session_state, :working_dir))
+    |> maybe_update(:traps, new_traps, Map.get(session_state, :traps, %{}))
+    |> maybe_update(:dir_stack, new_dir_stack, Map.get(session_state, :dir_stack, []))
   end
 
   defp maybe_update(state, key, new_value, old_value) do

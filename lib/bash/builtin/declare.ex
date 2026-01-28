@@ -38,6 +38,7 @@ defmodule Bash.Builtin.Declare do
     "u" => {:uppercase, true},
     "r" => {:readonly, true},
     "x" => {:export, true},
+    "n" => :nameref_mode,
     "f" => :function_mode,
     "F" => :function_names_only,
     "p" => :print_mode
@@ -100,6 +101,7 @@ defmodule Bash.Builtin.Declare do
       |> Map.put(:print_mode, opts[:print_mode] || false)
       |> Map.put(:function_mode, opts[:function_mode] || false)
       |> Map.put(:function_names_only, opts[:function_names_only] || false)
+      |> Map.put(:nameref_mode, opts[:nameref_mode] || false)
 
     {opts, names}
   end
@@ -123,6 +125,9 @@ defmodule Bash.Builtin.Declare do
         # -F implies function mode (just like -f, but names only)
         new_opts = opts |> Map.put(:function_names_only, true) |> Map.put(:function_mode, true)
         process_flags(rest, new_opts, mode)
+
+      :nameref_mode ->
+        process_flags(rest, Map.put(opts, :nameref_mode, mode == :set), mode)
 
       {attr_key, attr_value} ->
         new_opts =
@@ -312,41 +317,47 @@ defmodule Bash.Builtin.Declare do
         {:error, "declare: #{name}: readonly variable"}
 
       _ ->
-        # Create or update variable
-        var = existing || Variable.new()
+        # Handle nameref mode: declare -n ref=target creates a nameref
+        if opts.nameref_mode and value do
+          # Create a nameref variable pointing to the target variable name
+          {:ok, Variable.new_nameref(value)}
+        else
+          # Create or update variable
+          var = existing || Variable.new()
 
-        # Apply attribute changes
-        var = apply_attributes(var, opts)
+          # Apply attribute changes
+          var = apply_attributes(var, opts)
 
-        # Set value if provided
-        # Note: Array literals like `declare -a arr=(1 2 3)` are handled by the parser,
-        # which recognizes the `name=(...)` pattern and creates an ArrayAssignment AST node.
-        # The value here is already expanded to a scalar string.
-        var =
-          if value do
-            # If variable has integer attribute, evaluate value as arithmetic
-            final_value =
-              if var.attributes[:integer] do
-                # Build env from session variables for arithmetic evaluation
-                env_vars = build_env_for_arithmetic(session_state, pending_updates)
+          # Set value if provided
+          # Note: Array literals like `declare -a arr=(1 2 3)` are handled by the parser,
+          # which recognizes the `name=(...)` pattern and creates an ArrayAssignment AST node.
+          # The value here is already expanded to a scalar string.
+          var =
+            if value do
+              # If variable has integer attribute, evaluate value as arithmetic
+              final_value =
+                if var.attributes[:integer] do
+                  # Build env from session variables for arithmetic evaluation
+                  env_vars = build_env_for_arithmetic(session_state, pending_updates)
 
-                case Arithmetic.evaluate(value, env_vars) do
-                  {:ok, result, _} -> to_string(result)
-                  {:error, _} -> value
+                  case Arithmetic.evaluate(value, env_vars) do
+                    {:ok, result, _} -> to_string(result)
+                    {:error, _} -> value
+                  end
+                else
+                  value
                 end
-              else
-                value
-              end
 
-            # Apply case conversion based on attributes
-            final_value = apply_case_conversion(final_value, var.attributes)
+              # Apply case conversion based on attributes
+              final_value = apply_case_conversion(final_value, var.attributes)
 
-            Variable.set(var, final_value, nil)
-          else
-            var
-          end
+              Variable.set(var, final_value, nil)
+            else
+              var
+            end
 
-        {:ok, var}
+          {:ok, var}
+        end
     end
   end
 
@@ -441,6 +452,7 @@ defmodule Bash.Builtin.Declare do
       |> maybe_add_flag(attributes.array_type == :indexed, "a")
       |> maybe_add_flag(attributes.array_type == :associative, "A")
       |> maybe_add_flag(attributes.integer, "i")
+      |> maybe_add_flag(attributes[:nameref] != nil, "n")
       |> maybe_add_flag(attributes.readonly, "r")
       |> maybe_add_flag(attributes.export, "x")
 

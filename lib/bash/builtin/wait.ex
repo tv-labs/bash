@@ -20,11 +20,9 @@ defmodule Bash.Builtin.Wait do
 
     case job_specs do
       :all when map_size(state.jobs) == 0 ->
-        # No jobs to wait for - return success immediately
         :ok
 
       :all ->
-        # Wait for all jobs
         {:wait_for_jobs, nil}
 
       [:invalid | _] ->
@@ -32,19 +30,16 @@ defmodule Bash.Builtin.Wait do
         {:ok, 1}
 
       job_numbers ->
-        # Verify all jobs exist
-        invalid =
-          Enum.find(job_numbers, fn num ->
-            is_integer(num) and not Map.has_key?(state.jobs, num)
-          end)
-
-        case invalid do
+        job_numbers
+        |> Enum.find(fn num ->
+          is_integer(num) and not Map.has_key?(state.jobs, num)
+        end)
+        |> case do
           nil ->
             {:wait_for_jobs, job_numbers}
-
           num ->
             error("wait: %#{num}: no such job\n")
-            {:ok, 127}
+          {:ok, 127}
         end
     end
   end

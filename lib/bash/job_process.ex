@@ -443,7 +443,6 @@ defmodule Bash.JobProcess do
 
     case ExCmd.Process.start_link(cmd_parts, exec_opts) do
       {:ok, process} ->
-        # ExCmd.Process.os_pid/1 returns {:ok, pid} - unwrap it
         os_pid =
           case ExCmd.Process.os_pid(process) do
             {:ok, pid} -> pid
@@ -455,22 +454,16 @@ defmodule Bash.JobProcess do
         # Close stdin since we don't need it for background jobs
         ExCmd.Process.close_stdin(process)
 
-        # Read all output and send to parent
+        # Read all output first — ExCmd requires reads from the owner process.
+        # read/1 blocks until data is available, returning :eof when the process exits.
         read_and_forward_output(process, parent)
 
-        # Wait for exit and report to parent
+        # Now await exit to get the exit code
         exit_result =
           case ExCmd.Process.await_exit(process, :infinity) do
-            {:ok, code} ->
-              {:ok, code}
-
-            {:error, :killed} ->
-              # Process was terminated by a signal
-              # The JobProcess will determine the actual exit code based on last_signal
-              :killed
-
-            {:error, other} ->
-              {:error, other}
+            {:ok, code} -> {:ok, code}
+            {:error, :killed} -> :killed
+            {:error, other} -> {:error, other}
           end
 
         send(parent, {:process_exit, exit_result})

@@ -92,6 +92,8 @@ defmodule Bash.Tokenizer do
     0x2019 => {"SC1016", "Unicode right single quote \u2019", "'"},
     # Non-breaking space - SC1018
     0x00A0 => {"SC1018", "Unicode non-breaking space", "regular space"},
+    # Acute accent (wrong backtick) - SC1077
+    0x00B4 => {"SC1077", "Unicode acute accent \u00B4 (backtick slants wrong)", "`"},
     # En-dash and em-dash - SC1100
     0x2013 => {"SC1100", "Unicode en-dash \u2013", "-"},
     0x2014 => {"SC1100", "Unicode em-dash \u2014", "-"}
@@ -189,6 +191,10 @@ defmodule Bash.Tokenizer do
       String.starts_with?(input, "!#") ->
         {:error, "(SC1084) Shebang uses !# instead of #! - use #! for shebang", 1, 1}
 
+      # SC1104: !/bin/bash instead of #!/bin/bash (missing #)
+      Regex.match?(~r/^!/u, input) and Regex.match?(~r/^![\/a-zA-Z]/u, input) ->
+        {:error, "(SC1104) Use `#!` for shebang, not just `!`. Add `#` before the `!`", 1, 1}
+
       # SC1114: Leading whitespace before shebang
       Regex.match?(~r/^[ \t]+#!/, input) ->
         {:error, "(SC1114) Shebang has leading whitespace - remove spaces/tabs before #!", 1, 1}
@@ -196,6 +202,10 @@ defmodule Bash.Tokenizer do
       # SC1115: Space between # and !
       String.starts_with?(input, "# !") or String.starts_with?(input, "#  !") ->
         {:error, "(SC1115) Space between # and ! in shebang - use #! without spaces", 1, 1}
+
+      # SC1113: #/bin/bash or # /bin/bash instead of #!/bin/bash (missing !)
+      Regex.match?(~r/^#[ \t]*\/[a-zA-Z]/u, input) ->
+        {:error, "(SC1113) Use `#!` for shebang, not just `#`. Add `!` after the `#`", 1, 1}
 
       true ->
         :ok
@@ -386,7 +396,7 @@ defmodule Bash.Tokenizer do
       {:ok, line, new_state} ->
         check_line = if strip_tabs, do: String.trim_leading(line, "\t"), else: line
 
-        case check_heredoc_delimiter(check_line, delimiter, state.line) do
+        case check_heredoc_delimiter(check_line, delimiter, state.line, line, strip_tabs) do
           :match ->
             # Found delimiter - build heredoc content token
             content = Enum.reverse(acc) |> Enum.join("\n")
@@ -405,13 +415,32 @@ defmodule Bash.Tokenizer do
   end
 
   # Check if a line is a valid heredoc delimiter, detecting common errors
-  defp check_heredoc_delimiter(line, delimiter, line_num) do
+  # line: the (possibly tab-stripped) line to check
+  # original_line: the original line before tab stripping
+  # strip_tabs: true if <<- heredoc (tabs should be stripped)
+  defp check_heredoc_delimiter(line, delimiter, line_num, original_line, strip_tabs) do
     trimmed = String.trim_trailing(line)
+    fully_trimmed = String.trim(line)
 
     cond do
       # Exact match - success
       line == delimiter ->
         :match
+
+      # SC1039: For << heredocs, end token must not be indented
+      # If strip_tabs is false and fully_trimmed matches but original has leading whitespace
+      not strip_tabs and fully_trimmed == delimiter and
+          String.trim_leading(original_line) != original_line ->
+        {:error,
+         "(SC1039) Remove indentation before end token `#{delimiter}` (or use <<- and indent with tabs)",
+         line_num, 0}
+
+      # SC1040: For <<- heredocs, indentation must use tabs not spaces
+      # If strip_tabs is true and fully_trimmed matches but original_line has leading spaces
+      strip_tabs and fully_trimmed == delimiter and has_leading_spaces?(original_line) ->
+        {:error,
+         "(SC1040) When using <<-, indent with tabs instead of spaces. Spaces are not stripped by <<-",
+         line_num, 0}
 
       # SC1118: Trailing whitespace after end token
       trimmed == delimiter and line != delimiter ->
@@ -459,6 +488,16 @@ defmodule Bash.Tokenizer do
     end
   end
 
+  # Check if line has leading spaces (not just tabs)
+  # For SC1040: <<- only strips tabs, so spaces in indentation are an error
+  defp has_leading_spaces?(line) do
+    case line do
+      " " <> _ -> true
+      "\t" <> rest -> has_leading_spaces?(rest)
+      _ -> false
+    end
+  end
+
   # Check if there's trailing syntax after the delimiter that should be on the << line
   defp heredoc_trailing_syntax?(line, delimiter) do
     suffix = String.slice(line, String.length(delimiter)..-1//1) |> String.trim()
@@ -503,13 +542,22 @@ defmodule Bash.Tokenizer do
   @spec read_token(state()) ::
           {:ok, token(), state()} | {:error, String.t(), pos_integer(), pos_integer()}
   def read_token(state) do
-    state = skip_blanks(state)
+    # Track column before skipping blanks for SC1020 detection
+    col_before = state.column
 
-    # After =~ in [[ ]], read next token as regex pattern
-    if state.after_regex_op do
-      read_regex_pattern(state)
-    else
-      read_token_normal(state)
+    case skip_blanks(state) do
+      {:error, _, _, _} = err ->
+        err
+
+      {:ok, state} ->
+        state = Map.put(state, :col_before_blanks, col_before)
+
+        # After =~ in [[ ]], read next token as regex pattern
+        if state.after_regex_op do
+          read_regex_pattern(state)
+        else
+          read_token_normal(state)
+        end
     end
   end
 
@@ -808,6 +856,7 @@ defmodule Bash.Tokenizer do
   end
 
   # Skip spaces and tabs (but not newlines)
+  # Returns {:ok, state} or {:error, message, line, col}
   defp skip_blanks(state) do
     case peek(state) do
       c when c in [?\s, ?\t] ->
@@ -823,13 +872,43 @@ defmodule Bash.Tokenizer do
             |> advance()
             |> skip_blanks()
 
+          c when c in [?\s, ?\t] ->
+            # SC1101: Check for trailing spaces after backslash before newline
+            case check_trailing_spaces_after_backslash(state) do
+              {:error, _, _, _} = err -> err
+              :ok -> {:ok, state}
+            end
+
           _ ->
             # Backslash followed by something else - not whitespace
-            state
+            {:ok, state}
         end
 
       _ ->
-        state
+        {:ok, state}
+    end
+  end
+
+  # SC1101: Check if backslash is followed by only spaces/tabs before newline
+  defp check_trailing_spaces_after_backslash(state) do
+    # state is positioned at the backslash
+    check_only_whitespace_until_newline(advance(state), state.line, state.column)
+  end
+
+  defp check_only_whitespace_until_newline(state, backslash_line, backslash_col) do
+    case peek(state) do
+      c when c in [?\s, ?\t] ->
+        check_only_whitespace_until_newline(advance(state), backslash_line, backslash_col)
+
+      ?\n ->
+        # Found newline after only whitespace - this is the SC1101 case
+        {:error,
+         "(SC1101) Trailing spaces after `\\` break line continuation. Remove spaces after the backslash.",
+         backslash_line, backslash_col}
+
+      _ ->
+        # Found non-whitespace before newline - not the SC1101 pattern
+        :ok
     end
   end
 
@@ -911,7 +990,15 @@ defmodule Bash.Tokenizer do
         # Valid shebang position - skip #!
         state = advance(state, 2)
         {interpreter, state} = read_until_newline(state, [])
-        {:ok, {:shebang, interpreter, start_line, start_col}, state}
+
+        # SC1008: Validate the interpreter is a recognized shell
+        case validate_shebang_interpreter(interpreter) do
+          :ok ->
+            {:ok, {:shebang, interpreter, start_line, start_col}, state}
+
+          {:error, msg} ->
+            {:error, msg, start_line, start_col}
+        end
 
       # SC1128: Shebang not on first line
       start_line > 1 and peek_next(state) == ?! ->
@@ -924,6 +1011,51 @@ defmodule Bash.Tokenizer do
         {text, state} = read_until_newline(state, [])
         {:ok, {:comment, text, start_line, start_col}, state}
     end
+  end
+
+  # SC1008: Validate shebang interpreter is a recognized shell
+  # Recognized: sh, bash, dash, ksh, zsh (and /usr/bin/env variants)
+  @recognized_shells ~w(sh bash dash ksh zsh)
+
+  defp validate_shebang_interpreter(interpreter) do
+    trimmed = String.trim(interpreter)
+
+    cond do
+      # Empty interpreter is fine (will use default shell)
+      trimmed == "" ->
+        :ok
+
+      # Direct path to shell: /bin/bash, /usr/bin/bash, etc.
+      Regex.match?(~r{^/\S*/(#{Enum.join(@recognized_shells, "|")})(\s|$)}, trimmed) ->
+        :ok
+
+      # env invocation: /usr/bin/env bash, /bin/env bash, etc.
+      Regex.match?(~r{^/\S*/env\s+(#{Enum.join(@recognized_shells, "|")})(\s|$)}, trimmed) ->
+        :ok
+
+      # Just the shell name (rare but valid): bash, sh
+      Enum.any?(@recognized_shells, fn shell ->
+        trimmed == shell or String.starts_with?(trimmed, shell <> " ")
+      end) ->
+        :ok
+
+      true ->
+        shell_name = extract_shell_name(trimmed)
+
+        {:error,
+         "(SC1008) Unrecognized shebang interpreter `#{shell_name}`. " <>
+           "This parser only supports sh/bash/dash/ksh/zsh scripts"}
+    end
+  end
+
+  defp extract_shell_name(interpreter) do
+    # Extract the shell/command name from the interpreter string
+    interpreter
+    |> String.split("/")
+    |> List.last()
+    |> String.split()
+    |> List.first()
+    |> Kernel.||("unknown")
   end
 
   defp read_until_newline(state, acc) do
@@ -950,30 +1082,94 @@ defmodule Bash.Tokenizer do
     start_line = state.line
     start_col = state.column
 
-    case peek_next(state) do
-      ?& ->
-        {:ok, {:and_if, start_line, start_col}, advance(state, 2)}
+    # SC1109: Check for HTML entities before processing & as operator
+    case check_html_entity_at_amp(state) do
+      {:error, _, _, _} = err ->
+        err
 
-      ?> ->
-        state2 = advance(state, 2)
+      :ok ->
+        case peek_next(state) do
+          ?& ->
+            {:ok, {:and_if, start_line, start_col}, advance(state, 2)}
 
-        case peek(state2) do
-          ?> -> {:ok, {:anddgreat, start_line, start_col}, advance(state2)}
-          _ -> {:ok, {:andgreat, start_line, start_col}, state2}
-        end
+          ?> ->
+            state2 = advance(state, 2)
 
-      _ ->
-        state1 = advance(state)
+            case peek(state2) do
+              ?> -> {:ok, {:anddgreat, start_line, start_col}, advance(state2)}
+              _ -> {:ok, {:andgreat, start_line, start_col}, state2}
+            end
 
-        # SC1045: &; is not valid - both & and ; terminate the command
-        if peek(state1) == ?; do
-          {:error, "(SC1045) `&;` is not valid - `&` already terminates the command", start_line,
-           start_col}
-        else
-          {:ok, {:background, start_line, start_col}, state1}
+          _ ->
+            state1 = advance(state)
+
+            # SC1045: &; is not valid - both & and ; terminate the command
+            cond do
+              peek(state1) == ?; ->
+                {:error, "(SC1045) `&;` is not valid - `&` already terminates the command",
+                 start_line, start_col}
+
+              # SC1132: Check for foo&bar pattern (& between words without space)
+              word_char_after_amp?(state1) and no_space_before?(state, start_col) ->
+                {:error,
+                 "(SC1132) `&` terminates the command. Escape it or add a space after if you want to run in background.",
+                 start_line, start_col}
+
+              true ->
+                {:ok, {:background, start_line, start_col}, state1}
+            end
         end
     end
   end
+
+  # Check if next char starts a word (for SC1132)
+  defp word_char_after_amp?(state) do
+    case peek(state) do
+      c when c in [?\s, ?\t, ?\n, nil, ?;, ?|, ?&, ?(, ?), ?<, ?>, ?#] -> false
+      _ -> true
+    end
+  end
+
+  # Check if there was no space before current position (for SC1132)
+  defp no_space_before?(state, col) do
+    col_before = Map.get(state, :col_before_blanks, 0)
+    col_before == col and col > 1
+  end
+
+  # SC1109: Check if & starts an HTML entity
+  @html_entity_patterns ["amp;", "lt;", "gt;", "nbsp;", "quot;", "#39;", "#x27;"]
+
+  defp check_html_entity_at_amp(state) do
+    # Get the text after &
+    rest = String.slice(state.input, state.pos + 1, 10)
+
+    found =
+      Enum.find(@html_entity_patterns, fn pattern ->
+        String.starts_with?(rest, pattern)
+      end)
+
+    case found do
+      nil ->
+        :ok
+
+      pattern ->
+        entity = "&" <> pattern
+        replacement = html_entity_replacement(pattern)
+
+        {:error,
+         "(SC1109) HTML entity `#{entity}` found. Did you copy this code from a webpage? Replace with `#{replacement}`.",
+         state.line, state.column}
+    end
+  end
+
+  defp html_entity_replacement("amp;"), do: "&"
+  defp html_entity_replacement("lt;"), do: "<"
+  defp html_entity_replacement("gt;"), do: ">"
+  defp html_entity_replacement("nbsp;"), do: "a space"
+  defp html_entity_replacement("quot;"), do: "\""
+  defp html_entity_replacement("#39;"), do: "'"
+  defp html_entity_replacement("#x27;"), do: "'"
+  defp html_entity_replacement(_), do: "the correct character"
 
   # ; or ;; or ;& or ;;&
   defp read_semicolon(state) do
@@ -1263,7 +1459,34 @@ defmodule Bash.Tokenizer do
         {:ok, {:drbracket, start_line, start_col}, new_state}
 
       _ ->
-        {:ok, {:rbracket, start_line, start_col}, advance(state)}
+        # SC1020: Check if no whitespace was skipped before ]
+        # This indicates "foo]" pattern where ] is missing a preceding space
+        col_before = Map.get(state, :col_before_blanks, 0)
+        no_space_before = col_before == start_col and start_col > 1
+
+        token_type = if no_space_before, do: :rbracket_no_space, else: :rbracket
+        new_state = advance(state)
+
+        # SC1136: Check if ] is followed by characters that should have a separator
+        case check_chars_after_bracket(new_state) do
+          {:error, _, _, _} = err -> err
+          :ok -> {:ok, {token_type, start_line, start_col}, new_state}
+        end
+    end
+  end
+
+  # SC1136: Check for word-starting characters immediately after ]
+  defp check_chars_after_bracket(state) do
+    case peek(state) do
+      # OK: whitespace, operators, EOF, or = (for array subscripts like [key]=value)
+      c when c in [nil, ?\s, ?\t, ?\n, ?|, ?&, ?;, ?(, ?), ?<, ?>, ?#, ?=] ->
+        :ok
+
+      # Suspicious: word starters, quotes, expansions
+      _c ->
+        {:error,
+         "(SC1136) Unexpected characters after `]`. Add a space or semicolon after `]`, or quote the `]` if literal.",
+         state.line, state.column}
     end
   end
 
@@ -1289,21 +1512,25 @@ defmodule Bash.Tokenizer do
 
       {:ok, parts, new_state} ->
         # Check if this is an assignment (VAR=value)
-        token = build_word_token(parts, start_line, start_col)
-
-        # SC1069: Check for reserved word immediately followed by [
-        case check_keyword_bracket_collision(token) do
+        case build_word_token(parts, start_line, start_col) do
           {:error, _, _, _} = err ->
             err
 
-          :ok ->
-            # Check for reserved words
-            token = maybe_reserved_word(token)
+          token ->
+            # SC1069: Check for reserved word immediately followed by [
+            case check_keyword_bracket_collision(token) do
+              {:error, _, _, _} = err ->
+                err
 
-            # Check if this is =~ inside [[ ]] - set flag for next token
-            new_state = maybe_set_regex_op_flag(token, new_state)
+              :ok ->
+                # Check for reserved words
+                token = maybe_reserved_word(token)
 
-            {:ok, token, new_state}
+                # Check if this is =~ inside [[ ]] - set flag for next token
+                new_state = maybe_set_regex_op_flag(token, new_state)
+
+                {:ok, token, new_state}
+            end
         end
 
       {:error, _, _, _} = err ->
@@ -1829,11 +2056,16 @@ defmodule Bash.Tokenizer do
       c when c in ?a..?z or c in ?A..?Z or c == ?_ ->
         {name, new_state} = read_var_name(state, [])
 
-        # Check for $VAR= pattern (SC1066)
+        # Check for $VAR= pattern (SC1066) and $arr[0] pattern (SC1087)
         case peek(new_state) do
           ?= ->
             {:error,
              "(SC1066) Don't use $ on the left side of assignments - use #{name}=value instead of $#{name}=value",
+             start_line, start_col}
+
+          ?[ ->
+            {:error,
+             "(SC1087) Use braces when accessing array elements. Use ${#{name}[...]} instead of $#{name}[...]",
              start_line, start_col}
 
           _ ->
@@ -2490,10 +2722,111 @@ defmodule Bash.Tokenizer do
     # Merge adjacent literals first, then check for assignment pattern
     merged_parts = merge_adjacent_literals(parts)
 
-    case merged_parts do
-      [{:literal, text} | rest] ->
-        # Try append assignment first: VAR+=value
-        case Regex.run(~r/^([A-Za-z_][A-Za-z0-9_]*)\+=(.*)$/s, text) do
+    # SC1109: Check for HTML entities in any literal part
+    case check_html_entities(merged_parts, line, col) do
+      {:error, _, _, _} = err ->
+        err
+
+      :ok ->
+        case merged_parts do
+          [{:literal, text} | rest] ->
+            # SC1097: Check for VAR==value (likely meant VAR=value or comparison)
+            case check_double_equals_assignment(text) do
+              {:error, var_name} ->
+                {:error,
+                 "(SC1097) Unexpected `==` in assignment. Use `#{var_name}=value` for assignment, or `[ \"$#{var_name}\" = value ]` for comparison",
+                 line, col}
+
+              :ok ->
+                build_word_token_assignment(merged_parts, rest, text, line, col)
+            end
+
+          _ ->
+            {:word, merged_parts, line, col}
+        end
+    end
+  end
+
+  # SC1109: Check for HTML entities that indicate copy-paste from web
+  @html_entities %{
+    "&amp;" => "&",
+    "&lt;" => "<",
+    "&gt;" => ">",
+    "&nbsp;" => "space",
+    "&quot;" => "\"",
+    "&#39;" => "'"
+  }
+
+  defp check_html_entities(parts, line, col) do
+    # Extract all literal text from parts
+    literals =
+      parts
+      |> Enum.filter(fn
+        {:literal, _} -> true
+        _ -> false
+      end)
+      |> Enum.map(fn {:literal, text} -> text end)
+      |> Enum.join()
+
+    # Check for any HTML entity
+    found =
+      Enum.find(@html_entities, fn {entity, _replacement} ->
+        String.contains?(literals, entity)
+      end)
+
+    case found do
+      {entity, replacement} ->
+        {:error,
+         "(SC1109) Unquoted HTML entity `#{entity}` found. Did you copy code from a webpage? Replace with `#{replacement}`.",
+         line, col}
+
+      nil ->
+        :ok
+    end
+  end
+
+  # SC1097: Check for VAR==value pattern using simple string operations
+  defp check_double_equals_assignment(text) do
+    case String.split(text, "==", parts: 2) do
+      [var_name, _value] when byte_size(var_name) > 0 ->
+        if valid_var_name?(var_name) do
+          {:error, var_name}
+        else
+          :ok
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp valid_var_name?(name) do
+    case String.to_charlist(name) do
+      [first | rest] when first in ?A..?Z or first in ?a..?z or first == ?_ ->
+        Enum.all?(rest, fn c -> c in ?A..?Z or c in ?a..?z or c in ?0..?9 or c == ?_ end)
+
+      _ ->
+        false
+    end
+  end
+
+  # Extracted assignment detection logic
+  defp build_word_token_assignment(merged_parts, rest, text, line, col) do
+    # Try append assignment first: VAR+=value
+    case Regex.run(~r/^([A-Za-z_][A-Za-z0-9_]*)\+=(.*)$/s, text) do
+      [_, var_name, value_start] ->
+        value_parts =
+          if value_start == "" do
+            rest
+          else
+            [{:literal, value_start} | rest]
+          end
+
+        {:append_word, var_name, merge_adjacent_literals(value_parts), line, col}
+
+      nil ->
+        # Try simple assignment: VAR=value
+        case Regex.run(~r/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s, text) do
           [_, var_name, value_start] ->
             value_parts =
               if value_start == "" do
@@ -2502,12 +2835,12 @@ defmodule Bash.Tokenizer do
                 [{:literal, value_start} | rest]
               end
 
-            {:append_word, var_name, merge_adjacent_literals(value_parts), line, col}
+            {:assignment_word, var_name, merge_adjacent_literals(value_parts), line, col}
 
           nil ->
-            # Try simple assignment: VAR=value
-            case Regex.run(~r/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s, text) do
-              [_, var_name, value_start] ->
+            # Try array subscript assignment: VAR[index]=value
+            case Regex.run(~r/^([A-Za-z_][A-Za-z0-9_]*\[[^\]]*\])=(.*)$/s, text) do
+              [_, var_with_subscript, value_start] ->
                 value_parts =
                   if value_start == "" do
                     rest
@@ -2515,44 +2848,51 @@ defmodule Bash.Tokenizer do
                     [{:literal, value_start} | rest]
                   end
 
-                {:assignment_word, var_name, merge_adjacent_literals(value_parts), line, col}
+                {:assignment_word, var_with_subscript, merge_adjacent_literals(value_parts), line,
+                 col}
 
               nil ->
-                # Try array subscript assignment: VAR[index]=value
-                case Regex.run(~r/^([A-Za-z_][A-Za-z0-9_]*\[[^\]]*\])=(.*)$/s, text) do
-                  [_, var_with_subscript, value_start] ->
-                    value_parts =
-                      if value_start == "" do
-                        rest
-                      else
-                        [{:literal, value_start} | rest]
-                      end
-
-                    {:assignment_word, var_with_subscript, merge_adjacent_literals(value_parts),
-                     line, col}
-
-                  nil ->
-                    {:word, merged_parts, line, col}
-                end
+                {:word, merged_parts, line, col}
             end
         end
-
-      _ ->
-        {:word, merged_parts, line, col}
     end
   end
 
   # SC1069: Check if a word looks like a reserved word immediately followed by [
   # e.g., "if[" or "while[" - these should have a space before [
+  # SC1129: Check for keyword immediately followed by ! (e.g., "if!" or "while!")
   defp check_keyword_bracket_collision({:word, [{:literal, text}], line, col}) do
     # Check for patterns like "if[", "while[", "for[", etc.
-    Enum.find_value(@reserved_words, :ok, fn keyword ->
-      if String.starts_with?(text, keyword <> "[") do
-        {:error,
-         "(SC1069) Missing space between `#{keyword}` and `[`. Use `#{keyword} [` instead of `#{keyword}[`",
-         line, col}
-      end
-    end)
+    bracket_error =
+      Enum.find_value(@reserved_words, nil, fn keyword ->
+        if String.starts_with?(text, keyword <> "[") do
+          {:error,
+           "(SC1069) Missing space between `#{keyword}` and `[`. Use `#{keyword} [` instead of `#{keyword}[`",
+           line, col}
+        end
+      end)
+
+    # Check for patterns like "if!", "while!", "until!" (SC1129)
+    bang_error =
+      Enum.find_value(~w(if while until), nil, fn keyword ->
+        if String.starts_with?(text, keyword <> "!") do
+          {:error,
+           "(SC1129) Missing space before `!`. Use `#{keyword} !` instead of `#{keyword}!`", line,
+           col}
+        end
+      end)
+
+    # Check for patterns like "if:", "while:", "until:" (SC1130)
+    colon_error =
+      Enum.find_value(~w(if while until), nil, fn keyword ->
+        if String.starts_with?(text, keyword <> ":") do
+          {:error,
+           "(SC1130) Missing space before `:`. Use `#{keyword} :` instead of `#{keyword}:`", line,
+           col}
+        end
+      end)
+
+    bracket_error || bang_error || colon_error || :ok
   end
 
   defp check_keyword_bracket_collision(_token), do: :ok

@@ -24,7 +24,8 @@ defmodule Bash.Variable do
           readonly: boolean(),
           export: boolean(),
           integer: boolean(),
-          array_type: array_type()
+          array_type: array_type(),
+          nameref: String.t() | nil
         }
   @type value :: String.t() | %{integer() => String.t()} | %{String.t() => String.t()}
 
@@ -40,7 +41,8 @@ defmodule Bash.Variable do
               integer: false,
               lowercase: false,
               uppercase: false,
-              array_type: nil
+              array_type: nil,
+              nameref: nil
             }
 
   @doc "Create scalar variable"
@@ -76,9 +78,33 @@ defmodule Bash.Variable do
     }
   end
 
+  @doc "Create a nameref variable that references another variable by name"
+  def new_nameref(target_name) when is_binary(target_name) do
+    %__MODULE__{
+      value: target_name,
+      attributes: %{
+        readonly: false,
+        export: false,
+        integer: false,
+        lowercase: false,
+        uppercase: false,
+        array_type: nil,
+        nameref: target_name
+      }
+    }
+  end
+
   @doc "Returns true if the variable is marked readonly."
   def readonly?(%__MODULE__{attributes: %{readonly: true}}), do: true
   def readonly?(_), do: false
+
+  @doc "Returns true if the variable is a nameref."
+  def nameref?(%__MODULE__{attributes: %{nameref: ref}}) when is_binary(ref), do: true
+  def nameref?(_), do: false
+
+  @doc "Get the nameref target variable name, or nil if not a nameref."
+  def nameref_target(%__MODULE__{attributes: %{nameref: ref}}) when is_binary(ref), do: ref
+  def nameref_target(_), do: nil
 
   @doc "Returns true if the variable is an array (indexed or associative)."
   def array?(%__MODULE__{attributes: %{array_type: type}}) when not is_nil(type), do: true

@@ -64,10 +64,13 @@ defmodule Bash.AST.ArrayAssignment do
       ) do
     started_at = DateTime.utc_now()
 
-    case Map.get(session_state.variables, name) do
+    # Resolve the target variable name (follow nameref chain)
+    target_name = resolve_nameref_target(session_state, name)
+
+    case Map.get(session_state.variables, target_name) do
       %Variable{attributes: %{readonly: true}} ->
         completed_at = DateTime.utc_now()
-        Bash.Sink.write_stderr(session_state, "#{name}: readonly variable\n")
+        Bash.Sink.write_stderr(session_state, "#{target_name}: readonly variable\n")
 
         executed_ast = %{
           ast
@@ -80,13 +83,39 @@ defmodule Bash.AST.ArrayAssignment do
 
       _existing when is_nil(subscript) ->
         # Array literal assignment: arr=(a b c)
-        execute_array_literal(ast, name, elements, session_state, started_at)
+        execute_array_literal(ast, target_name, elements, session_state, started_at)
 
       existing ->
         # Array element assignment: arr[idx]=value
-        execute_array_element(ast, name, existing, subscript, elements, session_state, started_at)
+        execute_array_element(
+          ast,
+          target_name,
+          existing,
+          subscript,
+          elements,
+          session_state,
+          started_at
+        )
     end
   end
+
+  # Follow nameref chain to find the actual target variable
+  defp resolve_nameref_target(session_state, name, depth \\ 0)
+
+  defp resolve_nameref_target(session_state, name, depth) when depth < 10 do
+    case Map.get(session_state.variables, name) do
+      %Variable{} = var ->
+        case Variable.nameref_target(var) do
+          nil -> name
+          target -> resolve_nameref_target(session_state, target, depth + 1)
+        end
+
+      nil ->
+        name
+    end
+  end
+
+  defp resolve_nameref_target(_session_state, name, _depth), do: name
 
   defp maybe_mark_evaluated(nil, _started_at, _completed_at), do: nil
 

@@ -207,10 +207,20 @@ defmodule Bash do
   defp resolve_session(pid) when is_pid(pid), do: {pid, []}
 
   defp resolve_session(opts) when is_list(opts) or is_map(opts) or is_nil(opts) do
-    # Create new session with provided options
     opts_list = if is_map(opts), do: Map.to_list(opts), else: opts || []
-    {:ok, pid} = Session.new(opts_list)
-    {pid, opts_list}
+
+    # Check if a session PID was provided in options
+    case Keyword.get(opts_list, :session) do
+      pid when is_pid(pid) ->
+        # Use provided session, pass remaining opts
+        remaining_opts = Keyword.delete(opts_list, :session)
+        {pid, remaining_opts}
+
+      nil ->
+        # Create new session with provided options
+        {:ok, pid} = Session.new(opts_list)
+        {pid, opts_list}
+    end
   end
 
   defp telemetry_stop_metadata({status, result, _session_pid}) do

@@ -251,15 +251,19 @@ defmodule Bash.ParserTest do
       assert error.code == "SC1027"
     end
 
-    # TODO: SC1020 (missing space before ]) cannot be detected because our
-    # tokenizer incorrectly treats ] as a metacharacter. Real Bash only treats
-    # ] as special when closing [ ], so `[ -f foo]` should fail but we accept it.
-    # Fixing this requires context-aware tokenization.
-    @tag :skip
     test "SC1020: missing space before ]" do
-      # Real Bash rejects this: bash -c '[ -f foo]' -> "missing `]'"
-      # Our tokenizer incorrectly splits "foo]" into "foo" + "]"
       assert {:error, error} = Bash.parse("[ -f foo]")
+      assert error.code == "SC1020"
+      assert error.hint =~ "space"
+    end
+
+    test "SC1020: missing space before ] in binary test" do
+      assert {:error, error} = Bash.parse("[ a = b]")
+      assert error.code == "SC1020"
+    end
+
+    test "SC1020: missing space before ] in variable test" do
+      assert {:error, error} = Bash.parse("[ -z $var]")
       assert error.code == "SC1020"
     end
 
@@ -355,6 +359,58 @@ defmodule Bash.ParserTest do
       assert {:ok, _} = Bash.parse("if true; then echo a; else echo b; fi")
       assert {:ok, _} = Bash.parse("if true; then\necho a\nelse\necho b\nfi")
     end
+
+    test "SC1075: use elif instead of else if" do
+      assert {:error, error} =
+               Bash.parse("if true; then echo a; else if false; then echo b; fi; fi")
+
+      assert error.code == "SC1075"
+      assert error.hint =~ "elif"
+    end
+
+    test "SC1075: detects else if in elif chain" do
+      assert {:error, error} =
+               Bash.parse(
+                 "if true; then echo a; elif false; then echo b; else if true; then echo c; fi; fi; fi"
+               )
+
+      assert error.code == "SC1075"
+    end
+
+    test "valid elif parses" do
+      assert {:ok, _} = Bash.parse("if true; then echo a; elif false; then echo b; fi")
+
+      assert {:ok, _} =
+               Bash.parse("if true; then echo a; elif false; then echo b; else echo c; fi")
+    end
+  end
+
+  describe "for loop syntax errors" do
+    test "SC1086: don't use $ on for loop variable" do
+      assert {:error, error} = Bash.parse("for $i in a b c; do echo $i; done")
+      assert error.code == "SC1086"
+      assert error.hint =~ "Don't use"
+    end
+
+    test "valid for loop parses" do
+      assert {:ok, _} = Bash.parse("for i in a b c; do echo $i; done")
+      assert {:ok, _} = Bash.parse("for file in *.txt; do cat $file; done")
+    end
+
+    test "SC1137: missing second ( for C-style for loop" do
+      assert {:error, error} = Bash.parse("for (i=0; i<10; i++); do echo; done")
+      assert error.code == "SC1137"
+      assert error.hint =~ "double parentheses"
+    end
+
+    test "SC1137: space between ( ( triggers error" do
+      assert {:error, error} = Bash.parse("for ( (i=0; i<10; i++) ); do echo; done")
+      assert error.code == "SC1137"
+    end
+
+    test "valid C-style for loop parses" do
+      assert {:ok, _} = Bash.parse("for ((i=0; i<10; i++)); do echo $i; done")
+    end
   end
 
   describe "brace group syntax errors" do
@@ -370,6 +426,50 @@ defmodule Bash.ParserTest do
     end
   end
 
+  describe "case statement syntax errors" do
+    test "SC1074: missing ;; between case items" do
+      assert {:error, error} = Bash.parse("case $x in a) echo a b) echo b;; esac")
+      assert error.code == "SC1074"
+      assert error.hint =~ ";;"
+    end
+
+    test "SC1074: missing ;; with newline" do
+      script = """
+      case $x in
+        a) echo a
+        b) echo b;;
+      esac
+      """
+
+      assert {:error, error} = Bash.parse(script)
+      assert error.code == "SC1074"
+    end
+
+    test "valid case with ;; parses" do
+      assert {:ok, _} = Bash.parse("case $x in a) echo a;; b) echo b;; esac")
+    end
+
+    test "valid case without ;; on last item parses" do
+      # Last case item can omit ;; if there's a newline before esac
+      script = """
+      case $x in
+        a) echo a;;
+        b) echo b
+      esac
+      """
+
+      assert {:ok, _} = Bash.parse(script)
+    end
+
+    test "valid case with fallthrough ;& parses" do
+      assert {:ok, _} = Bash.parse("case $x in a) echo a;& b) echo b;; esac")
+    end
+
+    test "valid case with continue ;;& parses" do
+      assert {:ok, _} = Bash.parse("case $x in a) echo a;;& b) echo b;; esac")
+    end
+  end
+
   describe "function definition syntax errors" do
     test "SC1095: function name contains {" do
       assert {:error, error} = Bash.parse("function foo{echo}")
@@ -377,10 +477,69 @@ defmodule Bash.ParserTest do
       assert error.hint =~ "function"
     end
 
+    test "SC1064: function body must be compound command - name() style" do
+      assert {:error, error} = Bash.parse("foo() echo hello")
+      assert error.code == "SC1064"
+      assert error.hint =~ "{"
+    end
+
+    test "SC1064: function body must be compound command - function keyword style" do
+      assert {:error, error} = Bash.parse("function bar echo hello")
+      assert error.code == "SC1064"
+      assert error.hint =~ "{"
+    end
+
+    test "SC1065: function params not allowed - name() style" do
+      assert {:error, error} = Bash.parse("foo(x, y) { echo; }")
+      assert error.code == "SC1065"
+      assert error.hint =~ "parameters"
+    end
+
+    test "SC1065: function params not allowed - function keyword style" do
+      assert {:error, error} = Bash.parse("function bar(a, b) { echo; }")
+      assert error.code == "SC1065"
+      assert error.hint =~ "parameters"
+    end
+
     test "valid function definitions parse" do
       assert {:ok, _} = Bash.parse("function foo { echo; }")
       assert {:ok, _} = Bash.parse("function foo() { echo; }")
       assert {:ok, _} = Bash.parse("foo() { echo; }")
+    end
+
+    test "valid function with subshell body parses" do
+      assert {:ok, _} = Bash.parse("foo() (echo hello)")
+    end
+
+    test "valid function with if body parses" do
+      assert {:ok, _} = Bash.parse("foo() if true; then echo; fi")
+    end
+  end
+
+  describe "pipe syntax errors" do
+    test "SC1133: pipe at start of line" do
+      script = """
+      echo foo
+      | grep bar
+      """
+
+      assert {:error, error} = Bash.parse(script)
+      assert error.code == "SC1133"
+      assert error.hint =~ "start of line"
+    end
+
+    test "SC1133: pipe at start of script" do
+      assert {:error, error} = Bash.parse("| grep bar")
+      assert error.code == "SC1133"
+    end
+
+    test "valid pipe at end of line parses" do
+      script = """
+      echo foo |
+        grep bar
+      """
+
+      assert {:ok, _} = Bash.parse(script)
     end
   end
 end

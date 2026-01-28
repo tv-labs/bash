@@ -147,18 +147,22 @@ defmodule Bash.Builtin.Coproc do
     # Start the process with ExCmd
     cmd = [opts.command | opts.args]
 
+    # ExCmd.Process sets up stdin/stdout pipes by default
+    # For stderr, we redirect to stdout to capture all output
     proc_opts = [
       cd: opts.working_dir,
       env: opts.env,
-      stdin: :pipe,
-      stdout: :pipe,
-      stderr: :pipe
+      stderr: :redirect_to_stdout
     ]
 
     case ExCmd.Process.start_link(cmd, proc_opts) do
       {:ok, pid} ->
-        # Get OS PID
-        os_pid = ExCmd.Process.os_pid(pid)
+        # Get OS PID (ExCmd.Process.os_pid returns {:ok, pid} or {:error, reason})
+        os_pid =
+          case ExCmd.Process.os_pid(pid) do
+            {:ok, os_pid} -> os_pid
+            os_pid when is_integer(os_pid) -> os_pid
+          end
 
         # Create pipe file descriptors (we use the GenServer pid as a pseudo-FD)
         # In a real implementation, we'd use actual file descriptors

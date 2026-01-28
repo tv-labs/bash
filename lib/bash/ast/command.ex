@@ -97,6 +97,9 @@ defmodule Bash.AST.Command do
          stdin,
          session_state
        ) do
+    # Execute DEBUG trap before each simple command (if set)
+    execute_debug_trap(session_state)
+
     command_name = Helpers.word_to_string(name, session_state)
     {expanded_args, env_updates} = Helpers.expand_word_list(args, session_state)
     effective_stdin = process_input_redirects(redirects, session_state, stdin)
@@ -350,6 +353,41 @@ defmodule Bash.AST.Command do
       end
 
     {:ok, new_state}
+  end
+
+  # FD duplication with variable target: >&${FD_VAR}
+  # When the target is a word (variable), expand it and try to get the FD number
+  defp apply_redirect_to_sinks(
+         %AST.Redirect{direction: :duplicate, fd: from_fd, target: {:file, file_word}},
+         state,
+         session_state,
+         _noclobber
+       ) do
+    # Expand the variable to get the FD number
+    target_str = resolve_redirect_path(file_word, session_state)
+
+    case Integer.parse(target_str) do
+      {to_fd, ""} when to_fd >= 0 ->
+        # Valid FD number - apply duplication
+        new_state =
+          case {from_fd, to_fd} do
+            {2, 1} ->
+              %{state | stderr_sink: retag_sink(state.stdout_sink, :stderr, :stdout)}
+
+            {1, 2} ->
+              %{state | stdout_sink: retag_sink(state.stderr_sink, :stdout, :stderr)}
+
+            # Other FD duplications - not fully supported yet
+            _ ->
+              state
+          end
+
+        {:ok, new_state}
+
+      _ ->
+        # Not a valid FD number - ignore or error
+        {:ok, state}
+    end
   end
 
   # File redirect: > file, >> file, 2> file, &> file, etc.
@@ -788,6 +826,37 @@ defmodule Bash.AST.Command do
       end
     else
       nil
+    end
+  end
+
+  # Execute DEBUG trap if one is set
+  # The DEBUG trap runs before each simple command
+  defp execute_debug_trap(session_state) do
+    # Skip if already executing a trap (prevent infinite recursion)
+    if Map.get(session_state, :in_trap, false) do
+      :ok
+    else
+      traps = Map.get(session_state, :traps, %{})
+
+      case Map.get(traps, "DEBUG") do
+        nil ->
+          :ok
+
+        :ignore ->
+          :ok
+
+        trap_command when is_binary(trap_command) ->
+          # Parse and execute the trap command
+          case Bash.Parser.parse(trap_command) do
+            {:ok, ast} ->
+              # Execute trap with in_trap flag to prevent recursion
+              trap_session = Map.put(session_state, :in_trap, true)
+              Helpers.execute_body(ast.statements, trap_session, %{})
+
+            {:error, _, _, _} ->
+              :ok
+          end
+      end
     end
   end
 

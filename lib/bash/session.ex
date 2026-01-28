@@ -117,7 +117,8 @@ defmodule Bash.Session do
     # Positional parameters (scope stack for functions)
     positional_params: [[]],
     # Callback for starting background jobs synchronously (used by Script executor)
-    start_background_job_fn: nil
+    start_background_job_fn: nil,
+    signal_jobs_fn: nil
   ]
 
   @type t :: %__MODULE__{
@@ -1106,8 +1107,16 @@ defmodule Bash.Session do
           {wrapped_stdout, wrapped_stderr}
       end
 
+    # Create a callback function for starting background jobs synchronously
+    # This allows Scripts to start jobs immediately and get the OS PID for $!
     start_bg_job_fn = fn foreground_ast, current_state ->
       start_background_job_sync(foreground_ast, current_state, state)
+    end
+
+    # Create a callback function for sending signals to jobs/processes synchronously
+    # This allows Scripts to send signals immediately (kill builtin)
+    signal_jobs_fn = fn signal, targets, current_state ->
+      send_signals_sync(signal, targets, current_state, state)
     end
 
     state_with_sinks = %{
@@ -1115,7 +1124,8 @@ defmodule Bash.Session do
       | output_collector: collector,
         stdout_sink: stdout_sink,
         stderr_sink: stderr_sink,
-        start_background_job_fn: start_bg_job_fn
+        start_background_job_fn: start_bg_job_fn,
+        signal_jobs_fn: signal_jobs_fn
     }
 
     # No executor_opts needed - sinks are on state now
@@ -1174,7 +1184,55 @@ defmodule Bash.Session do
 
         {:reply, {:ok, executed_script_with_collector}, final_state}
 
-      # Handle special job control builtin return values
+      # Handle special job control builtin return values from Script execution
+      # These include the executed_script so we can return it with proper collector
+      {:foreground_job, job_number, executed_script, script_updates} ->
+        # Keep collector alive for Script result
+        handle_foreground_job_with_script(
+          job_number,
+          executed_script,
+          script_updates,
+          collector,
+          from,
+          state
+        )
+
+      {:background_job, job_numbers, executed_script, script_updates} ->
+        # Keep collector alive for Script result
+        handle_background_jobs_with_script(
+          job_numbers,
+          executed_script,
+          script_updates,
+          collector,
+          state
+        )
+
+      {:wait_for_jobs, job_specs, executed_script, script_updates} ->
+        # Transfer collected output to persistent collector
+        transfer_and_cleanup_collector(collector, state.output_collector)
+        # Update script to use persistent collector
+        executed_script_with_collector = %{executed_script | collector: state.output_collector}
+
+        handle_wait_for_jobs_with_script(
+          job_specs,
+          executed_script_with_collector,
+          script_updates,
+          from,
+          state
+        )
+
+      {:signal_jobs, signal, targets, executed_script, script_updates} ->
+        # Keep collector alive for Script result, perform signal operation
+        handle_signal_jobs_with_script(
+          signal,
+          targets,
+          executed_script,
+          script_updates,
+          collector,
+          state
+        )
+
+      # Legacy job control returns (without script) - for non-Script callers
       {:foreground_job, job_number} ->
         cleanup_collector(collector)
         handle_foreground_job(job_number, from, state)
@@ -2087,6 +2145,43 @@ defmodule Bash.Session do
       end)
 
       {:noreply, state}
+    end
+  end
+
+  # Send signals synchronously for Script executor
+  # Returns {:ok, exit_code} or {:error, exit_code, error_message}
+  defp send_signals_sync(signal, targets, current_session_state, _original_state) do
+    results =
+      Enum.map(targets, fn
+        {:job, job_num} ->
+          case Map.get(current_session_state.jobs, job_num) do
+            nil -> {:error, "no such job: %#{job_num}"}
+            pid -> JobProcess.signal(pid, signal)
+          end
+
+        {:pid, os_pid} ->
+          sig_num = signal_to_number(signal)
+
+          case System.cmd("kill", ["-#{sig_num}", "#{os_pid}"], stderr_to_stdout: true) do
+            {_, 0} -> :ok
+            {output, _} -> {:error, String.trim(output)}
+          end
+      end)
+
+    errors =
+      results
+      |> Enum.filter(&match?({:error, _}, &1))
+
+    if Enum.empty?(errors) do
+      {:ok, 0}
+    else
+      error_msg = Enum.map_join(errors, "\n", fn {:error, msg} -> msg end)
+
+      if current_session_state.stderr_sink do
+        current_session_state.stderr_sink.({:stderr, error_msg <> "\n"})
+      end
+
+      {:error, 1, error_msg}
     end
   end
 

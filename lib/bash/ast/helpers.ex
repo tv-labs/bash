@@ -152,123 +152,7 @@ defmodule Bash.AST.Helpers do
 
   # Helper to convert Word to string, expanding variables and command substitution
   def word_to_string(%AST.Word{parts: parts}, session_state) do
-    Enum.map_join(parts, "", fn
-      {:literal, text} ->
-        # Tilde expansion first, then glob expansion
-        text
-        |> expand_tilde(session_state)
-        |> expand_glob_pattern(session_state)
-
-      # Array expansion: ${arr[@]}
-      {:variable, %AST.Variable{name: var_name, subscript: :all_values, expansion: nil}} ->
-        expand_array_all(session_state, var_name, " ")
-
-      # Array expansion with * separator: ${arr[*]}
-      {:variable, %AST.Variable{name: var_name, subscript: :all_star, expansion: nil}} ->
-        ifs = get_scalar_value(session_state, "IFS") || " \t\n"
-        separator = String.first(ifs) || ""
-        expand_array_all(session_state, var_name, separator)
-
-      # Array element: ${arr[0]}
-      {:variable, %AST.Variable{name: var_name, subscript: {:index, idx_expr}, expansion: nil}} ->
-        expand_array_element(session_state, var_name, idx_expr)
-
-      # Array length: ${#arr[@]}
-      {:variable, %AST.Variable{name: var_name, subscript: :all_values, expansion: {:length}}} ->
-        get_array_length(session_state, var_name) |> to_string()
-
-      # String length: ${#var}
-      {:variable, %AST.Variable{name: var_name, subscript: nil, expansion: {:length}}} ->
-        get_scalar_value(session_state, var_name) |> String.length() |> to_string()
-
-      # Scalar variable: $var or ${var}
-      {:variable, %AST.Variable{name: var_name, subscript: nil, expansion: nil}} ->
-        get_scalar_value(session_state, var_name)
-
-      # Fallback for any other variable patterns (with expansion operators)
-      {:variable, %AST.Variable{} = var} ->
-        expand_variable(var, session_state)
-
-      {:command_subst, parsed_ast} ->
-        # Execute the parsed command substitution AST and capture its output
-        expand_command_substitution(parsed_ast, session_state)
-
-      {:backtick, command_string} ->
-        # Backtick is the old form of command substitution: `command`
-        # Parse and execute it like $()
-        case Parser.parse(command_string) do
-          {:ok, parsed_ast} -> expand_command_substitution(parsed_ast, session_state)
-          {:error, _, _, _} -> ""
-        end
-
-      {:cmd_subst, command_string} ->
-        # Command substitution from heredoc: $(command)
-        # Parse and execute it like $()
-        case Parser.parse(command_string) do
-          {:ok, parsed_ast} -> expand_command_substitution(parsed_ast, session_state)
-          {:error, _, _, _} -> ""
-        end
-
-      {:process_subst_in, parsed_ast} ->
-        # Input process substitution: <(command)
-        # Start background process and return FIFO path
-        # Note: PID is discarded here - use expand_word_with_tracking for cleanup
-        {path, _pid} = expand_process_substitution(parsed_ast, :input, session_state)
-        path
-
-      {:process_subst_out, parsed_ast} ->
-        # Output process substitution: >(command)
-        # Start background process and return FIFO path
-        # Note: PID is discarded here - use expand_word_with_tracking for cleanup
-        {path, _pid} = expand_process_substitution(parsed_ast, :output, session_state)
-        path
-
-      {:arith_expand, expr_string} ->
-        # Evaluate arithmetic expression and return the result as a string
-        expand_arithmetic(expr_string, session_state)
-
-      {:glob, pattern} ->
-        # Expand glob pattern
-        expand_glob_pattern(pattern, session_state)
-
-      {:single_quoted, text} ->
-        # Single-quoted text is literal - no expansion
-        text
-
-      {:double_quoted, inner_parts} ->
-        # Double-quoted inner parts need expansion (variables, command subst)
-        # No brace expansion inside double quotes
-        Enum.map_join(inner_parts, "", fn
-          {:literal, text} ->
-            text
-
-          {:variable, var_ast} ->
-            expand_variable(var_ast, session_state)
-
-          {:command_subst, parsed_ast} ->
-            expand_command_substitution(parsed_ast, session_state)
-
-          {:backtick, cmd_str} ->
-            case Parser.parse(cmd_str) do
-              {:ok, ast} -> expand_command_substitution(ast, session_state)
-              {:error, _, _, _} -> ""
-            end
-
-          {:arith_expand, expr_string} ->
-            expand_arithmetic(expr_string, session_state)
-
-          other ->
-            inspect(other)
-        end)
-
-      {:brace_expand, brace_spec} ->
-        # For word_to_string, we just expand and join with space
-        # The proper multi-word expansion happens in expand_word/2
-        brace_spec
-        |> to_brace_expand_struct()
-        |> BraceExpand.expand()
-        |> Enum.join(" ")
-    end)
+    Enum.map_join(parts, "", &expand_part(&1, session_state))
   end
 
   def word_to_string(str, _session_state) when is_binary(str), do: str
@@ -317,50 +201,10 @@ defmodule Bash.AST.Helpers do
     %{session_state | variables: Map.merge(session_state.variables, new_vars)}
   end
 
-  # Helper to expand a single part (used by word_to_string_with_updates)
+  # Helper to expand a single part (used by word_to_string and word_to_string_with_updates)
   defp expand_part({:literal, text}, session_state) do
     text |> expand_tilde(session_state) |> expand_glob_pattern(session_state)
   end
-
-  defp expand_part(
-         {:variable, %AST.Variable{name: var_name, subscript: :all_values, expansion: nil}},
-         session_state
-       ),
-       do: expand_array_all(session_state, var_name, " ")
-
-  defp expand_part(
-         {:variable, %AST.Variable{name: var_name, subscript: :all_star, expansion: nil}},
-         session_state
-       ) do
-    ifs = get_scalar_value(session_state, "IFS") || " \t\n"
-    separator = String.first(ifs) || ""
-    expand_array_all(session_state, var_name, separator)
-  end
-
-  defp expand_part(
-         {:variable,
-          %AST.Variable{name: var_name, subscript: {:index, idx_expr}, expansion: nil}},
-         session_state
-       ),
-       do: expand_array_element(session_state, var_name, idx_expr)
-
-  defp expand_part(
-         {:variable, %AST.Variable{name: var_name, subscript: :all_values, expansion: {:length}}},
-         session_state
-       ),
-       do: get_array_length(session_state, var_name) |> to_string()
-
-  defp expand_part(
-         {:variable, %AST.Variable{name: var_name, subscript: nil, expansion: {:length}}},
-         session_state
-       ),
-       do: get_scalar_value(session_state, var_name) |> String.length() |> to_string()
-
-  defp expand_part(
-         {:variable, %AST.Variable{name: var_name, subscript: nil, expansion: nil}},
-         session_state
-       ),
-       do: get_scalar_value(session_state, var_name)
 
   defp expand_part({:variable, %AST.Variable{} = var}, session_state),
     do: expand_variable(var, session_state)
@@ -368,7 +212,8 @@ defmodule Bash.AST.Helpers do
   defp expand_part({:command_subst, parsed_ast}, session_state),
     do: expand_command_substitution(parsed_ast, session_state)
 
-  defp expand_part({:backtick, command_string}, session_state) do
+  defp expand_part({tag, command_string}, session_state)
+       when tag in [:backtick, :cmd_subst] do
     case Parser.parse(command_string) do
       {:ok, parsed_ast} -> expand_command_substitution(parsed_ast, session_state)
       {:error, _, _, _} -> ""
@@ -394,27 +239,10 @@ defmodule Bash.AST.Helpers do
   defp expand_part({:single_quoted, text}, _session_state), do: text
 
   defp expand_part({:double_quoted, inner_parts}, session_state) do
+    # Inside double quotes: no tilde/glob expansion on literals, but expand variables etc.
     Enum.map_join(inner_parts, "", fn
-      {:literal, text} ->
-        text
-
-      {:variable, var_ast} ->
-        expand_variable(var_ast, session_state)
-
-      {:command_subst, parsed_ast} ->
-        expand_command_substitution(parsed_ast, session_state)
-
-      {:backtick, cmd_str} ->
-        case Parser.parse(cmd_str) do
-          {:ok, ast} -> expand_command_substitution(ast, session_state)
-          {:error, _, _, _} -> ""
-        end
-
-      {:arith_expand, expr_string} ->
-        expand_arithmetic(expr_string, session_state)
-
-      other ->
-        inspect(other)
+      {:literal, text} -> text
+      part -> expand_part(part, session_state)
     end)
   end
 
@@ -492,6 +320,7 @@ defmodule Bash.AST.Helpers do
   # Expand word parts with brace expansion, computing cartesian product
   defp expand_word_with_braces(parts, session_state) do
     # Convert each part to a list of alternatives
+    # Brace expansion returns multiple alternatives; everything else is wrapped in [...]
     alternatives =
       Enum.map(parts, fn
         {:brace_expand, brace_spec} ->
@@ -499,51 +328,14 @@ defmodule Bash.AST.Helpers do
           |> to_brace_expand_struct()
           |> BraceExpand.expand()
 
-        {:literal, text} ->
-          [expand_glob_pattern(text, session_state)]
-
-        {:variable, var_ast} ->
-          [expand_variable(var_ast, session_state)]
-
-        {:command_subst, parsed_ast} ->
-          [expand_command_substitution(parsed_ast, session_state)]
-
-        {:process_subst_in, parsed_ast} ->
-          {path, _pid} = expand_process_substitution(parsed_ast, :input, session_state)
-          [path]
-
-        {:process_subst_out, parsed_ast} ->
-          {path, _pid} = expand_process_substitution(parsed_ast, :output, session_state)
-          [path]
-
-        {:arith_expand, expr_string} ->
-          [expand_arithmetic(expr_string, session_state)]
-
-        {:glob, pattern} ->
-          [expand_glob_pattern(pattern, session_state)]
-
-        {:single_quoted, text} ->
-          [text]
-
-        {:double_quoted, inner_parts} ->
-          [expand_double_quoted_parts(inner_parts, session_state)]
+        part ->
+          [expand_part(part, session_state)]
       end)
 
     # Compute cartesian product and join each combination
     alternatives
     |> cartesian_product()
     |> Enum.map(&Enum.join/1)
-  end
-
-  # Helper for double-quoted expansion (no brace expansion inside)
-  defp expand_double_quoted_parts(parts, session_state) do
-    Enum.map_join(parts, "", fn
-      {:literal, text} -> text
-      {:variable, var_ast} -> expand_variable(var_ast, session_state)
-      {:command_subst, parsed_ast} -> expand_command_substitution(parsed_ast, session_state)
-      {:arith_expand, expr_string} -> expand_arithmetic(expr_string, session_state)
-      other -> inspect(other)
-    end)
   end
 
   # Cartesian product of list of lists
@@ -638,16 +430,10 @@ defmodule Bash.AST.Helpers do
   end
 
   defp expand_variable(
-         %AST.Variable{name: var_name, subscript: :all_values, expansion: {:length}},
+         %AST.Variable{name: var_name, subscript: sub, expansion: {:length}},
          session_state
-       ) do
-    get_array_length(session_state, var_name) |> to_string()
-  end
-
-  defp expand_variable(
-         %AST.Variable{name: var_name, subscript: :all_star, expansion: {:length}},
-         session_state
-       ) do
+       )
+       when sub in [:all_values, :all_star] do
     get_array_length(session_state, var_name) |> to_string()
   end
 
@@ -791,7 +577,7 @@ defmodule Bash.AST.Helpers do
 
   defp expand_variable(%AST.Variable{name: var_name}, session_state) do
     # Fallback for any other variable patterns
-    case Map.get(session_state.variables, var_name) do
+    case resolve_variable(session_state, var_name) do
       nil -> ""
       %Variable{} = var -> Variable.get(var, nil) || ""
     end
@@ -807,25 +593,11 @@ defmodule Bash.AST.Helpers do
   # Glob characters are kept as-is for pattern matching purposes
   def pattern_to_string(%AST.Word{parts: parts}, session_state) do
     Enum.map_join(parts, "", fn
-      {:literal, text} ->
-        # Keep literal text as-is, no glob expansion
-        text
-
-      {:variable, %AST.Variable{name: var_name}} ->
-        case Map.get(session_state.variables, var_name) do
-          nil -> ""
-          %Variable{} = var -> Variable.get(var, nil) || ""
-        end
-
-      {:command_subst, parsed_ast} ->
-        expand_command_substitution(parsed_ast, session_state)
-
-      {:arith_expand, expr_string} ->
-        expand_arithmetic(expr_string, session_state)
-
-      {:glob, pattern} ->
-        # Keep glob pattern as-is for matching
-        pattern
+      {:literal, text} -> text
+      {:glob, pattern} -> pattern
+      {:variable, %AST.Variable{} = var} -> expand_variable(var, session_state)
+      {:command_subst, parsed_ast} -> expand_command_substitution(parsed_ast, session_state)
+      {:arith_expand, expr_string} -> expand_arithmetic(expr_string, session_state)
     end)
   end
 
@@ -948,9 +720,13 @@ defmodule Bash.AST.Helpers do
         Map.put(acc, Integer.to_string(idx), value)
       end)
 
+    # First expand command substitutions $(...)  in the expression
+    # This must happen before variable expansion
+    expr_with_cmd_subst = expand_arith_command_subst(expr_string, session_state)
+
     # Expand $variable references in the expression before evaluation
     # Bash allows both $var and var inside $((...))
-    expanded_expr = expand_arith_variables(expr_string, vars_with_positional)
+    expanded_expr = expand_arith_variables(expr_with_cmd_subst, vars_with_positional)
 
     case Arithmetic.evaluate(expanded_expr, vars_with_positional) do
       {:ok, result, updated_env} ->
@@ -966,6 +742,81 @@ defmodule Bash.AST.Helpers do
         # On error, return empty string (like bash does for failed expansions)
         {"", %{}}
     end
+  end
+
+  # Expand command substitutions $(...) in arithmetic expressions
+  # Must be done before variable expansion since $(cmd) is not a variable pattern
+  defp expand_arith_command_subst(expr, session_state) do
+    expand_arith_command_subst_loop(expr, session_state)
+  end
+
+  defp expand_arith_command_subst_loop(expr, session_state) do
+    case find_command_subst(expr) do
+      nil ->
+        expr
+
+      {start_pos, end_pos, cmd_content} ->
+        # Execute the command substitution
+        output =
+          case Parser.parse(cmd_content) do
+            {:ok, ast} ->
+              expand_command_substitution(ast, session_state)
+
+            {:error, _, _, _} ->
+              ""
+          end
+
+        # Replace the $(...) with the output
+        prefix = String.slice(expr, 0, start_pos)
+        suffix = String.slice(expr, end_pos + 1, String.length(expr))
+        new_expr = prefix <> output <> suffix
+
+        # Recurse to handle any remaining command substitutions
+        expand_arith_command_subst_loop(new_expr, session_state)
+    end
+  end
+
+  # Find the first $(...) command substitution in the expression
+  # Returns {start_pos, end_pos, content} or nil
+  # Handles nested parentheses correctly
+  defp find_command_subst(expr) do
+    case :binary.match(expr, "$(") do
+      :nomatch ->
+        nil
+
+      {start_pos, 2} ->
+        # Found "$(" - now find the matching ")"
+        content_start = start_pos + 2
+        rest = String.slice(expr, content_start, String.length(expr))
+
+        case find_matching_paren(rest, 0, 0) do
+          nil ->
+            nil
+
+          content_length ->
+            content = String.slice(rest, 0, content_length)
+            end_pos = content_start + content_length
+            {start_pos, end_pos, content}
+        end
+    end
+  end
+
+  # Find the position of the matching closing paren, handling nesting
+  # Returns the length of content (not including the closing paren) or nil
+  defp find_matching_paren(<<>>, _depth, _pos), do: nil
+
+  defp find_matching_paren(<<"(", rest::binary>>, depth, pos) do
+    find_matching_paren(rest, depth + 1, pos + 1)
+  end
+
+  defp find_matching_paren(<<")", _rest::binary>>, 0, pos), do: pos
+
+  defp find_matching_paren(<<")", rest::binary>>, depth, pos) do
+    find_matching_paren(rest, depth - 1, pos + 1)
+  end
+
+  defp find_matching_paren(<<_char::utf8, rest::binary>>, depth, pos) do
+    find_matching_paren(rest, depth, pos + 1)
   end
 
   # Expand $variable references in arithmetic expressions
@@ -1018,7 +869,7 @@ defmodule Bash.AST.Helpers do
   end
 
   defp get_var_value(name, session_state) do
-    case Map.get(session_state.variables, name) do
+    case resolve_variable(session_state, name) do
       nil -> ""
       var -> Variable.get(var, nil) || ""
     end
@@ -1238,19 +1089,37 @@ defmodule Bash.AST.Helpers do
 
       # Regular variable
       true ->
-        case Map.get(session_state.variables, var_name) do
-          nil ->
-            # Check nounset option - error if variable is unset
-            if nounset_enabled?(session_state) do
-              raise "bash: #{var_name}: unbound variable"
-            else
-              ""
-            end
+        resolve_variable_value(session_state, var_name, 0)
+    end
+  end
 
-          %Variable{} = var ->
+  # Resolve variable value, following nameref references
+  defp resolve_variable_value(session_state, var_name, depth) when depth < 10 do
+    case Map.get(session_state.variables, var_name) do
+      nil ->
+        # Check nounset option - error if variable is unset
+        if nounset_enabled?(session_state) do
+          raise "bash: #{var_name}: unbound variable"
+        else
+          ""
+        end
+
+      %Variable{} = var ->
+        # Check if this is a nameref - follow the reference
+        case Variable.nameref_target(var) do
+          nil ->
             Variable.get(var, nil) || ""
+
+          target_name ->
+            # Recursively resolve the target variable
+            resolve_variable_value(session_state, target_name, depth + 1)
         end
     end
+  end
+
+  # Prevent infinite loops from circular namerefs
+  defp resolve_variable_value(_session_state, _var_name, _depth) do
+    ""
   end
 
   # Check if nounset option is enabled in session state
@@ -1284,7 +1153,7 @@ defmodule Bash.AST.Helpers do
     System.pid() |> String.to_integer() |> to_string()
   end
 
-  defp get_dynamic_var("BASH_VERSION", _session_state), do: "5.2.0(1)-release"
+  defp get_dynamic_var("BASH_VERSION", _session_state), do: "5.3.3(1)-release"
   defp get_dynamic_var(_, _), do: ""
 
   # Check if variable name is a positional parameter (1-9 or multi-digit)
@@ -1300,11 +1169,11 @@ defmodule Bash.AST.Helpers do
     special_vars = Map.get(session_state, :special_vars, %{})
 
     case var_name do
-      "?" -> to_string(Map.get(special_vars, "?", 0))
-      "$" -> to_string(Map.get(special_vars, "$", 0))
-      "!" -> to_string(Map.get(special_vars, "!", ""))
-      "0" -> to_string(Map.get(special_vars, "0", "bash"))
-      "_" -> to_string(Map.get(special_vars, "_", ""))
+      "?" -> to_string(special_vars["?"] || 0)
+      "$" -> to_string(special_vars["$"] || 0)
+      "!" -> to_string(special_vars["!"] || "")
+      "0" -> to_string(special_vars["0"] || "bash")
+      "_" -> to_string(special_vars["_"] || "")
       "#" -> get_param_count(session_state)
       "@" -> get_all_params(session_state, :separate)
       "*" -> get_all_params(session_state, :joined)
@@ -1313,33 +1182,31 @@ defmodule Bash.AST.Helpers do
   end
 
   # Get shell options as a string (like "hB" for hashall and braceexpand)
+  @option_flags [
+    {:hashall, "h"},
+    {:braceexpand, "B"},
+    {:noglob, "f"},
+    {:noclobber, "C"},
+    {:nounset, "u"},
+    {:errexit, "e"},
+    {:xtrace, "x"},
+    {:verbose, "v"},
+    {:noexec, "n"},
+    {:allexport, "a"},
+    {:notify, "b"},
+    {:interactive, "i"},
+    {:monitor, "m"},
+    {:privileged, "p"},
+    {:physical, "P"},
+    {:histexpand, "H"}
+  ]
   defp get_shell_options(session_state) do
     options = Map.get(session_state, :options, %{})
 
     # Map option names to their single-letter flags
-    option_flags = [
-      {:hashall, "h"},
-      {:braceexpand, "B"},
-      {:noglob, "f"},
-      {:noclobber, "C"},
-      {:nounset, "u"},
-      {:errexit, "e"},
-      {:xtrace, "x"},
-      {:verbose, "v"},
-      {:noexec, "n"},
-      {:allexport, "a"},
-      {:notify, "b"},
-      {:interactive, "i"},
-      {:monitor, "m"},
-      {:privileged, "p"},
-      {:physical, "P"},
-      {:histexpand, "H"}
-    ]
-
-    option_flags
-    |> Enum.filter(fn {opt, _} -> Map.get(options, opt, false) end)
-    |> Enum.map(fn {_, flag} -> flag end)
-    |> Enum.join()
+    @option_flags
+    |> Enum.filter(fn {opt, _} -> options[opt] || false end)
+    |> Enum.map_join("", fn {_, flag} -> flag end)
   end
 
   # Get positional parameter by index (1-based)
@@ -1367,24 +1234,39 @@ defmodule Bash.AST.Helpers do
   end
 
   # Get all positional parameters
-  defp get_all_params(session_state, mode) do
+  # TODO: $* should join with IFS first char, $@ should keep separate when quoted
+  defp get_all_params(session_state, _mode) do
     positional_params = Map.get(session_state, :positional_params, [[]])
     current_params = List.first(positional_params) || []
+    Enum.join(current_params, " ")
+  end
 
-    case mode do
-      :joined -> Enum.join(current_params, " ")
-      :separate -> Enum.join(current_params, " ")
+  # Resolve variable by name, following nameref chain
+  # Returns the actual Variable struct (or nil if not found)
+  defp resolve_variable(session_state, var_name, depth \\ 0)
+
+  defp resolve_variable(session_state, var_name, depth) when depth < 10 do
+    case Map.get(session_state.variables, var_name) do
+      nil ->
+        nil
+
+      %Variable{} = var ->
+        case Variable.nameref_target(var) do
+          nil -> var
+          target -> resolve_variable(session_state, target, depth + 1)
+        end
     end
   end
 
+  defp resolve_variable(_session_state, _var_name, _depth), do: nil
+
   # Expand all array values with separator: ${arr[@]} or ${arr[*]}
   defp expand_array_all(session_state, var_name, separator) do
-    case Map.get(session_state.variables, var_name) do
+    case resolve_variable(session_state, var_name) do
       nil ->
         ""
 
       %Variable{attributes: %{array_type: nil}} = var ->
-        # Scalar treated as array with one element
         Variable.get(var, nil) || ""
 
       %Variable{attributes: %{array_type: :indexed}} = var ->
@@ -1397,7 +1279,7 @@ defmodule Bash.AST.Helpers do
 
   # Expand single array element: ${arr[0]} or ${assoc[key]}
   defp expand_array_element(session_state, var_name, idx_expr) do
-    case Map.get(session_state.variables, var_name) do
+    case resolve_variable(session_state, var_name) do
       nil ->
         ""
 
@@ -1425,7 +1307,7 @@ defmodule Bash.AST.Helpers do
 
   # Get array length: ${#arr[@]}
   defp get_array_length(session_state, var_name) do
-    case Map.get(session_state.variables, var_name) do
+    case resolve_variable(session_state, var_name) do
       nil -> 0
       %Variable{} = var -> Variable.length(var)
     end
@@ -1511,7 +1393,7 @@ defmodule Bash.AST.Helpers do
 
   # Convert glob pattern to regex pattern
   # If greedy is true, use greedy matching (longest); otherwise non-greedy (shortest)
-  @regex_special_chars ~w(. ^ $ + { } |) ++ ["(", ")", "[", "]", "\\"]
+  @regex_special_chars ~w(. ^ $ + { } | [ ] \\) ++ ~w[( )]
   defp glob_pattern_to_regex(pattern, greedy) do
     pattern
     |> String.graphemes()
@@ -1527,7 +1409,7 @@ defmodule Bash.AST.Helpers do
   # List array indices (for indexed arrays) or keys (for associative arrays)
   # ${!arr[@]} or ${!arr[*]}
   defp list_array_keys(session_state, var_name) do
-    case Map.get(session_state.variables, var_name) do
+    case resolve_variable(session_state, var_name) do
       nil ->
         ""
 
@@ -1550,7 +1432,7 @@ defmodule Bash.AST.Helpers do
 
   # Slice array: ${arr[@]:offset} or ${arr[@]:offset:length}
   defp slice_array(session_state, var_name, offset, length) do
-    case Map.get(session_state.variables, var_name) do
+    case resolve_variable(session_state, var_name) do
       nil ->
         ""
 
