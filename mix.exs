@@ -32,7 +32,7 @@ defmodule Bash.MixProject do
       },
       maintainers: ["David Bernheisel"],
       source_ref: "v#{@version}",
-      files: ~w[lib .formatter.exs mix.exs README.md docs CHANGELOG.md LICENSE.md]
+      files: ~w[lib .formatter.exs mix.exs docs CHANGELOG.md LICENSE.md]
     ]
   end
 
@@ -70,7 +70,7 @@ defmodule Bash.MixProject do
   defp docs do
     [
       main: "Bash",
-      extras: ["README.md", "LICENSE.md", "docs/ARCHITECTURE.md"],
+      extras: ["LICENSE.md", "docs/ARCHITECTURE.md"],
       source_url: "https://github.com/tv-labs/bash",
       before_closing_body_tag: %{html: @mermaid_js},
       groups_for_modules: [
