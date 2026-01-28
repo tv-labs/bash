@@ -78,7 +78,7 @@ defmodule Bash.Builtin.Read do
 
             device when is_pid(device) ->
               # Read one line from the StringIO device
-              case IO.read(device, :line) do
+              case IO.binread(device, :line) do
                 :eof -> nil
                 {:error, _} -> nil
                 line -> line
@@ -321,8 +321,18 @@ defmodule Bash.Builtin.Read do
     file_descriptors = Map.get(session_state, :file_descriptors, %{})
 
     case Map.get(file_descriptors, fd) do
-      nil -> {:error, "#{fd}: Bad file descriptor"}
-      content -> {:ok, content}
+      nil ->
+        {:error, "#{fd}: Bad file descriptor"}
+
+      device when is_pid(device) ->
+        case IO.binread(device, :line) do
+          :eof -> {:ok, nil}
+          {:error, _} -> {:error, "#{fd}: Bad file descriptor"}
+          line -> {:ok, line}
+        end
+
+      content ->
+        {:ok, content}
     end
   end
 

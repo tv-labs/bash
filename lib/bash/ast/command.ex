@@ -114,43 +114,87 @@ defmodule Bash.AST.Command do
     started_at = DateTime.utc_now()
 
     result =
-      Telemetry.command_span(command_name, expanded_args, fn ->
-        # Set up hierarchical sinks for output redirects BEFORE execution.
-        # This allows output to flow directly to files without post-processing.
-        {exec_session, cleanup_fn, redirect_error} =
-          setup_output_redirect_sinks(redirects, session_with_prefix_env)
+      if command_name == "exec" and expanded_args == [] do
+        apply_exec_fd_redirects(redirects, session_with_prefix_env)
+      else
+        Telemetry.command_span(command_name, expanded_args, fn ->
+          # Set up hierarchical sinks for output redirects BEFORE execution.
+          # This allows output to flow directly to files without post-processing.
+          {exec_session, cleanup_fn, redirect_error} =
+            setup_output_redirect_sinks(redirects, session_with_prefix_env)
 
-        exec_result =
-          if redirect_error do
-            # Noclobber error - write error to stderr and return error result
-            Sink.write_stderr(session_state, redirect_error)
+          exec_result =
+            if redirect_error do
+              # Redirect error - write error to stderr and return error result
+              Sink.write_stderr(session_state, redirect_error)
 
-            {:error,
-             %CommandResult{
-               command: command_name,
-               exit_code: 1,
-               error: :noclobber
-             }}
-          else
-            resolve_and_execute(
-              command_name,
-              expanded_args,
-              exec_session,
-              effective_stdin,
-              redirects
-            )
-          end
+              {:error,
+               %CommandResult{
+                 command: command_name,
+                 exit_code: 1,
+                 error: :redirect_error
+               }}
+            else
+              resolve_and_execute(
+                command_name,
+                expanded_args,
+                exec_session,
+                effective_stdin,
+                redirects
+              )
+            end
 
-        # Close file handles from redirect sinks
-        cleanup_fn.()
+          # Close file handles from redirect sinks
+          cleanup_fn.()
 
-        exit_code = get_exit_code(exec_result)
-        {exec_result, %{exit_code: exit_code}}
-      end)
+          exit_code = get_exit_code(exec_result)
+          {exec_result, %{exit_code: exit_code}}
+        end)
+      end
 
     completed_at = DateTime.utc_now()
 
     handle_execution_result(result, ast, started_at, completed_at, env_updates)
+  end
+
+  defp apply_exec_fd_redirects(redirects, session_state) do
+    result =
+      Enum.reduce_while(redirects, {:ok, session_state}, fn redirect, {:ok, state} ->
+        case redirect do
+          %AST.Redirect{direction: dir, fd: fd, target: {:file, file_word}}
+          when fd >= 3 and dir in [:output, :append, :input] ->
+            path = resolve_redirect_path(file_word, state)
+
+            modes =
+              case dir do
+                :output -> [:write]
+                :append -> [:write, :append]
+                :input -> [:read]
+              end
+
+            case Bash.Session.open_fd(state, fd, path, modes) do
+              {:ok, new_state} -> {:cont, {:ok, new_state}}
+              {:error, reason} -> {:halt, {:error, path, reason}}
+            end
+
+          %AST.Redirect{direction: :close, fd: fd} ->
+            {:cont, {:ok, Bash.Session.close_fd(state, fd)}}
+
+          _ ->
+            {:cont, {:ok, state}}
+        end
+      end)
+
+    case result do
+      {:ok, new_state} ->
+        {:ok, %CommandResult{command: "exec", exit_code: 0},
+         %{file_descriptors: new_state.file_descriptors}}
+
+      {:error, path, reason} ->
+        message = :file.format_error(reason) |> to_string() |> String.capitalize()
+        Sink.write_stderr(session_state, "bash: #{path}: #{message}\n")
+        {:error, %CommandResult{command: "exec", exit_code: 1, error: reason}}
+    end
   end
 
   defp get_exit_code({:ok, %{exit_code: code}}), do: code
@@ -334,25 +378,10 @@ defmodule Bash.AST.Command do
   defp apply_redirect_to_sinks(
          %AST.Redirect{direction: :duplicate, fd: from_fd, target: {:fd, to_fd}},
          state,
-         _session_state,
+         session_state,
          _noclobber
        ) do
-    new_state =
-      case {from_fd, to_fd} do
-        # 2>&1 - stderr goes where stdout goes (re-tag :stderr as :stdout)
-        {2, 1} ->
-          %{state | stderr_sink: retag_sink(state.stdout_sink, :stderr, :stdout)}
-
-        # 1>&2 - stdout goes where stderr goes (re-tag :stdout as :stderr)
-        {1, 2} ->
-          %{state | stdout_sink: retag_sink(state.stderr_sink, :stdout, :stderr)}
-
-        # Other FD duplications - ignore for now
-        _ ->
-          state
-      end
-
-    {:ok, new_state}
+    duplicate_fd_sink(from_fd, to_fd, state, session_state)
   end
 
   # FD duplication with variable target: >&${FD_VAR}
@@ -363,29 +392,13 @@ defmodule Bash.AST.Command do
          session_state,
          _noclobber
        ) do
-    # Expand the variable to get the FD number
     target_str = resolve_redirect_path(file_word, session_state)
 
     case Integer.parse(target_str) do
       {to_fd, ""} when to_fd >= 0 ->
-        # Valid FD number - apply duplication
-        new_state =
-          case {from_fd, to_fd} do
-            {2, 1} ->
-              %{state | stderr_sink: retag_sink(state.stdout_sink, :stderr, :stdout)}
-
-            {1, 2} ->
-              %{state | stdout_sink: retag_sink(state.stderr_sink, :stdout, :stderr)}
-
-            # Other FD duplications - not fully supported yet
-            _ ->
-              state
-          end
-
-        {:ok, new_state}
+        duplicate_fd_sink(from_fd, to_fd, state, session_state)
 
       _ ->
-        # Not a valid FD number - ignore or error
         {:ok, state}
     end
   end
@@ -446,6 +459,43 @@ defmodule Bash.AST.Command do
       end
 
     {:ok, new_state}
+  end
+
+  defp duplicate_fd_sink(from_fd, to_fd, state, session_state) do
+    case {from_fd, to_fd} do
+      # 2>&1 - stderr goes where stdout goes (re-tag :stderr as :stdout)
+      {2, 1} ->
+        {:ok, %{state | stderr_sink: retag_sink(state.stdout_sink, :stderr, :stdout)}}
+
+      # 1>&2 - stdout goes where stderr goes (re-tag :stdout as :stderr)
+      {1, 2} ->
+        {:ok, %{state | stdout_sink: retag_sink(state.stderr_sink, :stdout, :stderr)}}
+
+      # Duplicate from_fd to a higher fd (e.g., 1>&3)
+      {from_fd, to_fd} when to_fd >= 3 ->
+        case Map.get(session_state.file_descriptors, to_fd) do
+          nil ->
+            {:error, "bash: #{to_fd}: Bad file descriptor\n", state}
+
+          device when is_pid(device) ->
+            fd_sink = fn {_stream, data} when is_binary(data) ->
+              IO.binwrite(device, data)
+              :ok
+            end
+
+            new_state =
+              case from_fd do
+                1 -> %{state | stdout_sink: fd_sink}
+                2 -> %{state | stderr_sink: fd_sink}
+                _ -> state
+              end
+
+            {:ok, new_state}
+        end
+
+      _ ->
+        {:ok, state}
+    end
   end
 
   # Create a sink that re-tags chunks from one stream to another

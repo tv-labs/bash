@@ -96,6 +96,49 @@ defmodule Bash.UnifiedStreamsTest do
       assert {:ok, "from stdin\n"} = Session.read(session, {:fd, 0}, :line)
     end
 
+    @tag :tmp_dir
+    test "open_fd opens a real file for reading on fd 3+", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "input.txt")
+      File.write!(path, "line1\nline2\n")
+
+      session = %Session{}
+      {:ok, session} = Session.open_fd(session, 3, path, [:read])
+
+      assert {:ok, "line1\n"} = Session.read(session, {:fd, 3}, :line)
+      assert {:ok, "line2\n"} = Session.read(session, {:fd, 3}, :line)
+      assert :eof = Session.read(session, {:fd, 3}, :line)
+
+      session = Session.close_fd(session, 3)
+      assert {:error, "3: Bad file descriptor"} = Session.read(session, {:fd, 3}, :line)
+    end
+
+    @tag :tmp_dir
+    test "open_fd opens a real file for writing on fd 3+", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "output.txt")
+
+      {:ok, exec} = Execution.new("test")
+      session = %Session{current: exec}
+      {:ok, session} = Session.open_fd(session, 3, path, [:write])
+
+      Session.write(session, {:fd, 3}, "hello ")
+      Session.write(session, {:fd, 3}, "world\n")
+
+      Session.close_fd(session, 3)
+      assert File.read!(path) == "hello world\n"
+    end
+
+    @tag :tmp_dir
+    test "open_fd handles binary data with high bytes", %{tmp_dir: tmp_dir} do
+      binary = <<0, 1, 0xFF, 0xFE, 0x80, 0xC0>>
+      path = Path.join(tmp_dir, "binary.dat")
+      File.write!(path, binary)
+
+      session = %Session{}
+      {:ok, session} = Session.open_fd(session, 3, path, [:read, :binary])
+
+      assert {:ok, ^binary} = Session.read(session, {:fd, 3}, :all)
+    end
+
     test "gets/1 is convenience wrapper for read line" do
       session = %Session{stdin: nil}
       {:ok, stdin} = StringIO.open("test line\n")
@@ -258,6 +301,14 @@ defmodule Bash.UnifiedStreamsTest do
 
       assert is_pid(session.stdin)
       assert {:ok, "input data\n"} = Session.read(session, :stdin, :all)
+    end
+
+    test "reads binary data with bytes above 127" do
+      binary = <<0, 1, 0xFF, 0xFE, 0x80, 0xC0>>
+      session = %Session{stdin: nil}
+      session = Session.open_stdin(session, binary)
+
+      assert {:ok, ^binary} = Session.read(session, :stdin, :all)
     end
   end
 

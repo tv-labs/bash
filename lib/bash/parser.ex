@@ -1244,6 +1244,36 @@ defmodule Bash.Parser do
             {:error, "expected file descriptor", tline, tcol}
         end
 
+      {:lessand, _, _, _} ->
+        # 3<&1 style or 3<&- (close fd)
+        state = advance(state)
+
+        case current_token(state) do
+          {:word, [{:literal, "-"}], _, _} ->
+            redirect = %AST.Redirect{
+              meta: AST.meta(line, col),
+              direction: :close,
+              fd: fd,
+              target: :close
+            }
+
+            {:ok, redirect, advance(state)}
+
+          {:word, [{:literal, target_fd}], _, _} ->
+            redirect = %AST.Redirect{
+              meta: AST.meta(line, col),
+              direction: :duplicate,
+              fd: fd,
+              target: {:fd, String.to_integer(target_fd)}
+            }
+
+            {:ok, redirect, advance(state)}
+
+          token ->
+            {tline, tcol} = token_position(token)
+            {:error, "expected file descriptor", tline, tcol}
+        end
+
       {:dgreater, _, _, _} ->
         state = advance(state)
 
@@ -2460,6 +2490,9 @@ defmodule Bash.Parser do
   defp skip_separators(state) do
     case current_token(state) do
       {token, _, _} when token in @separator_tokens ->
+        state |> advance() |> skip_separators()
+
+      {:comment, _, _, _} ->
         state |> advance() |> skip_separators()
 
       _ ->

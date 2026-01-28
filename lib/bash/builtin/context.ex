@@ -251,7 +251,7 @@ defmodule Bash.Builtin.Context do
         :eof
 
       stdin when is_pid(stdin) ->
-        case IO.read(stdin, :line) do
+        case IO.binread(stdin, :line) do
           :eof -> :eof
           {:error, reason} -> {:error, reason}
           data -> {:ok, data}
@@ -290,7 +290,7 @@ defmodule Bash.Builtin.Context do
         :eof
 
       stdin when is_pid(stdin) ->
-        case IO.read(stdin, :eof) do
+        case IO.binread(stdin, :eof) do
           :eof -> :eof
           {:error, reason} -> {:error, reason}
           data -> {:ok, data}
@@ -310,7 +310,7 @@ defmodule Bash.Builtin.Context do
         :eof
 
       stdin when is_pid(stdin) ->
-        case IO.read(stdin, n) do
+        case IO.binread(stdin, n) do
           :eof -> :eof
           {:error, reason} -> {:error, reason}
           data -> {:ok, data}

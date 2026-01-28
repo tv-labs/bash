@@ -66,12 +66,9 @@ defmodule Bash.Builtin.Mapfile do
   defbash execute(args, state) do
     case parse_args(args) do
       {:ok, opts, array_name} ->
-        # Check for stdin_device first (set by command groups/while loops with piped input)
-        # This allows reading all input from a StringIO device
         stdin_input =
           case Map.get(state, :stdin_device) do
             nil ->
-              # No device, read from parameter stdin
               case read(:all) do
                 {:ok, data} -> data
                 :eof -> nil
@@ -79,8 +76,7 @@ defmodule Bash.Builtin.Mapfile do
               end
 
             device when is_pid(device) ->
-              # Read all data from the StringIO device
-              case IO.read(device, :eof) do
+              case IO.binread(device, :eof) do
                 :eof -> nil
                 {:error, _} -> nil
                 data -> data

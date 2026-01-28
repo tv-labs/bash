@@ -104,7 +104,7 @@ defmodule Bash.Session do
     # fd 0 is always stdin (passed as parameter), 1/2 are stdout/stderr (not readable)
     file_descriptors: %{},
     # StringIO device for streaming stdin (used by while loops with redirects)
-    # When set, read builtin uses IO.read(device, :line) for line-by-line reading
+    # When set, read builtin uses IO.binread(device, :line) for line-by-line reading
     stdin_device: nil,
     # Special variables (updated after each command)
     special_vars: %{
@@ -557,7 +557,7 @@ defmodule Bash.Session do
   end
 
   defp do_read(device, :line) do
-    case IO.read(device, :line) do
+    case IO.binread(device, :line) do
       :eof -> :eof
       {:error, reason} -> {:error, reason}
       data -> {:ok, data}
@@ -565,7 +565,7 @@ defmodule Bash.Session do
   end
 
   defp do_read(device, :all) do
-    case IO.read(device, :eof) do
+    case IO.binread(device, :eof) do
       :eof -> :eof
       {:error, reason} -> {:error, reason}
       data -> {:ok, data}
@@ -573,7 +573,7 @@ defmodule Bash.Session do
   end
 
   defp do_read(device, n) when is_integer(n) and n > 0 do
-    case IO.read(device, n) do
+    case IO.binread(device, n) do
       :eof -> :eof
       {:error, reason} -> {:error, reason}
       data -> {:ok, data}
@@ -604,7 +604,7 @@ defmodule Bash.Session do
   end
 
   def write(%__MODULE__{current: exec} = session, :stdout, data) do
-    IO.write(exec.stdout, data)
+    IO.binwrite(exec.stdout, data)
 
     # Forward to user sink if pipeline tail
     if session.is_pipeline_tail && session.stdout_sink do
@@ -615,7 +615,7 @@ defmodule Bash.Session do
   end
 
   def write(%__MODULE__{current: exec} = session, :stderr, data) do
-    IO.write(exec.stderr, data)
+    IO.binwrite(exec.stderr, data)
 
     # Forward to user sink if pipeline tail
     if session.is_pipeline_tail && session.stderr_sink do
@@ -635,7 +635,7 @@ defmodule Bash.Session do
         session
 
       device when is_pid(device) ->
-        IO.write(device, data)
+        IO.binwrite(device, data)
         session
     end
   end
@@ -2534,6 +2534,7 @@ defmodule Bash.Session do
     |> maybe_clear_history(updates)
     |> maybe_delete_history_entry(updates)
     |> maybe_update_jobs(updates)
+    |> maybe_update_file_descriptors(updates)
   end
 
   defp maybe_update_jobs(state, %{
@@ -2551,6 +2552,12 @@ defmodule Bash.Session do
   end
 
   defp maybe_update_jobs(state, _), do: state
+
+  defp maybe_update_file_descriptors(state, %{file_descriptors: fds}) do
+    %{state | file_descriptors: fds}
+  end
+
+  defp maybe_update_file_descriptors(state, _), do: state
 
   defp maybe_update_working_dir(state, %{working_dir: new_dir}) do
     %{state | working_dir: new_dir}

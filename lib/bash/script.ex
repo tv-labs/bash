@@ -799,6 +799,16 @@ defmodule Bash.Script do
         Map.get(session_state, :dir_stack, [])
       end
 
+    # Update file_descriptors if present (from exec builtin)
+    file_descriptors_update = Map.get(updates, :file_descriptors, nil)
+
+    new_file_descriptors =
+      if file_descriptors_update do
+        file_descriptors_update
+      else
+        Map.get(session_state, :file_descriptors, %{})
+      end
+
     session_state
     |> maybe_update(:variables, new_variables, session_state.variables)
     |> maybe_update(:functions, new_functions, Map.get(session_state, :functions, %{}))
@@ -812,6 +822,11 @@ defmodule Bash.Script do
     |> maybe_update(:working_dir, new_working_dir, Map.get(session_state, :working_dir))
     |> maybe_update(:traps, new_traps, Map.get(session_state, :traps, %{}))
     |> maybe_update(:dir_stack, new_dir_stack, Map.get(session_state, :dir_stack, []))
+    |> maybe_update(
+      :file_descriptors,
+      new_file_descriptors,
+      Map.get(session_state, :file_descriptors, %{})
+    )
   end
 
   defp maybe_update(state, key, new_value, old_value) do
