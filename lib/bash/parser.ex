@@ -56,9 +56,17 @@ defmodule Bash.Parser do
     end
   end
 
-  # Check if a token terminates a statement list (closing delimiters, keywords that
-  # end blocks). Used by parse_statement_list and peek_for_statement.
-  defguardp is_statement_terminator(token) when elem(token, 0) in ~w[eof rbrace rparen fi done esac elif else then do dsemi dsemi_and semi_and]a
+  @unary_test_operators ~w[-a -b -c -d -e -f -g -h -k -L -n -N -O -G -p -r -s -S -t -u -w -x -z]
+  @binary_test_operators ~w[= == != -eq -ne -lt -le -gt -ge -nt -ot -ef =~]
+  @terminator_tokens ~w[eof rbrace rparen fi done esac elif else then do dsemi dsemi_and semi_and]a
+  @logical_operators ~w[and_if or_if]a
+  @newline_tokens ~w[newline comment]a
+  @separator_tokens ~w[semi]a ++ @newline_tokens
+  @rbracket_tokens ~w[rbracket rbracket_no_space]a
+  @comparison_operators ~w[eq ne lt gt le ge]a
+  @compound_command_starters ~w[lbrace lparen if while until for case]a
+
+  defguardp is_statement_terminator(token) when elem(token, 0) in @terminator_tokens
 
   # Resolve a heredoc in accumulated statements using tokenizer-provided content
   # Statements are in reverse order (most recent first)
@@ -334,12 +342,10 @@ defmodule Bash.Parser do
     {_seps, state} = collect_separators(state, [])
 
     case current_token(state) do
-      # Heredoc content - resolve pending heredocs in accumulated statements
       {:heredoc_content, content, delimiter, _strip_tabs} ->
         resolved_acc = resolve_heredoc_in_statements(acc, content, delimiter)
         parse_statement_list(advance(state), resolved_acc)
 
-      # Handle standalone comment
       {:comment, text, line, col} ->
         comment = %AST.Comment{
           meta: AST.meta(line, col),
@@ -359,21 +365,17 @@ defmodule Bash.Parser do
               [comment | acc]
 
             {_, true} ->
-              # Join all separators to preserve blank lines
-              sep = Enum.join(seps, "")
-              [{:separator, sep}, comment | acc]
+              [{:separator, Enum.join(seps, "")}, comment | acc]
           end
 
         parse_statement_list(state, new_acc)
 
       token when is_statement_terminator(token) ->
-        # Stop at EOF, closing tokens, and case clause terminators
         {:ok, Enum.reverse(acc), state}
 
       _token ->
         case parse_complete_statement(state) do
           {:ok, statement, new_state} ->
-            # Collect separators after statement
             {seps, new_state} = collect_separators(new_state, [])
 
             # Check if there are more statements after the separator
@@ -390,15 +392,14 @@ defmodule Bash.Parser do
                 {_, true} ->
                   # Has following statement - add separator between them
                   # Join all separators to preserve blank lines
-                  sep = Enum.join(seps, "")
-                  [{:separator, sep}, statement | acc]
+                  [{:separator, Enum.join(seps, "")}, statement | acc]
               end
 
             parse_statement_list(new_state, new_acc)
 
           {:error, _, _, _} = err ->
             err
-      end
+        end
     end
   end
 
@@ -431,10 +432,9 @@ defmodule Bash.Parser do
     end
   end
 
-  # Parse && and || operators
   defp parse_logical_continuation(left, state) do
     case current_token(state) do
-      {token, line, col} when token in ~w[and_if or_if]a ->
+      {token, line, col} when token in @logical_operators ->
         op = if token == :and_if, do: :and, else: :or
 
         state
@@ -590,7 +590,6 @@ defmodule Bash.Parser do
       {:case, _, _} -> parse_case(state)
       {:lbrace, _, _} -> parse_brace_group(state)
       {:lparen, _, _} -> parse_subshell(state)
-      {:dlparen, _, _} -> parse_arithmetic_command(state)
       {:arith_command, _, _, _} -> parse_arithmetic_command(state)
       {:dlbracket, _, _} -> parse_test_command(state)
       {:lbracket, _, _} -> parse_test_bracket_command(state)
@@ -850,7 +849,7 @@ defmodule Bash.Parser do
 
         # Expect closing bracket (rbracket_no_space is fine here - SC1020 only for test brackets)
         case current_token(state) do
-          rbracket when elem(rbracket, 0) in [:rbracket, :rbracket_no_space] ->
+          rbracket when elem(rbracket, 0) in @rbracket_tokens ->
             state = advance(state)
 
             # Expect =value (as a word starting with =)
@@ -940,7 +939,12 @@ defmodule Bash.Parser do
 
   # Reserved words that should be treated as literal words in argument position
   @reserved_as_arg ~w[done fi esac then do elif else in rbrace]a
+
+  # Redirect operator tokens
   @redirect_tokens ~w[less greater dgreater lessand greaterand lessgreat andgreat anddgreat dless dlessdash tless io_number]a
+
+  # Check if a token is a redirect operator
+  defguardp is_redirect_token(token) when elem(token, 0) in @redirect_tokens
 
   defp parse_command_args(state, args, redirects) do
     case current_token(state) do
@@ -954,7 +958,7 @@ defmodule Bash.Parser do
         parse_command_args(advance(state), [word | args], redirects)
 
       # Redirects and file descriptor redirects
-      token when elem(token, 0) in @redirect_tokens ->
+      token when is_redirect_token(token) ->
         case parse_classified_redirect(state, classify_redirect_token(token)) do
           {:ok, redirect, new_state} ->
             parse_command_args(new_state, args, [redirect | redirects])
@@ -1302,250 +1306,140 @@ defmodule Bash.Parser do
   # Parse trailing redirects after compound commands (while, for, until, etc.)
   # These only collect redirects, not command arguments
   defp parse_trailing_redirects(state, redirects) do
-    case classify_redirect_token(current_token(state)) do
-      :not_redirect ->
-        {:ok, Enum.reverse(redirects), state}
+    token = current_token(state)
 
-      classification ->
-        case parse_classified_redirect(state, classification) do
-          {:ok, redirect, new_state} ->
-            parse_trailing_redirects(new_state, [redirect | redirects])
+    if is_redirect_token(token) do
+      case parse_classified_redirect(state, classify_redirect_token(token)) do
+        {:ok, redirect, new_state} ->
+          parse_trailing_redirects(new_state, [redirect | redirects])
 
-          {:error, _, _, _} = err ->
-            err
-        end
+        {:error, _, _, _} = err ->
+          err
+      end
+    else
+      {:ok, Enum.reverse(redirects), state}
     end
   end
 
   defp parse_if(state) do
     {line, col} = current_position(state)
-    # skip 'if'
     state = advance(state)
 
-    # Parse condition
-    case parse_statement_list(state, []) do
-      {:ok, condition_stmts, new_state} ->
-        # Expect 'then'
-        case current_token(new_state) do
-          {:then, _, _} ->
-            new_state = advance(new_state)
-
-            # SC1051/SC1052: Semicolon immediately after 'then' is not allowed
-            case current_token(new_state) do
-              {:semi, sline, scol} ->
-                {:error,
-                 "(SC1051) Semicolons directly after `then` are not allowed. Remove the `;`",
-                 sline, scol}
-
-              _ ->
-                parse_if_body(condition_stmts, line, col, new_state, [], nil)
-            end
-
-          token ->
-            {tline, tcol} = token_position(token)
-            {:error, "expected 'then' after if condition", tline, tcol}
-        end
-
-      {:error, _, _, _} = err ->
-        err
+    with {:ok, condition_stmts, state} <- parse_statement_list(state, []),
+         {:ok, state} <- expect_then(state, "if") do
+      parse_if_branches(condition_stmts, line, col, state, [])
     end
   end
 
-  # Parse the then-body and then collect elif/else clauses
-  defp parse_if_body(condition, line, col, state, elif_clauses, _else_body) do
-    # Parse the body for this branch
-    case parse_statement_list(state, []) do
-      {:ok, body_stmts, new_state} ->
-        case current_token(new_state) do
-          {:elif, _, _} ->
-            new_state = advance(new_state)
-            # Parse elif condition
-            case parse_statement_list(new_state, []) do
-              {:ok, elif_cond, newer_state} ->
-                case current_token(newer_state) do
-                  {:then, _, _} ->
-                    newer_state = advance(newer_state)
+  defp expect_then(state, context) do
+    case current_token(state) do
+      {:then, _, _} ->
+        state = advance(state)
 
-                    # SC1051/SC1052: Semicolon immediately after 'then' is not allowed
-                    case current_token(newer_state) do
-                      {:semi, sline, scol} ->
-                        {:error,
-                         "(SC1051) Semicolons directly after `then` are not allowed. Remove the `;`",
-                         sline, scol}
+        case current_token(state) do
+          {:semi, sline, scol} ->
+            {:error, "(SC1051) Semicolons directly after `then` are not allowed. Remove the `;`",
+             sline, scol}
 
-                      _ ->
-                        # Parse elif body in a new recursive call
-                        # Store current body_stmts for THIS branch, then parse elif body
-                        parse_elif_body(
-                          condition,
-                          body_stmts,
-                          elif_cond,
-                          line,
-                          col,
-                          newer_state,
-                          elif_clauses
-                        )
-                    end
-
-                  token ->
-                    {tline, tcol} = token_position(token)
-                    {:error, "expected 'then' after elif condition", tline, tcol}
-                end
-
-              {:error, _, _, _} = err ->
-                err
-            end
-
-          {:else, else_line, else_col} ->
-            new_state = advance(new_state)
-
-            # SC1053: Semicolon immediately after 'else' is not allowed
-            # SC1075: 'else if' should be 'elif'
-            case current_token(new_state) do
-              {:semi, sline, scol} ->
-                {:error,
-                 "(SC1053) Semicolons directly after `else` are not allowed. Remove the `;`",
-                 sline, scol}
-
-              {:if, _, _} ->
-                {:error,
-                 "(SC1075) Use `elif` instead of `else if`. `else if` requires an extra `fi`",
-                 else_line, else_col}
-
-              _ ->
-                case parse_statement_list(new_state, []) do
-                  {:ok, else_stmts, newer_state} ->
-                    case current_token(newer_state) do
-                      {:fi, _, _} ->
-                        if_node =
-                          build_if(condition, body_stmts, elif_clauses, else_stmts, line, col)
-
-                        {:ok, if_node, advance(newer_state)}
-
-                      token ->
-                        {tline, tcol} = token_position(token)
-                        {:error, "expected 'fi' to close if", tline, tcol}
-                    end
-
-                  {:error, _, _, _} = err ->
-                    err
-                end
-            end
-
-          {:fi, _, _} ->
-            if_node = build_if(condition, body_stmts, elif_clauses, nil, line, col)
-            {:ok, if_node, advance(new_state)}
-
-          token ->
-            {tline, tcol} = token_position(token)
-            {:error, "expected 'elif', 'else', or 'fi'", tline, tcol}
+          _ ->
+            {:ok, state}
         end
 
-      {:error, _, _, _} = err ->
-        err
+      token ->
+        error_at(token, "expected 'then' after #{context} condition")
     end
   end
 
-  # Parse elif body and continue with more elif/else/fi
-  defp parse_elif_body(orig_condition, orig_body, elif_cond, line, col, state, elif_clauses) do
-    case parse_statement_list(state, []) do
-      {:ok, elif_body_stmts, new_state} ->
-        # Add this elif clause to the list
-        new_elif_clauses = [{wrap_condition(elif_cond), elif_body_stmts} | elif_clauses]
+  defp parse_if_branches(condition, line, col, state, elif_clauses) do
+    with {:ok, body_stmts, state} <- parse_statement_list(state, []) do
+      case current_token(state) do
+        {:elif, _, _} ->
+          parse_elif_branch(condition, body_stmts, line, col, advance(state), elif_clauses)
 
-        case current_token(new_state) do
-          {:elif, _, _} ->
-            new_state = advance(new_state)
-            # Parse next elif condition
-            case parse_statement_list(new_state, []) do
-              {:ok, next_elif_cond, newer_state} ->
-                case current_token(newer_state) do
-                  {:then, _, _} ->
-                    newer_state = advance(newer_state)
+        {:else, else_line, else_col} ->
+          parse_else_branch(
+            condition,
+            body_stmts,
+            line,
+            col,
+            advance(state),
+            elif_clauses,
+            else_line,
+            else_col
+          )
 
-                    # SC1051/SC1052: Semicolon immediately after 'then' is not allowed
-                    case current_token(newer_state) do
-                      {:semi, sline, scol} ->
-                        {:error,
-                         "(SC1051) Semicolons directly after `then` are not allowed. Remove the `;`",
-                         sline, scol}
+        {:fi, _, _} ->
+          if_node = build_if(condition, body_stmts, elif_clauses, nil, line, col)
+          {:ok, if_node, advance(state)}
 
-                      _ ->
-                        # Recursively parse next elif body
-                        parse_elif_body(
-                          orig_condition,
-                          orig_body,
-                          next_elif_cond,
-                          line,
-                          col,
-                          newer_state,
-                          new_elif_clauses
-                        )
-                    end
+        token ->
+          error_at(token, "expected 'elif', 'else', or 'fi'")
+      end
+    end
+  end
 
-                  token ->
-                    {tline, tcol} = token_position(token)
-                    {:error, "expected 'then' after elif condition", tline, tcol}
-                end
+  defp parse_elif_branch(orig_condition, orig_body, line, col, state, elif_clauses) do
+    with {:ok, elif_cond, state} <- parse_statement_list(state, []),
+         {:ok, state} <- expect_then(state, "elif"),
+         {:ok, elif_body, state} <- parse_statement_list(state, []) do
+      new_elif_clauses = [{wrap_condition(elif_cond), elif_body} | elif_clauses]
 
-              {:error, _, _, _} = err ->
-                err
-            end
+      case current_token(state) do
+        {:elif, _, _} ->
+          parse_elif_branch(
+            orig_condition,
+            orig_body,
+            line,
+            col,
+            advance(state),
+            new_elif_clauses
+          )
 
-          {:else, else_line, else_col} ->
-            new_state = advance(new_state)
+        {:else, else_line, else_col} ->
+          parse_else_branch(
+            orig_condition,
+            orig_body,
+            line,
+            col,
+            advance(state),
+            new_elif_clauses,
+            else_line,
+            else_col
+          )
 
-            # SC1053: Semicolon immediately after 'else' is not allowed
-            # SC1075: 'else if' should be 'elif'
-            case current_token(new_state) do
-              {:semi, sline, scol} ->
-                {:error,
-                 "(SC1053) Semicolons directly after `else` are not allowed. Remove the `;`",
-                 sline, scol}
+        {:fi, _, _} ->
+          if_node = build_if(orig_condition, orig_body, new_elif_clauses, nil, line, col)
+          {:ok, if_node, advance(state)}
 
-              {:if, _, _} ->
-                {:error,
-                 "(SC1075) Use `elif` instead of `else if`. `else if` requires an extra `fi`",
-                 else_line, else_col}
+        token ->
+          error_at(token, "expected 'elif', 'else', or 'fi'")
+      end
+    end
+  end
 
-              _ ->
-                case parse_statement_list(new_state, []) do
-                  {:ok, else_stmts, newer_state} ->
-                    case current_token(newer_state) do
-                      {:fi, _, _} ->
-                        if_node =
-                          build_if(
-                            orig_condition,
-                            orig_body,
-                            new_elif_clauses,
-                            else_stmts,
-                            line,
-                            col
-                          )
+  defp parse_else_branch(condition, body, line, col, state, elif_clauses, else_line, else_col) do
+    case current_token(state) do
+      {:semi, sline, scol} ->
+        {:error, "(SC1053) Semicolons directly after `else` are not allowed. Remove the `;`",
+         sline, scol}
 
-                        {:ok, if_node, advance(newer_state)}
+      {:if, _, _} ->
+        {:error, "(SC1075) Use `elif` instead of `else if`. `else if` requires an extra `fi`",
+         else_line, else_col}
 
-                      token ->
-                        {tline, tcol} = token_position(token)
-                        {:error, "expected 'fi' to close if", tline, tcol}
-                    end
-
-                  {:error, _, _, _} = err ->
-                    err
-                end
-            end
-
-          {:fi, _, _} ->
-            if_node = build_if(orig_condition, orig_body, new_elif_clauses, nil, line, col)
-            {:ok, if_node, advance(new_state)}
-
-          token ->
-            {tline, tcol} = token_position(token)
-            {:error, "expected 'elif', 'else', or 'fi'", tline, tcol}
+      _ ->
+        with {:ok, else_stmts, state} <- parse_statement_list(state, []),
+             {:ok, state} <- expect_fi(state) do
+          if_node = build_if(condition, body, elif_clauses, else_stmts, line, col)
+          {:ok, if_node, state}
         end
+    end
+  end
 
-      {:error, _, _, _} = err ->
-        err
+  defp expect_fi(state) do
+    case current_token(state) do
+      {:fi, _, _} -> {:ok, advance(state)}
+      token -> error_at(token, "expected 'fi' to close if")
     end
   end
 
@@ -1597,49 +1491,21 @@ defmodule Bash.Parser do
       {:word, [{:literal, var_name}], _, _} ->
         state = state |> advance() |> skip_newlines()
 
-        # Check for 'in' (optional - if missing, uses positional params)
         {items, state} =
           case current_token(state) do
-            {:in, _, _} ->
-              state = advance(state)
-              parse_word_list(state, [])
-
-            _ ->
-              {[], state}
+            {:in, _, _} -> parse_word_list(advance(state), [])
+            _ -> {[], state}
           end
 
-        state = skip_separators(state)
+        with {:ok, body, state} <- state |> skip_separators() |> parse_loop_body("for loop") do
+          for_loop = %AST.ForLoop{
+            meta: AST.meta(line, col),
+            variable: var_name,
+            items: items,
+            body: body
+          }
 
-        # Expect 'do'
-        case current_token(state) do
-          {:do, _, _} ->
-            state = advance(state)
-
-            case parse_statement_list(state, []) do
-              {:ok, body, new_state} ->
-                case current_token(new_state) do
-                  {:done, _, _} ->
-                    for_loop = %AST.ForLoop{
-                      meta: AST.meta(line, col),
-                      variable: var_name,
-                      items: items,
-                      body: body
-                    }
-
-                    {:ok, for_loop, advance(new_state)}
-
-                  token ->
-                    {tline, tcol} = token_position(token)
-                    {:error, "expected 'done' to close for loop", tline, tcol}
-                end
-
-              {:error, _, _, _} = err ->
-                err
-            end
-
-          token ->
-            {tline, tcol} = token_position(token)
-            {:error, "expected 'do' in for loop", tline, tcol}
+          {:ok, for_loop, state}
         end
 
       # SC1137: Single ( after for - missing second ( for C-style loop
@@ -1654,177 +1520,139 @@ defmodule Bash.Parser do
     end
   end
 
-  # Parse C-style for loop: for ((init; cond; update)); do ... done
   defp parse_c_style_for(state, content, line, col) do
-    # Skip the arith_command token
     state = state |> advance() |> skip_separators()
+    {init, condition, update} = parse_c_style_for_parts(content)
 
-    # Parse the content into init, condition, update
-    # Content is like "i=0;i<3;i++" or "i=0; i<3; i++"
-    parts = String.split(content, ";", parts: 3)
+    with {:ok, body, state} <- parse_loop_body(state, "for loop") do
+      for_loop = %AST.ForLoop{
+        meta: AST.meta(line, col),
+        variable: nil,
+        items: [],
+        init: init,
+        condition: condition,
+        update: update,
+        body: body
+      }
 
-    {init, condition, update} =
-      case parts do
-        [i, c, u] -> {String.trim(i), String.trim(c), String.trim(u)}
-        [i, c] -> {String.trim(i), String.trim(c), ""}
-        [i] -> {String.trim(i), "", ""}
-        [] -> {"", "", ""}
-      end
+      {:ok, for_loop, state}
+    end
+  end
 
-    # Expect 'do'
+  defp parse_c_style_for_parts(content) do
+    case String.split(content, ";", parts: 3) do
+      [i, c, u] -> {String.trim(i), String.trim(c), String.trim(u)}
+      [i, c] -> {String.trim(i), String.trim(c), ""}
+      [i] -> {String.trim(i), "", ""}
+      [] -> {"", "", ""}
+    end
+  end
+
+  defp parse_loop_body(state, context) do
+    with {:ok, state} <- expect_do(state, context),
+         {:ok, body, state} <- parse_statement_list(state, []),
+         {:ok, state} <- expect_done(state, context) do
+      {:ok, body, state}
+    end
+  end
+
+  defp expect_do(state, context) do
     case current_token(state) do
-      {:do, _, _} ->
-        state = advance(state)
+      {:do, _, _} -> {:ok, advance(state)}
+      token -> error_at(token, "expected 'do' in #{context}")
+    end
+  end
 
-        case parse_statement_list(state, []) do
-          {:ok, body, new_state} ->
-            case current_token(new_state) do
-              {:done, _, _} ->
-                for_loop = %AST.ForLoop{
-                  meta: AST.meta(line, col),
-                  variable: nil,
-                  items: [],
-                  init: init,
-                  condition: condition,
-                  update: update,
-                  body: body
-                }
-
-                {:ok, for_loop, advance(new_state)}
-
-              token ->
-                {tline, tcol} = token_position(token)
-                {:error, "expected 'done' to close for loop", tline, tcol}
-            end
-
-          {:error, _, _, _} = err ->
-            err
-        end
-
-      token ->
-        {tline, tcol} = token_position(token)
-        {:error, "expected 'do' in for loop", tline, tcol}
+  defp expect_done(state, context) do
+    case current_token(state) do
+      {:done, _, _} -> {:ok, advance(state)}
+      token -> error_at(token, "expected 'done' to close #{context}")
     end
   end
 
   defp parse_word_list(state, acc) do
     case current_token(state) do
       {:word, parts, line, col} ->
-        parse_word_list(advance(state), [build_word(parts, line, col)| acc])
+        parse_word_list(advance(state), [build_word(parts, line, col) | acc])
 
       _ ->
         {Enum.reverse(acc), state}
     end
   end
 
-  defp parse_while(state) do
-    parse_while_until(:while, state)
-  end
+  defp parse_while(state), do: parse_while_until(:while, state)
 
-  defp parse_until(state) do
-    parse_while_until(:until, state)
-  end
+  defp parse_until(state), do: parse_while_until(:until, state)
 
   defp parse_while_until(type, state) do
     {line, col} = current_position(state)
-    # skip 'while' or 'until'
     state = advance(state)
 
-    # Parse condition
-    case parse_statement_list(state, []) do
-      {:ok, condition_stmts, new_state} ->
-        case current_token(new_state) do
-          {:do, _, _} ->
-            new_state = advance(new_state)
+    with {:ok, condition_stmts, state} <- parse_statement_list(state, []),
+         {:ok, body, redirects, state} <- parse_do_done_body(state, "while loop") do
+      while_loop = %AST.WhileLoop{
+        meta: AST.meta(line, col),
+        until: type == :until,
+        condition: wrap_condition(condition_stmts),
+        body: body,
+        redirects: redirects
+      }
 
-            case parse_statement_list(new_state, []) do
-              {:ok, body, newer_state} ->
-                case current_token(newer_state) do
-                  {:done, _, _} ->
-                    # Parse any trailing redirects after 'done' (e.g., done < file)
-                    case parse_trailing_redirects(advance(newer_state), []) do
-                      {:ok, redirects, final_state} ->
-                        while_loop = %AST.WhileLoop{
-                          meta: AST.meta(line, col),
-                          until: type == :until,
-                          condition: wrap_condition(condition_stmts),
-                          body: body,
-                          redirects: redirects
-                        }
+      {:ok, while_loop, state}
+    end
+  end
 
-                        {:ok, while_loop, final_state}
-
-                      {:error, _, _, _} = err ->
-                        err
-                    end
-
-                  token ->
-                    {tline, tcol} = token_position(token)
-                    {:error, "expected 'done' to close while loop", tline, tcol}
-                end
-
-              {:error, _, _, _} = err ->
-                err
-            end
-
-          token ->
-            {tline, tcol} = token_position(token)
-            {:error, "expected 'do' in while loop", tline, tcol}
-        end
-
-      {:error, _, _, _} = err ->
-        err
+  defp parse_do_done_body(state, context) do
+    with {:ok, body, state} <- parse_loop_body(state, context),
+         {:ok, redirects, state} <- parse_trailing_redirects(state, []) do
+      {:ok, body, redirects, state}
     end
   end
 
   defp parse_case(state) do
     {line, col} = current_position(state)
-    # skip 'case'
     state = advance(state)
 
-    # Parse word to match
+    with {:ok, word, state} <- expect_case_word(state),
+         {:ok, state} <- expect_in_keyword(skip_newlines(state)),
+         {:ok, cases, state} <- parse_case_items(skip_separators(state), []),
+         {:ok, state} <- expect_esac(state) do
+      case_node = %AST.Case{
+        meta: AST.meta(line, col),
+        word: word,
+        cases: cases
+      }
+
+      {:ok, case_node, state}
+    end
+  end
+
+  defp expect_case_word(state) do
     case current_token(state) do
       {:word, parts, wline, wcol} ->
-        word = build_word(parts, wline, wcol)
-        state = advance(state)
-        state = skip_newlines(state)
-
-        case current_token(state) do
-          {:in, _, _} ->
-            state = advance(state)
-            state = skip_separators(state)
-
-            case parse_case_items(state, []) do
-              {:ok, cases, new_state} ->
-                case current_token(new_state) do
-                  {:esac, _, _} ->
-                    case_node = %AST.Case{
-                      meta: AST.meta(line, col),
-                      word: word,
-                      cases: cases
-                    }
-
-                    {:ok, case_node, advance(new_state)}
-
-                  token ->
-                    {tline, tcol} = token_position(token)
-                    {:error, "expected 'esac' to close case", tline, tcol}
-                end
-
-              {:error, _, _, _} = err ->
-                err
-            end
-
-          token ->
-            {tline, tcol} = token_position(token)
-            {:error, "expected 'in' after case word", tline, tcol}
-        end
+        {:ok, build_word(parts, wline, wcol), advance(state)}
 
       token ->
         {tline, tcol} = token_position(token)
         {:error, "expected word after 'case'", tline, tcol}
     end
   end
+
+  defp expect_in_keyword(state) do
+    case current_token(state) do
+      {:in, _, _} -> {:ok, advance(state)}
+      token -> error_at(token, "expected 'in' after case word")
+    end
+  end
+
+  defp expect_esac(state) do
+    case current_token(state) do
+      {:esac, _, _} -> {:ok, advance(state)}
+      token -> error_at(token, "expected 'esac' to close case")
+    end
+  end
+
+  @case_pattern_starters [:word, :lparen, :lbracket]
 
   defp parse_case_items(state, acc) do
     state = skip_separators(state)
@@ -1833,75 +1661,64 @@ defmodule Bash.Parser do
       {:esac, _, _} ->
         {:ok, Enum.reverse(acc), state}
 
-      {:lparen, _, _} ->
-        # Optional ( before pattern
-        parse_case_item(advance(state), acc)
-
-      {:word, _, _, _} ->
+      {starter, _, _, _} when starter in @case_pattern_starters ->
         parse_case_item(state, acc)
 
-      # Glob pattern starting with [
+      {:lparen, _, _} ->
+        parse_case_item(advance(state), acc)
+
       {:lbracket, _, _} ->
         parse_case_item(state, acc)
 
       token ->
-        {tline, tcol} = token_position(token)
-        {:error, "expected case pattern or 'esac'", tline, tcol}
+        error_at(token, "expected case pattern or 'esac'")
     end
   end
 
   defp parse_case_item(state, acc) do
-    # Parse patterns separated by |
-    case parse_case_patterns(state, []) do
-      {:ok, patterns, new_state} ->
-        case current_token(new_state) do
-          {:rparen, _, _} ->
-            new_state = advance(new_state)
-
-            case parse_statement_list(new_state, []) do
-              {:ok, body, newer_state} ->
-                # Expect ;; or ;;& or ;& - store the terminator type
-                case current_token(newer_state) do
-                  {:dsemi, _, _} ->
-                    parse_case_items(advance(newer_state), [{patterns, body, :break} | acc])
-
-                  {:dsemi_and, _, _} ->
-                    parse_case_items(advance(newer_state), [
-                      {patterns, body, :continue_matching} | acc
-                    ])
-
-                  {:semi_and, _, _} ->
-                    parse_case_items(advance(newer_state), [{patterns, body, :fallthrough} | acc])
-
-                  {:esac, _, _} ->
-                    # Last case item, no terminator needed
-                    parse_case_items(newer_state, [{patterns, body, :break} | acc])
-
-                  # SC1074: Missing ;; between case items
-                  token when body != [] ->
-                    {tline, tcol} = token_position(token)
-
-                    {:error,
-                     "(SC1074) Missing `;;` between case items. Did you forget to add `;;` after this case branch?",
-                     tline, tcol}
-
-                  _ ->
-                    # Empty body, no terminator needed
-                    parse_case_items(newer_state, [{patterns, body, :break} | acc])
-                end
-
-              {:error, _, _, _} = err ->
-                err
-            end
-
-          token ->
-            {tline, tcol} = token_position(token)
-            {:error, "expected ')' after case pattern", tline, tcol}
-        end
-
-      {:error, _, _, _} = err ->
-        err
+    with {:ok, patterns, state} <- parse_case_patterns(state, []),
+         {:ok, state} <- expect_rparen(state),
+         {:ok, body, state} <- parse_statement_list(state, []),
+         {:ok, terminator, state} <- parse_case_terminator(body, state) do
+      parse_case_items(state, [{patterns, body, terminator} | acc])
     end
+  end
+
+  defp expect_rparen(state) do
+    case current_token(state) do
+      {:rparen, _, _} -> {:ok, advance(state)}
+      token -> error_at(token, "expected ')' after case pattern")
+    end
+  end
+
+  defp parse_case_terminator(body, state) do
+    case current_token(state) do
+      {:dsemi, _, _} ->
+        {:ok, :break, advance(state)}
+
+      {:dsemi_and, _, _} ->
+        {:ok, :continue_matching, advance(state)}
+
+      {:semi_and, _, _} ->
+        {:ok, :fallthrough, advance(state)}
+
+      {:esac, _, _} ->
+        {:ok, :break, state}
+
+      token when body != [] ->
+        error_at(
+          token,
+          "(SC1074) Missing `;;` between case items. Did you forget to add `;;` after this case branch?"
+        )
+
+      _ ->
+        {:ok, :break, state}
+    end
+  end
+
+  defp error_at(token, message) do
+    {tline, tcol} = token_position(token)
+    {:error, message, tline, tcol}
   end
 
   defp parse_case_patterns(state, acc) do
@@ -1954,14 +1771,13 @@ defmodule Bash.Parser do
 
   # Parse a bracket glob pattern and return just the glob part (not a full word)
   defp parse_bracket_glob_pattern_parts(state) do
-    # skip [
     state = advance(state)
 
     # Collect tokens until ]
     {parts, state} = collect_bracket_pattern_parts(state, [])
 
     case current_token(state) do
-      rbracket when elem(rbracket, 0) in [:rbracket, :rbracket_no_space] ->
+      rbracket when elem(rbracket, 0) in @rbracket_tokens ->
         pattern_content = Enum.map_join(parts, "", fn text -> text end)
         {:ok, {:glob, "[#{pattern_content}]"}, advance(state)}
 
@@ -1973,7 +1789,7 @@ defmodule Bash.Parser do
 
   defp collect_bracket_pattern_parts(state, acc) do
     case current_token(state) do
-      rbracket when elem(rbracket, 0) in [:rbracket, :rbracket_no_space] ->
+      rbracket when elem(rbracket, 0) in @rbracket_tokens ->
         {Enum.reverse(acc), state}
 
       {:word, [{:literal, text}], _, _} ->
@@ -2007,84 +1823,23 @@ defmodule Bash.Parser do
   end
 
   defp parse_arithmetic_command(state) do
-    case current_token(state) do
-      # New format: tokenizer collected raw content
-      {:arith_command, content, line, col} ->
-        arith = %AST.Arithmetic{
-          meta: AST.meta(line, col),
-          expression: content
-        }
+    {:arith_command, content, line, col} = current_token(state)
 
-        {:ok, arith, advance(state)}
+    arith = %AST.Arithmetic{
+      meta: AST.meta(line, col),
+      expression: content
+    }
 
-      # Legacy format: dlparen with separate tokens (kept for backwards compat)
-      {:dlparen, line, col} ->
-        state = advance(state)
-        {content, new_state} = collect_until_arith_close(state, [])
-
-        arith = %AST.Arithmetic{
-          meta: AST.meta(line, col),
-          expression: content
-        }
-
-        {:ok, arith, new_state}
-    end
+    {:ok, arith, advance(state)}
   end
-
-  defp collect_until_arith_close(state, acc) do
-    case current_token(state) do
-      {:drparen, _, _} ->
-        # Double right paren token if it exists
-        {Enum.reverse(acc) |> Enum.join(" "), advance(state)}
-
-      {:rparen, _, _} ->
-        # Check for ))
-        next_state = advance(state)
-
-        case current_token(next_state) do
-          {:rparen, _, _} ->
-            {Enum.reverse(acc) |> Enum.join(" "), advance(next_state)}
-
-          _ ->
-            collect_until_arith_close(next_state, [")" | acc])
-        end
-
-      {:word, [{:literal, text}], _, _} ->
-        collect_until_arith_close(advance(state), [text | acc])
-
-      {:word, parts, _, _} ->
-        text = parts_to_string(parts)
-        collect_until_arith_close(advance(state), [text | acc])
-
-      {:eof, _, _} ->
-        {Enum.reverse(acc) |> Enum.join(" "), state}
-
-      {type, _, _} when is_atom(type) ->
-        collect_until_arith_close(advance(state), [token_to_arith_string(type) | acc])
-
-      {type, _, _, _} when is_atom(type) ->
-        collect_until_arith_close(advance(state), [token_to_arith_string(type) | acc])
-
-      _ ->
-        collect_until_arith_close(advance(state), acc)
-    end
-  end
-
-  # Convert token types to their arithmetic string representation
-  defp token_to_arith_string(:greater), do: ">"
-  defp token_to_arith_string(:less), do: "<"
-  defp token_to_arith_string(:ampersand), do: "&"
-  defp token_to_arith_string(:pipe), do: "|"
-  defp token_to_arith_string(:semi), do: ";"
-  defp token_to_arith_string(type), do: Atom.to_string(type)
 
   defp parse_test_command(state) do
     {line, col} = current_position(state)
     # skip '[['
-    state = advance(state)
-
-    # Collect tokens until ]]
-    case collect_test_expression(state, [], line, col) do
+    state
+    |> advance()
+    |> collect_test_expression([], line, col)
+    |> case do
       {:ok, expression, new_state} ->
         # [[ ]] creates TestExpression, [ ] creates TestCommand
         test_expr = %AST.TestExpression{
@@ -2172,7 +1927,7 @@ defmodule Bash.Parser do
       {:eof, _, _} ->
         {:error, "(SC1033) missing ]] to close [[", start_line, start_col}
 
-      {op, _line, _col} when op in [:eq, :ne, :lt, :gt, :le, :ge] ->
+      {op, _line, _col} when op in @comparison_operators ->
         collect_test_expression(advance(state), [Atom.to_string(op) | acc], start_line, start_col)
 
       _ ->
@@ -2281,9 +2036,6 @@ defmodule Bash.Parser do
     end
   end
 
-  @unary_test_operators ~w(-a -b -c -d -e -f -g -h -k -L -n -N -O -G -p -r -s -S -t -u -w -x -z)
-  @binary_test_operators ~w(= == != -eq -ne -lt -le -gt -ge -nt -ot -ef =~)
-
   # Validate test command arguments for common errors
   defp validate_test_args(args, start_line, start_col) do
     # Convert args to strings for validation
@@ -2368,44 +2120,19 @@ defmodule Bash.Parser do
 
   defp parse_function(state) do
     {line, col} = current_position(state)
-    # skip 'function'
     state = advance(state)
 
+    with {:ok, name, wline, wcol, state} <- extract_function_name(state),
+         :ok <- validate_function_name(name, wline, wcol),
+         {:ok, state} <- skip_optional_parens(state) do
+      parse_function_body_with_check(state, name, line, col)
+    end
+  end
+
+  defp extract_function_name(state) do
     case current_token(state) do
       {:word, [{:literal, name}], wline, wcol} ->
-        # SC1095: Check if function name contains { (missing space between name and {)
-        if String.contains?(name, "{") do
-          {:error,
-           "(SC1095) Missing space between function name and `{`. Use `function #{String.split(name, "{") |> hd()} { ...` instead",
-           wline, wcol}
-        else
-          state = advance(state)
-
-          # Optional ()
-          case current_token(state) do
-            {:lparen, _pline, _pcol} ->
-              state = advance(state)
-
-              case current_token(state) do
-                {:rparen, _, _} ->
-                  state = advance(state)
-                  state = skip_newlines(state)
-                  parse_function_body_with_check(state, name, line, col)
-
-                # SC1065: Content between () - bash functions don't take parameters
-                token ->
-                  {tline, tcol} = token_position(token)
-
-                  {:error,
-                   "(SC1065) Bash function definition doesn't take parameters. Remove content from `()` or declare them locally inside the function",
-                   tline, tcol}
-              end
-
-            _ ->
-              state = skip_newlines(state)
-              parse_function_body_with_check(state, name, line, col)
-          end
-        end
+        {:ok, name, wline, wcol, advance(state)}
 
       token ->
         {tline, tcol} = token_position(token)
@@ -2413,19 +2140,43 @@ defmodule Bash.Parser do
     end
   end
 
-  # Parse function body with SC1064 check
-  # Ensures function body starts with a compound command
-  defp parse_function_body_with_check(state, func_name, line, col) do
-    # SC1064: Function body must be a compound command (usually { ... } or (...))
+  defp validate_function_name(name, line, col) do
+    if String.contains?(name, "{") do
+      base_name = name |> String.split("{") |> hd()
+
+      {:error,
+       "(SC1095) Missing space between function name and `{`. Use `function #{base_name} { ...` instead",
+       line, col}
+    else
+      :ok
+    end
+  end
+
+  defp skip_optional_parens(state) do
     case current_token(state) do
-      {:lbrace, _, _} ->
-        parse_function_body_and_build(state, func_name, line, col)
-
       {:lparen, _, _} ->
-        parse_function_body_and_build(state, func_name, line, col)
+        state = advance(state)
 
-      # Also allow other compound commands like if, while, for, case
-      {kw, _, _} when kw in [:if, :while, :until, :for, :case] ->
+        case current_token(state) do
+          {:rparen, _, _} ->
+            {:ok, state |> advance() |> skip_newlines()}
+
+          token ->
+            {tline, tcol} = token_position(token)
+
+            {:error,
+             "(SC1065) Bash function definition doesn't take parameters. Remove content from `()` or declare them locally inside the function",
+             tline, tcol}
+        end
+
+      _ ->
+        {:ok, skip_newlines(state)}
+    end
+  end
+
+  defp parse_function_body_with_check(state, func_name, line, col) do
+    case current_token(state) do
+      {token, _, _} when token in @compound_command_starters ->
         parse_function_body_and_build(state, func_name, line, col)
 
       token ->
@@ -2438,42 +2189,24 @@ defmodule Bash.Parser do
   end
 
   defp parse_function_body_and_build(state, func_name, line, col) do
-    case parse_function_body(state) do
-      {:ok, body, new_state} ->
-        func = %Function{
-          meta: AST.meta(line, col),
-          name: func_name,
-          body: body
-        }
+    with {:ok, body, new_state} <- parse_command(state) do
+      statements =
+        case body do
+          %AST.Compound{kind: :group, statements: stmts} -> stmts
+          other -> [other]
+        end
 
-        {:ok, func, new_state}
+      func = %Function{
+        meta: AST.meta(line, col),
+        name: func_name,
+        body: statements
+      }
 
-      {:error, _, _, _} = err ->
-        err
-    end
-  end
-
-  # Parse function body - usually a brace group { ... }
-  # Returns the body as a list of statements
-  defp parse_function_body(state) do
-    case parse_command(state) do
-      {:ok, body, new_state} ->
-        # Extract statements from compound command if it's a brace group
-        statements =
-          case body do
-            %AST.Compound{kind: :group, statements: stmts} -> stmts
-            other -> [other]
-          end
-
-        {:ok, statements, new_state}
-
-      {:error, _, _, _} = err ->
-        err
+      {:ok, func, new_state}
     end
   end
 
   defp build_word(parts, line, col) do
-    # Determine if word is entirely single or double quoted
     {quoted, converted_parts} = convert_word_parts(parts)
 
     %AST.Word{
@@ -2618,10 +2351,14 @@ defmodule Bash.Parser do
     list_keys = Keyword.get(ops, :list_keys, false)
     slice = Keyword.get(ops, :slice)
     indirect = Keyword.get(ops, :indirect, false)
+    prefix_names = Keyword.get(ops, :prefix_names)
 
     # Find expansion from either keyword or tuple format
     expansion =
       cond do
+        prefix_names != nil ->
+          {:prefix_names, prefix_names}
+
         indirect ->
           {:indirect}
 
@@ -2672,6 +2409,9 @@ defmodule Bash.Parser do
   defp find_expansion_tuple([{:case_modify, mode} | _]),
     do: {:case_modify, mode}
 
+  defp find_expansion_tuple([{:transform, op} | _]),
+    do: {:transform, op}
+
   defp find_expansion_tuple([_ | rest]), do: find_expansion_tuple(rest)
 
   # Parse command substitution from pre-tokenized content (from $(...)
@@ -2686,7 +2426,6 @@ defmodule Bash.Parser do
     case parse_tokens(tokens_with_eof) do
       {:ok, %Script{statements: [single_cmd]}} -> single_cmd
       {:ok, script} -> script
-      # Fall back to empty on parse error
       {:error, _, _, _} -> %Script{statements: []}
     end
   end
@@ -2720,41 +2459,55 @@ defmodule Bash.Parser do
 
   defp skip_separators(state) do
     case current_token(state) do
-      {:semi, _, _} -> skip_separators(advance(state))
-      {:newline, _, _} -> skip_separators(advance(state))
-      {:comment, _, _, _} -> skip_separators(advance(state))
-      _ -> state
+      {token, _, _} when token in @separator_tokens ->
+        state |> advance() |> skip_separators()
+
+      _ ->
+        state
     end
   end
 
   defp skip_newlines(state) do
     case current_token(state) do
-      {:newline, _, _} -> skip_newlines(advance(state))
-      {:comment, _, _, _} -> skip_newlines(advance(state))
-      _ -> state
+      {token, _, _} when token in @newline_tokens ->
+        state |> advance() |> skip_newlines()
+
+      _ ->
+        state
     end
   end
 
-  # Classify a token as a redirect operation, returning {direction, fd, line, col, parse_fn}
-  # or :not_redirect. Consolidates the repeated redirect token matching in
-  # parse_command_args and parse_trailing_redirects.
-  defp classify_redirect_token(token) do
-    case token do
-      {:less, _fd, line, col} -> {:redirect, :input, 0, line, col}
-      {:greater, fd, line, col} -> {:redirect, :output, fd, line, col}
-      {:dgreater, fd, line, col} -> {:redirect, :append, fd, line, col}
-      {:lessand, _fd, line, col} -> {:redirect, :duplicate, 0, line, col}
-      {:greaterand, fd, line, col} -> {:redirect, :duplicate, fd, line, col}
-      {:lessgreat, _fd, line, col} -> {:redirect, :read_write, 0, line, col}
-      {:andgreat, line, col} -> {:redirect, :output, :both, line, col}
-      {:anddgreat, line, col} -> {:redirect, :append, :both, line, col}
-      {:dless, fd, line, col} -> {:heredoc, :heredoc, fd, line, col}
-      {:dlessdash, fd, line, col} -> {:heredoc, :heredoc_strip, fd, line, col}
-      {:tless, fd, line, col} -> {:herestring, nil, fd, line, col}
-      {:io_number, fd, line, col} -> {:fd_redirect, nil, fd, line, col}
-      _ -> :not_redirect
-    end
-  end
+  # Classify a redirect token for parsing.
+  # Must only be called when is_redirect_token(token) is true.
+  defp classify_redirect_token({:less, _fd, line, col}), do: {:redirect, :input, 0, line, col}
+  defp classify_redirect_token({:greater, fd, line, col}), do: {:redirect, :output, fd, line, col}
+
+  defp classify_redirect_token({:dgreater, fd, line, col}),
+    do: {:redirect, :append, fd, line, col}
+
+  defp classify_redirect_token({:lessand, _fd, line, col}),
+    do: {:redirect, :duplicate, 0, line, col}
+
+  defp classify_redirect_token({:greaterand, fd, line, col}),
+    do: {:redirect, :duplicate, fd, line, col}
+
+  defp classify_redirect_token({:lessgreat, _fd, line, col}),
+    do: {:redirect, :read_write, 0, line, col}
+
+  defp classify_redirect_token({:andgreat, line, col}), do: {:redirect, :output, :both, line, col}
+
+  defp classify_redirect_token({:anddgreat, line, col}),
+    do: {:redirect, :append, :both, line, col}
+
+  defp classify_redirect_token({:dless, fd, line, col}), do: {:heredoc, :heredoc, fd, line, col}
+
+  defp classify_redirect_token({:dlessdash, fd, line, col}),
+    do: {:heredoc, :heredoc_strip, fd, line, col}
+
+  defp classify_redirect_token({:tless, fd, line, col}), do: {:herestring, nil, fd, line, col}
+
+  defp classify_redirect_token({:io_number, fd, line, col}),
+    do: {:fd_redirect, nil, fd, line, col}
 
   defp parse_classified_redirect(state, classification) do
     state = advance(state)

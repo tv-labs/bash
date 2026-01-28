@@ -463,9 +463,14 @@ defmodule Bash.Script do
             nil ->
               # No callback - fall back to deferred execution (legacy path)
               new_updates =
-                Map.update(updates, :pending_signals, [{signal, targets}], &[
-                  {signal, targets} | &1
-                ])
+                Map.update(
+                  updates,
+                  :pending_signals,
+                  [{signal, targets}],
+                  &[
+                    {signal, targets} | &1
+                  ]
+                )
 
               executed_stmt = mark_executed(stmt, 0)
 

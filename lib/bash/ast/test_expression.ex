@@ -426,9 +426,21 @@ defmodule Bash.AST.TestExpression do
     {:ok, str != "", rest}
   end
 
+  # Variable existence test - [[ -v varname ]]
+  # Tests if the variable is set (has been assigned a value)
+  defp parse(["-v", varname | rest], session_state) do
+    {:ok, variable_is_set?(varname, session_state), rest}
+  end
+
+  # Nameref test - [[ -R varname ]]
+  # Tests if the variable is a nameref
+  defp parse(["-R", varname | rest], session_state) do
+    {:ok, variable_is_nameref?(varname, session_state), rest}
+  end
+
   # Unary operator without argument - error
   defp parse([op], _session_state)
-       when op in ~w[-f -d -e -a -r -w -x -s -z -n -b -c -g -h -k -p -t -u -L -O -G -N -S] do
+       when op in ~w[-f -d -e -a -r -w -x -s -z -n -v -R -b -c -g -h -k -p -t -u -L -O -G -N -S] do
     {:error, "unary operator expected argument"}
   end
 
@@ -519,6 +531,57 @@ defmodule Bash.AST.TestExpression do
     case Regex.compile("^#{regex_pattern}$") do
       {:ok, regex} -> Regex.match?(regex, string)
       {:error, _} -> false
+    end
+  end
+
+  # Check if a variable is set (has been assigned a value)
+  # Supports array subscripts: arr[0], arr[@], arr[*]
+  defp variable_is_set?(varname, session_state) do
+    # Handle array subscript syntax: VAR[idx]
+    {base_name, subscript} = parse_subscript(varname)
+
+    case Map.get(session_state.variables, base_name) do
+      nil ->
+        false
+
+      %Variable{} = var ->
+        case subscript do
+          nil ->
+            # No subscript - variable is set if it has a value
+            Variable.get(var, nil) != nil
+
+          {:index, idx} ->
+            # Specific index - check if that index exists
+            case Variable.get(var, idx) do
+              nil -> false
+              _ -> true
+            end
+
+          :all ->
+            # [@] or [*] - true if array is not empty
+            case var.value do
+              %{} = map when map_size(map) > 0 -> true
+              _ -> false
+            end
+        end
+    end
+  end
+
+  # Check if a variable is a nameref
+  defp variable_is_nameref?(varname, session_state) do
+    case Map.get(session_state.variables, varname) do
+      %Variable{attributes: attrs} -> Map.get(attrs, :nameref, false)
+      _ -> false
+    end
+  end
+
+  # Parse array subscript from variable name
+  defp parse_subscript(varname) do
+    case Regex.run(~r/^([A-Za-z_][A-Za-z0-9_]*)\[(.+)\]$/, varname) do
+      [_, base, "@"] -> {base, :all}
+      [_, base, "*"] -> {base, :all}
+      [_, base, idx] -> {base, {:index, idx}}
+      nil -> {varname, nil}
     end
   end
 

@@ -1431,12 +1431,9 @@ defmodule Bash.Session do
 
     case DynamicSupervisor.start_child(state.job_supervisor, {JobProcess, job_opts}) do
       {:ok, job_pid} ->
-        # Update state with new job
-        new_jobs = Map.put(state.jobs, job_number, job_pid)
-
         new_state = %{
           state
-          | jobs: new_jobs,
+          | jobs: Map.put(state.jobs, job_number, job_pid),
             next_job_number: job_number + 1,
             previous_job: state.current_job,
             current_job: job_number
@@ -1498,13 +1495,13 @@ defmodule Bash.Session do
   def handle_call({:background_job, job_spec}, _from, state) do
     job_number = resolve_job_spec(job_spec, state)
 
-    case Map.get(state.jobs, job_number) do
-      nil ->
-        {:reply, {:error, :no_such_job}, state}
-
-      pid ->
+    case state.jobs[job_number] do
+      pid when is_pid(pid) ->
         result = JobProcess.background(pid)
         {:reply, result, state}
+
+      _ ->
+        {:reply, {:error, :no_such_job}, state}
     end
   end
 
@@ -1970,21 +1967,22 @@ defmodule Bash.Session do
 
   # Handle fg builtin - brings job to foreground and blocks until completion
   defp handle_foreground_job(job_number, from, state) do
-    case Map.get(state.jobs, job_number) do
-      nil ->
-        # Write error message to stderr sink
-        if state.stderr_sink,
-          do: state.stderr_sink.({:stderr, "fg: %#{job_number}: no such job\n"})
+    # Check completed_jobs first in case job finished before fg ran
+    completed_job = Enum.find(state.completed_jobs, fn job -> job.job_number == job_number end)
 
+    cond do
+      completed_job != nil and completed_job.exit_code != nil ->
+        # Job already completed - return its exit code
         result = %CommandResult{
           command: "fg",
-          exit_code: 1,
-          error: :no_such_job
+          exit_code: completed_job.exit_code,
+          error: nil
         }
 
-        {:reply, {:error, result}, state}
+        {:reply, {:ok, result}, state}
 
-      pid ->
+      Map.has_key?(state.jobs, job_number) ->
+        pid = Map.get(state.jobs, job_number)
         # Spawn a task to wait for the job and reply when done
         # This allows the Session to continue processing other messages
         caller = from
@@ -2010,6 +2008,19 @@ defmodule Bash.Session do
         end)
 
         {:noreply, state}
+
+      true ->
+        # No such job - not in active jobs or completed jobs
+        if state.stderr_sink,
+          do: state.stderr_sink.({:stderr, "fg: %#{job_number}: no such job\n"})
+
+        result = %CommandResult{
+          command: "fg",
+          exit_code: 1,
+          error: :no_such_job
+        }
+
+        {:reply, {:error, result}, state}
     end
   end
 
@@ -2235,6 +2246,225 @@ defmodule Bash.Session do
     end
   end
 
+  # Handle foreground job with Script continuation
+  # Waits for job completion then continues script execution
+  defp handle_foreground_job_with_script(
+         job_number,
+         executed_script,
+         script_updates,
+         collector,
+         from,
+         state
+       ) do
+    # Check completed_jobs first in case job finished before fg ran
+    completed_job = Enum.find(state.completed_jobs, fn job -> job.job_number == job_number end)
+
+    case completed_job do
+      %{exit_code: exit_code} when exit_code != nil ->
+        # Job already completed - transfer output to persistent collector
+        transfer_and_cleanup_collector(collector, state.output_collector)
+        # Update script's exit_code with the job's exit code
+        executed_script_with_collector = %{
+          executed_script
+          | collector: state.output_collector,
+            exit_code: exit_code
+        }
+
+        new_state =
+          state
+          |> apply_state_updates(script_updates)
+          |> append_to_history(executed_script_with_collector)
+          |> update_exit_status(executed_script_with_collector)
+
+        {:reply, {:ok, executed_script_with_collector}, new_state}
+
+      nil ->
+        case Map.get(state.jobs, job_number) do
+          nil ->
+            cleanup_collector(collector)
+
+            if state.stderr_sink,
+              do: state.stderr_sink.({:stderr, "fg: %#{job_number}: no such job\n"})
+
+            result = %CommandResult{command: "fg", exit_code: 1, error: :no_such_job}
+            {:reply, {:error, result}, state}
+
+          pid ->
+            caller = from
+            stderr_sink = state.stderr_sink
+            persistent_collector = state.output_collector
+
+            spawn(fn ->
+              case JobProcess.foreground(pid) do
+                {:ok, job_result} ->
+                  # Transfer temp collector output to persistent
+                  transfer_and_cleanup_collector(collector, persistent_collector)
+                  # Update script's exit_code with the job's exit code
+                  job_exit_code = Map.get(job_result, :exit_code, 0)
+
+                  executed_script_with_collector = %{
+                    executed_script
+                    | collector: persistent_collector,
+                      exit_code: job_exit_code
+                  }
+
+                  GenServer.reply(caller, {:ok, executed_script_with_collector})
+
+                {:error, reason} ->
+                  cleanup_collector(collector)
+                  if stderr_sink, do: stderr_sink.({:stderr, "fg: error: #{inspect(reason)}\n"})
+                  result = %CommandResult{command: "fg", exit_code: 1, error: reason}
+                  GenServer.reply(caller, {:error, result})
+              end
+            end)
+
+            {:noreply, apply_state_updates(state, script_updates)}
+        end
+    end
+  end
+
+  # Handle background jobs with Script continuation
+  defp handle_background_jobs_with_script(
+         job_numbers,
+         executed_script,
+         script_updates,
+         collector,
+         state
+       ) do
+    results =
+      Enum.map(job_numbers, fn job_num ->
+        case Map.get(state.jobs, job_num) do
+          nil -> {:error, job_num}
+          pid -> JobProcess.background(pid)
+        end
+      end)
+
+    errors = Enum.filter(results, &match?({:error, _}, &1))
+
+    if Enum.empty?(errors) do
+      transfer_and_cleanup_collector(collector, state.output_collector)
+      executed_script_with_collector = %{executed_script | collector: state.output_collector}
+
+      new_state =
+        state
+        |> apply_state_updates(script_updates)
+        |> append_to_history(executed_script_with_collector)
+        |> update_exit_status(executed_script_with_collector)
+
+      {:reply, {:ok, executed_script_with_collector}, new_state}
+    else
+      cleanup_collector(collector)
+      if state.stderr_sink, do: state.stderr_sink.({:stderr, "bg: error resuming jobs\n"})
+
+      result = %CommandResult{command: "bg", exit_code: 1, error: :job_error}
+      {:reply, {:error, result}, state}
+    end
+  end
+
+  # Handle wait for jobs with Script continuation
+  defp handle_wait_for_jobs_with_script(job_specs, executed_script, script_updates, from, state) do
+    # Resolve job specs to PIDs (nil means wait for all)
+    job_pids =
+      if job_specs == nil do
+        Map.values(state.jobs)
+      else
+        job_specs
+        |> Enum.map(fn
+          :current -> Map.get(state.jobs, state.current_job)
+          :previous -> Map.get(state.jobs, state.previous_job)
+          num when is_integer(num) -> Map.get(state.jobs, num)
+          _ -> nil
+        end)
+        |> Enum.reject(&is_nil/1)
+      end
+
+    if Enum.empty?(job_pids) do
+      new_state =
+        state
+        |> apply_state_updates(script_updates)
+        |> append_to_history(executed_script)
+        |> update_exit_status(executed_script)
+
+      {:reply, {:ok, executed_script}, new_state}
+    else
+      caller = from
+
+      spawn(fn ->
+        exit_codes =
+          Enum.map(job_pids, fn pid ->
+            try do
+              case JobProcess.wait(pid) do
+                {:ok, %CommandResult{exit_code: code}} -> code
+                {:ok, code} when is_integer(code) -> code
+                {:error, _} -> 1
+              end
+            catch
+              :exit, _ -> 1
+            end
+          end)
+
+        last_code = List.last(exit_codes) || 0
+        # Update script's exit_code with the job's exit code
+        updated_script = %{executed_script | exit_code: last_code}
+        GenServer.reply(caller, {:ok, updated_script})
+      end)
+
+      {:noreply, apply_state_updates(state, script_updates)}
+    end
+  end
+
+  # Handle signal jobs with Script continuation
+  defp handle_signal_jobs_with_script(
+         signal,
+         targets,
+         executed_script,
+         script_updates,
+         collector,
+         state
+       ) do
+    results =
+      Enum.map(targets, fn
+        {:job, job_num} ->
+          case Map.get(state.jobs, job_num) do
+            nil -> {:error, "no such job: %#{job_num}"}
+            pid -> JobProcess.signal(pid, signal)
+          end
+
+        {:pid, os_pid} ->
+          sig_num = signal_to_number(signal)
+
+          case System.cmd("kill", ["-#{sig_num}", "#{os_pid}"], stderr_to_stdout: true) do
+            {_, 0} -> :ok
+            {output, _} -> {:error, String.trim(output)}
+          end
+      end)
+
+    errors =
+      results
+      |> Enum.with_index()
+      |> Enum.filter(fn {result, _} -> match?({:error, _}, result) end)
+
+    if Enum.empty?(errors) do
+      transfer_and_cleanup_collector(collector, state.output_collector)
+      executed_script_with_collector = %{executed_script | collector: state.output_collector}
+
+      new_state =
+        state
+        |> apply_state_updates(script_updates)
+        |> append_to_history(executed_script_with_collector)
+        |> update_exit_status(executed_script_with_collector)
+
+      {:reply, {:ok, executed_script_with_collector}, new_state}
+    else
+      cleanup_collector(collector)
+      error_msgs = Enum.map_join(errors, "\n", fn {{:error, msg}, _idx} -> msg end)
+      if state.stderr_sink, do: state.stderr_sink.({:stderr, error_msgs <> "\n"})
+
+      result = %CommandResult{command: "kill", exit_code: 1, error: :signal_failed}
+      {:reply, {:error, result}, state}
+    end
+  end
+
   # Extract command name and args from AST for background job execution
   defp extract_command_info(%Bash.AST.Command{name: name, args: args}, state) do
     command_name = word_to_string(name, state)
@@ -2313,6 +2543,11 @@ defmodule Bash.Session do
          previous_job: pj
        }) do
     %{state | jobs: jobs, next_job_number: njn, current_job: cj, previous_job: pj}
+  end
+
+  defp maybe_update_jobs(state, %{jobs: jobs}) do
+    # Partial update - only jobs map (used by disown)
+    %{state | jobs: jobs}
   end
 
   defp maybe_update_jobs(state, _), do: state

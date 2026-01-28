@@ -344,6 +344,18 @@ defmodule Bash.JobProcess do
   def handle_call(:detach_from_session, _from, state) do
     # Called by disown to detach this job from its session.
     # The job will continue running but won't notify the session anymore.
+    # Unlink from the supervisor process so job survives session termination.
+    # This is called by OrphanSupervisor.adopt which will establish its own monitoring.
+    {:dictionary, dict} = Process.info(self(), :dictionary)
+
+    case Keyword.get(dict, :"$ancestors") do
+      [supervisor_pid | _] when is_pid(supervisor_pid) ->
+        Process.unlink(supervisor_pid)
+
+      _ ->
+        :ok
+    end
+
     {:reply, :ok, %{state | session_pid: nil}}
   end
 

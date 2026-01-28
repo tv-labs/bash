@@ -37,9 +37,10 @@ defmodule Bash.Builtin.Wait do
         |> case do
           nil ->
             {:wait_for_jobs, job_numbers}
+
           num ->
             error("wait: %#{num}: no such job\n")
-          {:ok, 127}
+            {:ok, 127}
         end
     end
   end

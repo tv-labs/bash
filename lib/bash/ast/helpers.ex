@@ -8,6 +8,7 @@ defmodule Bash.AST.Helpers do
   alias Bash.Executor
   alias Bash.OutputCollector
   alias Bash.Parser
+  alias Bash.Parser.VariableExpander
   alias Bash.ProcessSubst
   alias Bash.Sink
   alias Bash.Variable
@@ -158,8 +159,10 @@ defmodule Bash.AST.Helpers do
   def word_to_string(str, _session_state) when is_binary(str), do: str
 
   @doc """
-  Expand a word to a string and return env updates from arithmetic expressions.
-  This is needed because $((n++)) should update the variable n.
+  Expand a word to a string and return env updates from arithmetic expressions
+  and ${var:=default} expansions.
+
+  This is needed because $((n++)) and ${x:=default} should update variables.
 
   The env_updates are threaded through each part expansion, so $((++n)) followed
   by $((n++)) will see the updated value of n from the first expansion.
@@ -168,18 +171,9 @@ defmodule Bash.AST.Helpers do
     {result_parts, env_updates, _final_state} =
       Enum.reduce(parts, {[], %{}, session_state}, fn part,
                                                       {results, acc_updates, current_state} ->
-        case part do
-          {:arith_expand, expr_string} ->
-            {result, updates} = expand_arithmetic_with_updates(expr_string, current_state)
-            # Apply updates to state for next part
-            new_state = apply_env_updates_to_state(current_state, updates)
-            {[result | results], Map.merge(acc_updates, updates), new_state}
-
-          other ->
-            # For all other parts, expand normally without updates
-            result = expand_part(other, current_state)
-            {[result | results], acc_updates, current_state}
-        end
+        {result, updates} = expand_part_with_updates(part, current_state)
+        new_state = apply_env_updates_to_state(current_state, updates)
+        {[result | results], Map.merge(acc_updates, updates), new_state}
       end)
 
     {result_parts |> Enum.reverse() |> Enum.join(""), env_updates}
@@ -199,6 +193,21 @@ defmodule Bash.AST.Helpers do
       end)
 
     %{session_state | variables: Map.merge(session_state.variables, new_vars)}
+  end
+
+  # Helper to expand a single part with env updates (for arithmetic and assign-default)
+  # Returns {result, env_updates}
+  defp expand_part_with_updates({:arith_expand, expr_string}, session_state) do
+    expand_arithmetic_with_updates(expr_string, session_state)
+  end
+
+  defp expand_part_with_updates({:variable, %AST.Variable{} = var}, session_state) do
+    expand_variable_with_updates(var, session_state)
+  end
+
+  defp expand_part_with_updates(part, session_state) do
+    # All other parts don't produce env updates
+    {expand_part(part, session_state), %{}}
   end
 
   # Helper to expand a single part (used by word_to_string and word_to_string_with_updates)
@@ -460,6 +469,22 @@ defmodule Bash.AST.Helpers do
     end
   end
 
+  # ${var:=default} - Assign default if var is unset or null (empty)
+  # NOTE: This returns just the value; for the assignment side effect,
+  # use expand_variable_with_updates/2
+  defp expand_variable(
+         %AST.Variable{name: var_name, subscript: nil, expansion: {:assign_default, default_value}},
+         session_state
+       ) do
+    value = get_scalar_value(session_state, var_name)
+
+    if value == nil or value == "" do
+      expand_word_or_string(default_value, session_state)
+    else
+      value
+    end
+  end
+
   # ${var:+alternate} - Use alternate if var is set and not null
   defp expand_variable(
          %AST.Variable{name: var_name, subscript: nil, expansion: {:alternate, alt_value}},
@@ -575,12 +600,174 @@ defmodule Bash.AST.Helpers do
     end
   end
 
+  # ${!prefix*} and ${!prefix@} - expand to names of variables matching prefix
+  defp expand_variable(
+         %AST.Variable{name: prefix, expansion: {:prefix_names, _mode}},
+         session_state
+       ) do
+    # Get all variable names matching the prefix
+    matching_names =
+      session_state.variables
+      |> Map.keys()
+      |> Enum.filter(&String.starts_with?(&1, prefix))
+      |> Enum.sort()
+
+    # In bash, @ joins with space when quoted, * joins with first char of IFS
+    # For simplicity, we join with space for both (most common behavior)
+    Enum.join(matching_names, " ")
+  end
+
+  # ${var@Q} - quote value for reuse as input
+  defp expand_variable(
+         %AST.Variable{name: var_name, subscript: nil, expansion: {:transform, :quote}},
+         session_state
+       ) do
+    value = get_scalar_value(session_state, var_name)
+    # Quote the value using $'...' syntax for special chars, or '...' for simple strings
+    quote_for_reuse(value)
+  end
+
+  # ${var@a} - variable attributes
+  defp expand_variable(
+         %AST.Variable{name: var_name, subscript: nil, expansion: {:transform, :attributes}},
+         session_state
+       ) do
+    case resolve_variable(session_state, var_name) do
+      nil ->
+        ""
+
+      %Variable{attributes: attrs} ->
+        # Return attribute flags: r=readonly, x=export, a=indexed array, A=associative array, etc.
+        flags = []
+        flags = if attrs[:readonly], do: ["r" | flags], else: flags
+        flags = if attrs[:export], do: ["x" | flags], else: flags
+        flags = if attrs[:integer], do: ["i" | flags], else: flags
+        flags = if attrs[:indexed_array], do: ["a" | flags], else: flags
+        flags = if attrs[:assoc_array], do: ["A" | flags], else: flags
+        flags = if attrs[:nameref], do: ["n" | flags], else: flags
+        flags = if attrs[:lowercase], do: ["l" | flags], else: flags
+        flags = if attrs[:uppercase], do: ["u" | flags], else: flags
+        Enum.join(Enum.reverse(flags), "")
+    end
+  end
+
+  # ${var@E} - expand backslash escape sequences
+  defp expand_variable(
+         %AST.Variable{name: var_name, subscript: nil, expansion: {:transform, :escape}},
+         session_state
+       ) do
+    value = get_scalar_value(session_state, var_name)
+    expand_escape_sequences(value)
+  end
+
+  # ${var@A} - assignment statement that would recreate the variable
+  defp expand_variable(
+         %AST.Variable{name: var_name, subscript: nil, expansion: {:transform, :assignment}},
+         session_state
+       ) do
+    case resolve_variable(session_state, var_name) do
+      nil -> ""
+      %Variable{} = var -> "#{var_name}=#{quote_for_reuse(Variable.get(var, nil) || "")}"
+    end
+  end
+
+  # ${var@u} - uppercase first character (like ${var^})
+  defp expand_variable(
+         %AST.Variable{name: var_name, subscript: nil, expansion: {:transform, :upper}},
+         session_state
+       ) do
+    value = get_scalar_value(session_state, var_name)
+
+    case String.graphemes(value) do
+      [] -> ""
+      [first | rest] -> String.upcase(first) <> Enum.join(rest)
+    end
+  end
+
+  # ${var@L} - lowercase all characters (like ${var,,})
+  defp expand_variable(
+         %AST.Variable{name: var_name, subscript: nil, expansion: {:transform, :lower}},
+         session_state
+       ) do
+    value = get_scalar_value(session_state, var_name)
+    String.downcase(value)
+  end
+
+  # ${var@P} - prompt string expansion (simplified - just return value)
+  # ${var@K} and ${var@k} - quoted keys for arrays (not fully implemented)
+  defp expand_variable(
+         %AST.Variable{name: var_name, subscript: nil, expansion: {:transform, _op}},
+         session_state
+       ) do
+    # For unsupported transforms, just return the value
+    get_scalar_value(session_state, var_name)
+  end
+
   defp expand_variable(%AST.Variable{name: var_name}, session_state) do
     # Fallback for any other variable patterns
     case resolve_variable(session_state, var_name) do
       nil -> ""
       %Variable{} = var -> Variable.get(var, nil) || ""
     end
+  end
+
+  # Expand variable with env updates - only ${var:=default} produces updates
+  # Returns {result, env_updates}
+  defp expand_variable_with_updates(
+         %AST.Variable{name: var_name, subscript: nil, expansion: {:assign_default, default_value}},
+         session_state
+       ) do
+    value = get_scalar_value(session_state, var_name)
+
+    if value == nil or value == "" do
+      default = expand_word_or_string(default_value, session_state)
+      {default, %{var_name => default}}
+    else
+      {value, %{}}
+    end
+  end
+
+  defp expand_variable_with_updates(var, session_state) do
+    # All other variable expansions don't produce env updates
+    {expand_variable(var, session_state), %{}}
+  end
+
+  # Quote a value for safe reuse as shell input
+  # Uses $'...' syntax for strings with special chars, '...' otherwise
+  defp quote_for_reuse(nil), do: "''"
+  defp quote_for_reuse(""), do: "''"
+
+  defp quote_for_reuse(value) when is_binary(value) do
+    if needs_special_quoting?(value) do
+      # Use $'...' syntax with escape sequences
+      escaped =
+        value
+        |> String.replace("\\", "\\\\")
+        |> String.replace("'", "\\'")
+        |> String.replace("\n", "\\n")
+        |> String.replace("\t", "\\t")
+        |> String.replace("\r", "\\r")
+
+      "$'#{escaped}'"
+    else
+      # Simple single-quoting
+      "'#{String.replace(value, "'", "'\\''")}'"
+    end
+  end
+
+  defp needs_special_quoting?(value) do
+    String.contains?(value, ["\n", "\t", "\r", "\x00"])
+  end
+
+  # Expand backslash escape sequences like $'...' strings
+  defp expand_escape_sequences(value) when is_binary(value) do
+    value
+    |> String.replace("\\n", "\n")
+    |> String.replace("\\t", "\t")
+    |> String.replace("\\r", "\r")
+    |> String.replace("\\\\", "\\")
+    |> String.replace("\\'", "'")
+    |> String.replace("\\\"", "\"")
   end
 
   # Helper to expand either a Word struct or a plain string
@@ -855,24 +1042,8 @@ defmodule Bash.AST.Helpers do
   contains no variables.
   """
   def expand_simple_string(expr_string, session_state) do
-    # Simple approach: expand $VAR and ${VAR} patterns
-    # This handles the common cases for associative array keys
-    Regex.replace(~r/\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)/, expr_string, fn
-      _full_match, name, "" ->
-        # ${name} form
-        get_var_value(name, session_state)
-
-      _full_match, "", name ->
-        # $name form
-        get_var_value(name, session_state)
-    end)
-  end
-
-  defp get_var_value(name, session_state) do
-    case resolve_variable(session_state, name) do
-      nil -> ""
-      var -> Variable.get(var, nil) || ""
-    end
+    {expanded, _updates} = VariableExpander.expand_variables(expr_string, session_state)
+    expanded
   end
 
   # Expand command substitution by executing the parsed AST and capturing stdout

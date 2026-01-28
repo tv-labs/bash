@@ -77,7 +77,6 @@ defmodule Bash do
     run(script, session, opts)
   end
 
-  # Handle string input - parse first
   def run(script, session_or_opts, opts) when is_binary(script) do
     case parse(script) do
       {:ok, %Script{} = ast} ->
@@ -93,7 +92,6 @@ defmodule Bash do
     end
   end
 
-  # Handle Script - execute as a unit, returning the Script with results
   def run(%Script{} = script, session_or_opts, _opts) do
     {session_pid, _resolved_opts} = resolve_session(session_or_opts)
 
@@ -203,29 +201,24 @@ defmodule Bash do
     end
   end
 
-  # Resolve session from various input types
   defp resolve_session(pid) when is_pid(pid), do: {pid, []}
 
   defp resolve_session(opts) when is_list(opts) or is_map(opts) or is_nil(opts) do
     opts_list = if is_map(opts), do: Map.to_list(opts), else: opts || []
 
-    # Check if a session PID was provided in options
     case Keyword.get(opts_list, :session) do
       pid when is_pid(pid) ->
-        # Use provided session, pass remaining opts
         remaining_opts = Keyword.delete(opts_list, :session)
         {pid, remaining_opts}
 
       nil ->
-        # Create new session with provided options
         {:ok, pid} = Session.new(opts_list)
         {pid, opts_list}
     end
   end
 
   defp telemetry_stop_metadata({status, result, _session_pid}) do
-    exit_code = ExecutionResult.exit_code(result)
-    %{status: status, exit_code: exit_code}
+    %{status: status, exit_code: ExecutionResult.exit_code(result)}
   end
 
   @doc """

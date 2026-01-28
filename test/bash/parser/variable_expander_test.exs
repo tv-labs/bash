@@ -2,6 +2,7 @@ defmodule Bash.Parser.VariableExpanderTest do
   use ExUnit.Case
 
   alias Bash.Parser.VariableExpander
+  alias Bash.SyntaxError
   alias Bash.Variable
 
   setup do
@@ -16,6 +17,299 @@ defmodule Bash.Parser.VariableExpanderTest do
     }
 
     {:ok, session_state: session_state}
+  end
+
+  describe "parse/1 - literal tokens" do
+    test "parses plain text as literal" do
+      assert {:ok, [{:literal, "hello world"}]} = VariableExpander.parse("hello world")
+    end
+
+    test "parses empty string" do
+      assert {:ok, []} = VariableExpander.parse("")
+    end
+
+    test "parses text with special characters" do
+      assert {:ok, [{:literal, "hello!@#%^&*()"}]} = VariableExpander.parse("hello!@#%^&*()")
+    end
+
+    test "parses lone $ as literal" do
+      # A lone $ gets wrapped in a list due to add_to_literal behavior
+      assert {:ok, [[literal: "$"]]} = VariableExpander.parse("$")
+    end
+
+    test "parses $ followed by space as literal" do
+      # The $ and space become separate literals due to accumulation
+      assert {:ok, [[literal: "$"], {:literal, " "}]} = VariableExpander.parse("$ ")
+    end
+  end
+
+  describe "parse/1 - simple variable tokens" do
+    test "parses $VAR" do
+      assert {:ok, [{:var_simple, "FOO"}]} = VariableExpander.parse("$FOO")
+    end
+
+    test "parses $VAR with underscore" do
+      assert {:ok, [{:var_simple, "FOO_BAR"}]} = VariableExpander.parse("$FOO_BAR")
+    end
+
+    test "parses $VAR starting with underscore" do
+      assert {:ok, [{:var_simple, "_FOO"}]} = VariableExpander.parse("$_FOO")
+    end
+
+    test "parses $VAR with numbers" do
+      assert {:ok, [{:var_simple, "FOO123"}]} = VariableExpander.parse("$FOO123")
+    end
+
+    test "parses positional parameters $0-$9" do
+      for n <- 0..9 do
+        expected = Integer.to_string(n)
+        assert {:ok, [{:var_simple, ^expected}]} = VariableExpander.parse("$#{n}")
+      end
+    end
+
+    test "parses special variable $?" do
+      assert {:ok, [{:var_simple, "?"}]} = VariableExpander.parse("$?")
+    end
+
+    test "parses special variable $!" do
+      assert {:ok, [{:var_simple, "!"}]} = VariableExpander.parse("$!")
+    end
+
+    test "parses special variable $$" do
+      assert {:ok, [{:var_simple, "$"}]} = VariableExpander.parse("$$")
+    end
+
+    test "parses special variable $#" do
+      assert {:ok, [{:var_simple, "#"}]} = VariableExpander.parse("$#")
+    end
+
+    test "parses special variable $*" do
+      assert {:ok, [{:var_simple, "*"}]} = VariableExpander.parse("$*")
+    end
+
+    test "parses special variable $@" do
+      assert {:ok, [{:var_simple, "@"}]} = VariableExpander.parse("$@")
+    end
+
+    test "parses special variable $-" do
+      assert {:ok, [{:var_simple, "-"}]} = VariableExpander.parse("$-")
+    end
+  end
+
+  describe "parse/1 - braced variable tokens" do
+    test "parses ${VAR}" do
+      assert {:ok, [{:var_braced, "FOO", []}]} = VariableExpander.parse("${FOO}")
+    end
+
+    test "parses ${VAR} with underscore" do
+      assert {:ok, [{:var_braced, "FOO_BAR", []}]} = VariableExpander.parse("${FOO_BAR}")
+    end
+
+    test "parses braced special variables" do
+      assert {:ok, [{:var_braced, "?", []}]} = VariableExpander.parse("${?}")
+      assert {:ok, [{:var_braced, "!", []}]} = VariableExpander.parse("${!}")
+      assert {:ok, [{:var_braced, "$", []}]} = VariableExpander.parse("${$}")
+      # Note: ${#} is parsed as length operator expecting a var name, not special var "#"
+      assert {:ok, [{:var_braced, "*", []}]} = VariableExpander.parse("${*}")
+      assert {:ok, [{:var_braced, "@", []}]} = VariableExpander.parse("${@}")
+      assert {:ok, [{:var_braced, "-", []}]} = VariableExpander.parse("${-}")
+    end
+
+    test "parses braced positional parameters" do
+      for n <- 0..9 do
+        expected = Integer.to_string(n)
+        assert {:ok, [{:var_braced, ^expected, []}]} = VariableExpander.parse("${#{n}}")
+      end
+    end
+  end
+
+  describe "parse/1 - length operator" do
+    test "parses ${#VAR}" do
+      assert {:ok, [{:var_braced, "FOO", [:length]}]} = VariableExpander.parse("${#FOO}")
+    end
+
+    test "parses ${#VAR} with special variable" do
+      assert {:ok, [{:var_braced, "?", [:length]}]} = VariableExpander.parse("${#?}")
+    end
+  end
+
+  describe "parse/1 - default value operators" do
+    test "parses ${VAR:-default}" do
+      assert {:ok, [{:var_braced, "FOO", [{:default, ":-", "default"}]}]} =
+               VariableExpander.parse("${FOO:-default}")
+    end
+
+    test "parses ${VAR:=default}" do
+      assert {:ok, [{:var_braced, "FOO", [{:default, ":=", "value"}]}]} =
+               VariableExpander.parse("${FOO:=value}")
+    end
+
+    test "parses ${VAR:?error}" do
+      assert {:ok, [{:var_braced, "FOO", [{:default, ":?", "error message"}]}]} =
+               VariableExpander.parse("${FOO:?error message}")
+    end
+
+    test "parses ${VAR:+alternate}" do
+      assert {:ok, [{:var_braced, "FOO", [{:default, ":+", "alt"}]}]} =
+               VariableExpander.parse("${FOO:+alt}")
+    end
+
+    test "parses default operators with empty value" do
+      assert {:ok, [{:var_braced, "FOO", [{:default, ":-", ""}]}]} =
+               VariableExpander.parse("${FOO:-}")
+
+      assert {:ok, [{:var_braced, "FOO", [{:default, ":=", ""}]}]} =
+               VariableExpander.parse("${FOO:=}")
+
+      assert {:ok, [{:var_braced, "FOO", [{:default, ":?", ""}]}]} =
+               VariableExpander.parse("${FOO:?}")
+
+      assert {:ok, [{:var_braced, "FOO", [{:default, ":+", ""}]}]} =
+               VariableExpander.parse("${FOO:+}")
+    end
+  end
+
+  describe "parse/1 - substring operator" do
+    test "parses ${VAR:offset}" do
+      assert {:ok, [{:var_braced, "FOO", [{:substring, "5"}]}]} =
+               VariableExpander.parse("${FOO:5}")
+    end
+
+    test "parses ${VAR:offset:length}" do
+      assert {:ok, [{:var_braced, "FOO", [{:substring, "2:3"}]}]} =
+               VariableExpander.parse("${FOO:2:3}")
+    end
+
+    test "parses ${VAR:0}" do
+      assert {:ok, [{:var_braced, "FOO", [{:substring, "0"}]}]} =
+               VariableExpander.parse("${FOO:0}")
+    end
+  end
+
+  describe "parse/1 - pattern removal operators" do
+    test "parses ${VAR#pattern}" do
+      assert {:ok, [{:var_braced, "FOO", [{:pattern, "#", "*."}]}]} =
+               VariableExpander.parse("${FOO#*.}")
+    end
+
+    test "parses ${VAR##pattern}" do
+      assert {:ok, [{:var_braced, "FOO", [{:pattern, "##", "*."}]}]} =
+               VariableExpander.parse("${FOO##*.}")
+    end
+
+    test "parses ${VAR%pattern}" do
+      assert {:ok, [{:var_braced, "FOO", [{:pattern, "%", ".*"}]}]} =
+               VariableExpander.parse("${FOO%.*}")
+    end
+
+    test "parses ${VAR%%pattern}" do
+      assert {:ok, [{:var_braced, "FOO", [{:pattern, "%%", ".*"}]}]} =
+               VariableExpander.parse("${FOO%%.*}")
+    end
+
+    test "parses pattern removal with empty pattern" do
+      assert {:ok, [{:var_braced, "FOO", [{:pattern, "#", ""}]}]} =
+               VariableExpander.parse("${FOO#}")
+
+      assert {:ok, [{:var_braced, "FOO", [{:pattern, "##", ""}]}]} =
+               VariableExpander.parse("${FOO##}")
+
+      assert {:ok, [{:var_braced, "FOO", [{:pattern, "%", ""}]}]} =
+               VariableExpander.parse("${FOO%}")
+
+      assert {:ok, [{:var_braced, "FOO", [{:pattern, "%%", ""}]}]} =
+               VariableExpander.parse("${FOO%%}")
+    end
+  end
+
+  describe "parse/1 - substitution operators" do
+    test "parses ${VAR/pattern/replacement}" do
+      assert {:ok, [{:var_braced, "FOO", [{:subst, "/", "old/new"}]}]} =
+               VariableExpander.parse("${FOO/old/new}")
+    end
+
+    test "parses ${VAR//pattern/replacement}" do
+      assert {:ok, [{:var_braced, "FOO", [{:subst, "//", "old/new"}]}]} =
+               VariableExpander.parse("${FOO//old/new}")
+    end
+
+    test "parses substitution with empty replacement" do
+      assert {:ok, [{:var_braced, "FOO", [{:subst, "/", "old/"}]}]} =
+               VariableExpander.parse("${FOO/old/}")
+    end
+
+    test "parses global substitution" do
+      # ${FOO//new} is global substitution of "new" with empty replacement
+      assert {:ok, [{:var_braced, "FOO", [{:subst, "//", "new"}]}]} =
+               VariableExpander.parse("${FOO//new}")
+    end
+  end
+
+  describe "parse/1 - mixed tokens" do
+    test "parses literal followed by variable" do
+      assert {:ok, [{:literal, "hello "}, {:var_simple, "NAME"}]} =
+               VariableExpander.parse("hello $NAME")
+    end
+
+    test "parses variable followed by literal" do
+      assert {:ok, [{:var_simple, "NAME"}, {:literal, " world"}]} =
+               VariableExpander.parse("$NAME world")
+    end
+
+    test "parses multiple variables" do
+      assert {:ok, [{:var_simple, "A"}, {:literal, "-"}, {:var_simple, "B"}]} =
+               VariableExpander.parse("$A-$B")
+    end
+
+    test "parses braced and simple variables together" do
+      assert {:ok, [{:var_braced, "A", []}, {:literal, "-"}, {:var_simple, "B"}]} =
+               VariableExpander.parse("${A}-$B")
+    end
+
+    test "parses complex expression" do
+      {:ok, tokens} = VariableExpander.parse("prefix-${FOO:-default}-$BAR-suffix")
+
+      assert [
+               {:literal, "prefix-"},
+               {:var_braced, "FOO", [{:default, ":-", "default"}]},
+               {:literal, "-"},
+               {:var_simple, "BAR"},
+               {:literal, "-suffix"}
+             ] = tokens
+    end
+  end
+
+  describe "parse/1 - nested expansions" do
+    test "parses nested ${} in default value" do
+      assert {:ok, [{:var_braced, "FOO", [{:default, ":-", "${BAR}"}]}]} =
+               VariableExpander.parse("${FOO:-${BAR}}")
+    end
+
+    test "parses deeply nested ${}" do
+      assert {:ok, [{:var_braced, "A", [{:default, ":-", "${B:-${C}}"}]}]} =
+               VariableExpander.parse("${A:-${B:-${C}}}")
+    end
+  end
+
+  describe "parse/1 - error cases" do
+    test "returns error for unclosed brace" do
+      assert {:error, _} = VariableExpander.parse("${FOO")
+    end
+
+    test "returns error for missing variable name" do
+      assert {:error, _} = VariableExpander.parse("${}")
+    end
+
+    test "returns error for unclosed nested brace" do
+      assert {:error, _} = VariableExpander.parse("${FOO:-${BAR}")
+    end
+  end
+
+  describe "parse/1 - escaped braces" do
+    test "parses escaped closing brace in default value" do
+      assert {:ok, [{:var_braced, "FOO", [{:default, ":-", "}"}]}]} =
+               VariableExpander.parse("${FOO:-\\}}")
+    end
   end
 
   describe "Simple variable expansion" do
@@ -114,20 +408,38 @@ defmodule Bash.Parser.VariableExpanderTest do
   end
 
   describe "${var:?error} - Error if unset or null" do
-    test "raises error when variable is unset" do
+    test "raises SyntaxError when variable is unset" do
       session_state = %{variables: %{}}
 
-      assert_raise RuntimeError, ~r/bash: UNSET: custom error/, fn ->
-        VariableExpander.expand_variables("${UNSET:?custom error}", session_state)
-      end
+      error =
+        assert_raise SyntaxError, fn ->
+          VariableExpander.expand_variables("${UNSET:?custom error}", session_state)
+        end
+
+      assert error.code == "SC2154"
+      assert error.hint =~ "UNSET: custom error"
     end
 
-    test "raises error with default message when no error text provided" do
+    test "raises SyntaxError with default message when no error text provided" do
       session_state = %{variables: %{}}
 
-      assert_raise RuntimeError, ~r/bash: UNSET: parameter null or not set/, fn ->
-        VariableExpander.expand_variables("${UNSET:?}", session_state)
-      end
+      error =
+        assert_raise SyntaxError, fn ->
+          VariableExpander.expand_variables("${UNSET:?}", session_state)
+        end
+
+      assert error.code == "SC2154"
+      assert error.hint =~ "parameter null or not set"
+    end
+
+    test "raises SyntaxError when variable is empty", %{session_state: session_state} do
+      error =
+        assert_raise SyntaxError, fn ->
+          VariableExpander.expand_variables("${EMPTY:?must be set}", session_state)
+        end
+
+      assert error.code == "SC2154"
+      assert error.hint =~ "EMPTY: must be set"
     end
 
     test "returns value when variable is set and not empty", %{session_state: session_state} do
@@ -389,7 +701,6 @@ defmodule Bash.Parser.VariableExpanderTest do
     end
   end
 
-  # Helper: Run bash command and return output
   defp run_bash(command) do
     {output, 0} = System.cmd("bash", ["-c", command])
     String.trim(output)

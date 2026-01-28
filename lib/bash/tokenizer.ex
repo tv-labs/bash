@@ -67,8 +67,6 @@ defmodule Bash.Tokenizer do
 
   ### Arithmetic
   - `{:arith_command, content, line, col}` - ((...)) arithmetic command with raw content
-  - `{:dlparen, line, col}` - (( (only in subshell contexts like $((expr)))
-  - `{:drparen, line, col}` - ))
 
   ### Special
   - `{:eof, line, col}` - End of input
@@ -2458,11 +2456,36 @@ defmodule Bash.Tokenizer do
 
         {:variable_braced, var_name, [{:case_modify, mode}]}
 
+      # ${VAR@op} - parameter transformation (Q, E, P, A, K, k, a, u, L)
+      match = Regex.run(~r/^([A-Za-z_][A-Za-z0-9_]*|[?$!#@*0-9])@([QEPAKkauL])$/s, content) ->
+        [_, var_name, op] = match
+
+        transform_op =
+          case op do
+            "Q" -> :quote
+            "E" -> :escape
+            "P" -> :prompt
+            "A" -> :assignment
+            "K" -> :quoted_keys
+            "k" -> :keys
+            "a" -> :attributes
+            "u" -> :upper
+            "L" -> :lower
+          end
+
+        {:variable_braced, var_name, [{:transform, transform_op}]}
+
       # ${!VAR[@]} or ${!VAR[*]} - list array indices/keys
       match = Regex.run(~r/^!([A-Za-z_][A-Za-z0-9_]*)\[(@|\*)\]$/s, content) ->
         [_, var_name, sub] = match
         sub_type = if sub == "@", do: :all_values, else: :all_star
         {:variable_braced, var_name, [subscript: sub_type, list_keys: true]}
+
+      # ${!prefix*} or ${!prefix@} - expand to names of all variables matching prefix
+      match = Regex.run(~r/^!([A-Za-z_][A-Za-z0-9_]*)(\*|@)$/s, content) ->
+        [_, prefix, suffix] = match
+        mode = if suffix == "@", do: :at, else: :star
+        {:variable_braced, prefix, [prefix_names: mode]}
 
       # ${!VAR} - indirect reference (use VAR's value as variable name)
       match = Regex.run(~r/^!([A-Za-z_][A-Za-z0-9_]*)$/s, content) ->

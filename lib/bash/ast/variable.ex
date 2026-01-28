@@ -92,6 +92,8 @@ defmodule Bash.AST.Variable do
           | {:remove_prefix, AST.Word.t(), :shortest | :longest}
           | {:remove_suffix, AST.Word.t(), :shortest | :longest}
           | {:substitute, pattern :: AST.Word.t(), replacement :: AST.Word.t(), :first | :all}
+          | {:prefix_names, :star | :at}
+          | {:transform, :quote | :escape | :prompt | :assignment | :quoted_keys | :keys | :attributes | :upper | :lower}
 
   @type t :: %__MODULE__{
           meta: AST.Meta.t(),
@@ -155,6 +157,15 @@ defmodule Bash.AST.Variable do
 
         {:substitute, pattern, replacement, :all} ->
           "${#{name_with_subscript}//#{pattern}/#{replacement}}"
+
+        {:prefix_names, :star} ->
+          "${!#{name}*}"
+
+        {:prefix_names, :at} ->
+          "${!#{name}@}"
+
+        {:transform, op} ->
+          "${#{name_with_subscript}@#{transform_op_char(op)}}"
       end
     end
 
@@ -162,6 +173,16 @@ defmodule Bash.AST.Variable do
     defp format_subscript(:all_values), do: "[@]"
     defp format_subscript(:all_star), do: "[*]"
     defp format_subscript({:index, idx}), do: "[#{idx}]"
+
+    defp transform_op_char(:quote), do: "Q"
+    defp transform_op_char(:escape), do: "E"
+    defp transform_op_char(:prompt), do: "P"
+    defp transform_op_char(:assignment), do: "A"
+    defp transform_op_char(:quoted_keys), do: "K"
+    defp transform_op_char(:keys), do: "k"
+    defp transform_op_char(:attributes), do: "a"
+    defp transform_op_char(:upper), do: "u"
+    defp transform_op_char(:lower), do: "L"
   end
 
   defimpl Inspect do

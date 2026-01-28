@@ -60,7 +60,8 @@ defmodule Bash.AST.Assignment do
         session_state
       ) do
     started_at = DateTime.utc_now()
-    expanded_value = Helpers.word_to_string(value, session_state)
+    # Use word_to_string_with_updates to capture ${x:=default} side effects
+    {expanded_value, value_updates} = Helpers.word_to_string_with_updates(value, session_state)
     completed_at = DateTime.utc_now()
 
     # Resolve the target variable name (follow nameref chain)
@@ -72,12 +73,16 @@ defmodule Bash.AST.Assignment do
     allexport = allexport_enabled?(session_state)
     should_export = export || allexport
 
-    updates =
+    # Build updates for this assignment
+    assignment_updates =
       if should_export do
         %{env_updates: %{target_name => expanded_value}}
       else
         %{var_updates: %{target_name => Bash.Variable.new(expanded_value)}}
       end
+
+    # Merge with any updates from the value expansion (e.g., ${x:=default})
+    updates = merge_updates(assignment_updates, value_updates)
 
     executed_ast = %{
       ast
@@ -87,6 +92,18 @@ defmodule Bash.AST.Assignment do
     }
 
     {:ok, executed_ast, updates}
+  end
+
+  # Merge updates from value expansion into assignment updates
+  defp merge_updates(assignment_updates, value_updates) when map_size(value_updates) == 0 do
+    assignment_updates
+  end
+
+  defp merge_updates(assignment_updates, value_updates) do
+    # Value updates are env_updates (string values) - merge them
+    existing_env = Map.get(assignment_updates, :env_updates, %{})
+    merged_env = Map.merge(value_updates, existing_env)
+    Map.put(assignment_updates, :env_updates, merged_env)
   end
 
   # Follow nameref chain to find the actual target variable
