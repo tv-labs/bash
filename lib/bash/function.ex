@@ -276,14 +276,22 @@ defmodule Bash.Function do
   defp maybe_update_env_vars(state, _), do: state
 
   defp maybe_update_var_updates(state, %{var_updates: var_updates}) do
-    new_variables = Map.merge(state.variables, var_updates)
+    new_variables =
+      state.variables
+      |> Map.merge(var_updates)
+      |> Map.reject(fn {_k, v} -> v == :deleted end)
+
     %{state | variables: new_variables}
   end
 
   defp maybe_update_var_updates(state, _), do: state
 
   defp maybe_update_functions(state, %{function_updates: function_updates}) do
-    new_functions = Map.merge(state.functions, function_updates)
+    new_functions =
+      state.functions
+      |> Map.merge(function_updates)
+      |> Map.reject(fn {_k, v} -> v == :deleted end)
+
     %{state | functions: new_functions}
   end
 

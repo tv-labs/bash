@@ -351,4 +351,58 @@ defmodule Bash.ArithmeticExpansionTest do
       assert get_stdout(result) == "back\\slash\n"
     end
   end
+
+  describe "parameter transformation operators" do
+    setup :start_session
+
+    test "${var@Q} quotes scalar for reuse", %{session: session} do
+      result = run_script(session, ~S|x="hello world"; echo "${x@Q}"|)
+      assert get_stdout(result) == "'hello world'\n"
+    end
+
+    test "${arr[@]@Q} quotes each array element", %{session: session} do
+      result = run_script(session, ~S|arr=(one two three); echo "${arr[@]@Q}"|)
+      assert get_stdout(result) == "'one' 'two' 'three'\n"
+    end
+
+    test "${arr[0]@E} expands escape sequences in element", %{session: session} do
+      result = run_script(session, ~S|arr=(one two); echo "${arr[0]@E}"|)
+      assert get_stdout(result) == "one\n"
+    end
+
+    test "${arr[@]@A} produces assignment statement for indexed array", %{session: session} do
+      result = run_script(session, ~S|arr=(one two three); echo "${arr[@]@A}"|)
+      assert get_stdout(result) == ~s|declare -a arr=([0]="one" [1]="two" [2]="three")\n|
+    end
+
+    test "${arr[@]@a} shows attribute flags for each element", %{session: session} do
+      result = run_script(session, ~S|arr=(one two three); echo "${arr[@]@a}"|)
+      assert get_stdout(result) == "a a a\n"
+    end
+
+    test "${var@a} shows attribute flags for scalar", %{session: session} do
+      result = run_script(session, ~S|x=hello; echo "${x@a}"|)
+      assert get_stdout(result) == "\n"
+    end
+
+    test "${arr[-1]} negative index accesses from end", %{session: session} do
+      result = run_script(session, ~S|arr=(a b c d e); echo "${arr[-1]} ${arr[-2]}"|)
+      assert get_stdout(result) == "e d\n"
+    end
+
+    test "${arr[i]} works inside C-style for loop", %{session: session} do
+      result = run_script(session, ~S|arr=(a b c); for ((i=0; i<3; i++)); do printf "%s" "${arr[i]}"; done; echo|)
+      assert get_stdout(result) == "abc\n"
+    end
+
+    test "${#arr[@]} works in C-style for loop init", %{session: session} do
+      result =
+        run_script(session, """
+        arr=(a b c d e)
+        for ((i=${#arr[@]}-1; i>=0; i--)); do printf "%s" "${arr[i]}"; done; echo
+        """)
+
+      assert get_stdout(result) == "edcba\n"
+    end
+  end
 end

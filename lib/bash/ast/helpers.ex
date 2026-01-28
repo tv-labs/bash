@@ -617,6 +617,31 @@ defmodule Bash.AST.Helpers do
     Enum.join(matching_names, " ")
   end
 
+  # ${arr[@]@op} / ${arr[*]@op} - parameter transformation on array elements
+  defp expand_variable(
+         %AST.Variable{name: var_name, subscript: sub, expansion: {:transform, op}},
+         session_state
+       )
+       when sub in [:all_values, :all_star] do
+    case resolve_variable(session_state, var_name) do
+      nil ->
+        ""
+
+      %Variable{} = var ->
+        values = Variable.all_values(var)
+        apply_array_transform(op, var_name, var, values)
+    end
+  end
+
+  # ${arr[N]@op} - parameter transformation on single array element
+  defp expand_variable(
+         %AST.Variable{name: var_name, subscript: {:index, idx_expr}, expansion: {:transform, op}},
+         session_state
+       ) do
+    value = expand_array_element(session_state, var_name, idx_expr)
+    apply_scalar_transform(op, var_name, value, session_state)
+  end
+
   # ${var@Q} - quote value for reuse as input
   defp expand_variable(
          %AST.Variable{name: var_name, subscript: nil, expansion: {:transform, :quote}},
@@ -709,6 +734,93 @@ defmodule Bash.AST.Helpers do
       nil -> ""
       %Variable{} = var -> Variable.get(var, nil) || ""
     end
+  end
+
+  defp apply_scalar_transform(:quote, _name, value, _session), do: quote_for_reuse(value)
+  defp apply_scalar_transform(:escape, _name, value, _session), do: expand_escape_sequences(value)
+  defp apply_scalar_transform(:prompt, _name, value, _session), do: value
+  defp apply_scalar_transform(:lower, _name, value, _session), do: String.downcase(value)
+
+  defp apply_scalar_transform(:upper, _name, value, _session) do
+    case String.graphemes(value) do
+      [] -> ""
+      [first | rest] -> String.upcase(first) <> Enum.join(rest)
+    end
+  end
+
+  defp apply_scalar_transform(:assignment, name, value, _session) do
+    "#{name}=#{quote_for_reuse(value)}"
+  end
+
+  defp apply_scalar_transform(:attributes, name, _value, session_state) do
+    case resolve_variable(session_state, name) do
+      nil -> ""
+      %Variable{attributes: attrs} -> variable_attribute_flags(attrs)
+    end
+  end
+
+  defp apply_scalar_transform(_op, _name, value, _session), do: value
+
+  defp apply_array_transform(:quote, _name, _var, values) do
+    Enum.map_join(values, " ", &quote_for_reuse/1)
+  end
+
+  defp apply_array_transform(:escape, _name, _var, values) do
+    Enum.map_join(values, " ", &expand_escape_sequences/1)
+  end
+
+  defp apply_array_transform(:assignment, name, var, _values) do
+    case var.attributes[:array_type] do
+      :indexed ->
+        pairs =
+          var.value
+          |> Enum.sort_by(&elem(&1, 0))
+          |> Enum.map_join(" ", fn {k, v} -> "[#{k}]=\"#{v}\"" end)
+
+        "declare -a #{name}=(#{pairs})"
+
+      :associative ->
+        pairs = Enum.map_join(var.value, " ", fn {k, v} -> "[#{k}]=\"#{v}\"" end)
+        "declare -A #{name}=(#{pairs})"
+
+      _ ->
+        "#{name}=#{quote_for_reuse(Variable.get(var, nil) || "")}"
+    end
+  end
+
+  defp apply_array_transform(:attributes, _name, var, _values) do
+    flags = variable_attribute_flags(var.attributes)
+    Enum.map_join(var.value, " ", fn _ -> flags end)
+  end
+
+  defp apply_array_transform(:upper, _name, _var, values) do
+    Enum.map_join(values, " ", fn v ->
+      case String.graphemes(v) do
+        [] -> ""
+        [first | rest] -> String.upcase(first) <> Enum.join(rest)
+      end
+    end)
+  end
+
+  defp apply_array_transform(:lower, _name, _var, values) do
+    Enum.map_join(values, " ", &String.downcase/1)
+  end
+
+  defp apply_array_transform(_op, _name, _var, values) do
+    Enum.join(values, " ")
+  end
+
+  defp variable_attribute_flags(attrs) do
+    flags = []
+    flags = if attrs[:readonly], do: ["r" | flags], else: flags
+    flags = if attrs[:export], do: ["x" | flags], else: flags
+    flags = if attrs[:integer], do: ["i" | flags], else: flags
+    flags = if attrs[:array_type] == :indexed, do: ["a" | flags], else: flags
+    flags = if attrs[:array_type] == :associative, do: ["A" | flags], else: flags
+    flags = if attrs[:nameref], do: ["n" | flags], else: flags
+    flags = if attrs[:lowercase], do: ["l" | flags], else: flags
+    flags = if attrs[:uppercase], do: ["u" | flags], else: flags
+    Enum.join(Enum.reverse(flags), "")
   end
 
   # Expand variable with env updates - only ${var:=default} produces updates

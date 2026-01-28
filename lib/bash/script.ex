@@ -747,9 +747,13 @@ defmodule Bash.Script do
       session_state.variables
       |> Map.merge(var_updates)
       |> Map.merge(env_vars)
+      |> Map.reject(fn {_k, v} -> v == :deleted end)
 
-    # Merge function_updates
-    new_functions = Map.merge(Map.get(session_state, :functions, %{}), function_updates)
+    new_functions =
+      session_state
+      |> Map.get(:functions, %{})
+      |> Map.merge(function_updates)
+      |> Map.reject(fn {_k, v} -> v == :deleted end)
 
     # Merge options if present
     new_options =

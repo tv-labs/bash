@@ -118,6 +118,8 @@ defmodule Bash.AST.ForLoop do
 
     case final_result do
       {:exit, result} -> {:exit, %{executed_ast | exit_code: result.exit_code}}
+      {:break, result, levels} -> {:break, result, levels}
+      {:continue, result, levels} -> {:continue, result, levels}
       _ -> {:ok, executed_ast, %{env_updates: final_env_updates}}
     end
   end
@@ -164,9 +166,10 @@ defmodule Bash.AST.ForLoop do
         meta: AST.Meta.mark_evaluated(ast.meta, started_at, completed_at)
     }
 
-    # Propagate exit control flow
     case final_result do
       {:exit, result} -> {:exit, %{executed_ast | exit_code: result.exit_code}}
+      {:break, result, levels} -> {:break, result, levels}
+      {:continue, result, levels} -> {:continue, result, levels}
       _ -> {:ok, executed_ast, %{env_updates: final_env_updates}}
     end
   end
@@ -271,29 +274,40 @@ defmodule Bash.AST.ForLoop do
   end
 
   defp execute_loop_body([], _session, env_acc) do
-    # Return a synthetic result
     {:ok, %{exit_code: 0}, env_acc}
   end
 
   defp execute_loop_body([stmt | rest], session_state, env_acc) do
-    # Use the accumulated environment from previous statements
+    env_as_vars = Map.new(env_acc, fn {k, v} -> {k, Variable.new(v)} end)
+
+    # Don't overwrite array variables with their flattened scalar from env_acc
+    safe_env_vars =
+      Map.reject(env_as_vars, fn {k, _v} ->
+        match?(
+          %Variable{attributes: %{array_type: type}} when type in [:indexed, :associative],
+          Map.get(session_state.variables, k)
+        )
+      end)
+
     stmt_new_variables =
-      Map.merge(
-        session_state.variables,
-        Map.new(env_acc, fn {k, v} -> {k, Variable.new(v)} end)
-      )
+      session_state.variables
+      |> Map.merge(safe_env_vars)
 
     stmt_session = %{session_state | variables: stmt_new_variables}
 
     case Executor.execute(stmt, stmt_session, nil) do
       {:ok, _result, updates} ->
-        # Collect both env_updates and var_updates (var_updates as string values)
         env_updates = Map.get(updates, :env_updates, %{})
         var_updates = Map.get(updates, :var_updates, %{})
-        # Convert var_updates (Variable structs) to string values for accumulation
-        var_values = Map.new(var_updates, fn {k, v} -> {k, Variable.get(v, nil) || ""} end)
-        new_env = env_acc |> Map.merge(env_updates) |> Map.merge(var_values)
-        execute_loop_body(rest, session_state, new_env)
+
+        # Merge var_updates (Variable structs) directly into session variables
+        # so arrays and other complex types are preserved across statements
+        new_session = %{session_state | variables: Map.merge(stmt_new_variables, var_updates)}
+
+        # Also accumulate string env_updates for the env_acc
+        var_as_env = Map.new(var_updates, fn {k, v} -> {k, Variable.get(v, nil) || ""} end)
+        new_env = env_acc |> Map.merge(env_updates) |> Map.merge(var_as_env)
+        execute_loop_body(rest, new_session, new_env)
 
       {:ok, _result} ->
         execute_loop_body(rest, session_state, env_acc)
@@ -331,7 +345,7 @@ defmodule Bash.AST.ForLoop do
     arith_env = build_arith_env(session_state, env_acc)
 
     # Execute init expression if not empty (e.g., "i=0")
-    arith_env = eval_arith_expr(init, arith_env)
+    arith_env = eval_arith_expr(init, arith_env, session_state)
 
     # Start the loop
     c_style_loop(condition, update, body, session_state, arith_env, env_acc, count)
@@ -339,21 +353,29 @@ defmodule Bash.AST.ForLoop do
 
   defp c_style_loop(condition, update, body, session_state, arith_env, env_acc, count) do
     # Evaluate condition (e.g., "i<3") - empty condition is always true
-    cond_result = eval_arith_condition(condition, arith_env)
+    cond_result = eval_arith_condition(condition, arith_env, session_state)
 
     if cond_result == 0 do
       # Condition is false - exit loop
       {{:ok, nil}, merge_arith_env(env_acc, arith_env), count}
     else
       # Condition is true - execute body
-      # Merge arithmetic env into session state for body execution
+      # Only merge arithmetic-modified variables and body env updates into session,
+      # not the full build_arith_env baseline which flattens arrays to scalars
       merged_env = merge_arith_env(env_acc, arith_env)
+      env_vars = Map.new(merged_env, fn {k, v} -> {k, Variable.new(v)} end)
 
       new_variables =
-        Map.merge(
-          session_state.variables,
-          Map.new(merged_env, fn {k, v} -> {k, Variable.new(v)} end)
-        )
+        Enum.reduce(env_vars, session_state.variables, fn {k, v}, acc ->
+          case Map.get(acc, k) do
+            %Variable{attributes: %{array_type: type}} when type in [:indexed, :associative] ->
+              # Don't overwrite arrays with their flattened scalar
+              acc
+
+            _ ->
+              Map.put(acc, k, v)
+          end
+        end)
 
       updated_session = %{session_state | variables: new_variables}
 
@@ -367,7 +389,7 @@ defmodule Bash.AST.ForLoop do
             end)
 
           # Execute update expression (e.g., "i++")
-          new_arith_env = eval_arith_expr(update, updated_arith_env)
+          new_arith_env = eval_arith_expr(update, updated_arith_env, session_state)
 
           # Continue to next iteration
           c_style_loop(
@@ -391,7 +413,7 @@ defmodule Bash.AST.ForLoop do
                 Map.put(acc, k, to_string(v))
               end)
 
-            new_arith_env = eval_arith_expr(update, updated_arith_env)
+            new_arith_env = eval_arith_expr(update, updated_arith_env, session_state)
 
             c_style_loop(
               condition,
@@ -417,7 +439,7 @@ defmodule Bash.AST.ForLoop do
 
         {:error, _result} ->
           # Continue on error
-          new_arith_env = eval_arith_expr(update, arith_env)
+          new_arith_env = eval_arith_expr(update, arith_env, session_state)
           c_style_loop(condition, update, body, session_state, new_arith_env, env_acc, count + 1)
       end
     end
@@ -440,13 +462,21 @@ defmodule Bash.AST.ForLoop do
 
   # Evaluate arithmetic expression, returning updated env
   # Empty or whitespace-only expressions return env unchanged
-  defp eval_arith_expr(expr, env) when is_binary(expr) do
+  defp eval_arith_expr(expr, env, session_state) when is_binary(expr) do
     trimmed = String.trim(expr)
 
     if trimmed == "" do
       env
     else
-      case ArithParser.parse(trimmed) do
+      # Pre-expand bash parameter expansions (e.g., ${#arr[@]}) before arithmetic parsing
+      expanded =
+        if session_state do
+          pre_expand_arith_expr(trimmed, session_state, env)
+        else
+          trimmed
+        end
+
+      case ArithParser.parse(expanded) do
         {:ok, ast} ->
           case Arith.execute(ast, env) do
             {:ok, _result, new_env} -> new_env
@@ -459,17 +489,24 @@ defmodule Bash.AST.ForLoop do
     end
   end
 
-  defp eval_arith_expr(nil, env), do: env
+  defp eval_arith_expr(nil, env, _session_state), do: env
 
   # Evaluate arithmetic condition, returning 0 (false) or 1 (true)
   # Empty condition is always true (1) in bash
-  defp eval_arith_condition(cond_expr, env) when is_binary(cond_expr) do
+  defp eval_arith_condition(cond_expr, env, session_state) when is_binary(cond_expr) do
     trimmed = String.trim(cond_expr)
 
     if trimmed == "" do
       1
     else
-      case ArithParser.parse(trimmed) do
+      expanded =
+        if session_state do
+          pre_expand_arith_expr(trimmed, session_state, env)
+        else
+          trimmed
+        end
+
+      case ArithParser.parse(expanded) do
         {:ok, ast} ->
           case Arith.execute(ast, env) do
             {:ok, result, _new_env} -> result
@@ -482,7 +519,49 @@ defmodule Bash.AST.ForLoop do
     end
   end
 
-  defp eval_arith_condition(nil, _env), do: 1
+  defp eval_arith_condition(nil, _env, _session_state), do: 1
+
+  defp pre_expand_arith_expr(expr, session_state, arith_env) do
+    # Use session variables for complex expansions like ${#arr[@]},
+    # but overlay scalar arith_env values only for non-array variables
+    env_as_vars = Map.new(arith_env, fn {k, v} -> {k, Variable.new(to_string(v))} end)
+
+    variables =
+      Enum.reduce(env_as_vars, session_state.variables, fn {k, v}, acc ->
+        case Map.get(acc, k) do
+          %Variable{attributes: %{array_type: type}} when type in [:indexed, :associative] ->
+            acc
+
+          _ ->
+            Map.put(acc, k, v)
+        end
+      end)
+
+    # Expand ${#name[@]} and ${#name[*]} (array length) patterns
+    expr = Regex.replace(~r/\$\{#(\w+)\[@\]\}|\$\{#(\w+)\[\*\]\}/, expr, fn _, n1, n2 ->
+      name = if n1 != "", do: n1, else: n2
+      case Map.get(variables, name) do
+        %Variable{} = var -> Integer.to_string(Variable.length(var))
+        _ -> "0"
+      end
+    end)
+
+    # Expand ${#name} (string length)
+    expr = Regex.replace(~r/\$\{#(\w+)\}/, expr, fn _, name ->
+      case Map.get(variables, name) do
+        %Variable{} = var -> Integer.to_string(Variable.length(var))
+        _ -> "0"
+      end
+    end)
+
+    # Expand ${name} simple variable references
+    Regex.replace(~r/\$\{(\w+)\}/, expr, fn _, name ->
+      case Map.get(variables, name) do
+        %Variable{} = var -> Variable.get(var, nil) || "0"
+        _ -> "0"
+      end
+    end)
+  end
 
   alias Bash.AST.Formatter
 

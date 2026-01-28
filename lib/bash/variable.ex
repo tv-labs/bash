@@ -161,8 +161,15 @@ defmodule Bash.Variable do
   def get(%__MODULE__{attributes: %{array_type: nil}, value: v}, 0), do: v
 
   def get(%__MODULE__{attributes: %{array_type: :indexed}, value: map}, idx)
-      when is_integer(idx),
+      when is_integer(idx) and idx >= 0,
       do: Map.get(map, idx, "")
+
+  def get(%__MODULE__{attributes: %{array_type: :indexed}, value: map}, idx)
+      when is_integer(idx) and idx < 0 do
+    max_idx = map |> Map.keys() |> Enum.max(fn -> -1 end)
+    resolved = max_idx + 1 + idx
+    if resolved >= 0, do: Map.get(map, resolved, ""), else: ""
+  end
 
   def get(%__MODULE__{attributes: %{array_type: :associative}, value: map}, key)
       when is_binary(key),

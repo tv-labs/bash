@@ -225,26 +225,16 @@ defmodule Bash.Builtin.Unset do
   end
 
   # Build state updates for deleted variables, functions, and array element updates
-  defp build_updates(var_deletes, func_deletes, array_updates, session_state) do
+  defp build_updates(var_deletes, func_deletes, array_updates, _session_state) do
     updates = %{}
-
-    # Start with array element updates (modified variables)
-    base_variables =
-      if map_size(array_updates) > 0 do
-        Map.merge(session_state.variables, array_updates)
-      else
-        session_state.variables
-      end
 
     # For variables, we need to track which ones to delete
     updates =
       if Enum.empty?(var_deletes) and map_size(array_updates) == 0 do
         updates
       else
-        new_variables =
-          Enum.reduce(var_deletes, base_variables, fn name, vars ->
-            Map.delete(vars, name)
-          end)
+        deleted_vars = Map.new(var_deletes, fn name -> {name, :deleted} end)
+        new_variables = Map.merge(array_updates, deleted_vars)
 
         Map.put(updates, :var_updates, new_variables)
       end
@@ -254,12 +244,10 @@ defmodule Bash.Builtin.Unset do
       if Enum.empty?(func_deletes) do
         updates
       else
-        new_functions =
-          Enum.reduce(func_deletes, session_state.functions, fn name, funcs ->
-            Map.delete(funcs, name)
-          end)
+        deleted_functions =
+          Map.new(func_deletes, fn name -> {name, :deleted} end)
 
-        Map.put(updates, :function_updates, new_functions)
+        Map.put(updates, :function_updates, deleted_functions)
       end
 
     updates

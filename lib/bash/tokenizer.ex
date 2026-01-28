@@ -2456,22 +2456,28 @@ defmodule Bash.Tokenizer do
 
         {:variable_braced, var_name, [{:case_modify, mode}]}
 
+      # ${VAR[sub]@op} - parameter transformation on array element/slice
+      match =
+          Regex.run(
+            ~r/^([A-Za-z_][A-Za-z0-9_]*)\[([^\]]*)\]@([QEPAKkauL])$/s,
+            content
+          ) ->
+        [_, var_name, sub, op] = match
+        transform_op = parse_transform_op(op)
+
+        sub_type =
+          case sub do
+            "@" -> :all_values
+            "*" -> :all_star
+            idx -> {:index, idx}
+          end
+
+        {:variable_braced, var_name, [subscript: sub_type, transform: transform_op]}
+
       # ${VAR@op} - parameter transformation (Q, E, P, A, K, k, a, u, L)
       match = Regex.run(~r/^([A-Za-z_][A-Za-z0-9_]*|[?$!#@*0-9])@([QEPAKkauL])$/s, content) ->
         [_, var_name, op] = match
-
-        transform_op =
-          case op do
-            "Q" -> :quote
-            "E" -> :escape
-            "P" -> :prompt
-            "A" -> :assignment
-            "K" -> :quoted_keys
-            "k" -> :keys
-            "a" -> :attributes
-            "u" -> :upper
-            "L" -> :lower
-          end
+        transform_op = parse_transform_op(op)
 
         {:variable_braced, var_name, [{:transform, transform_op}]}
 
@@ -2554,6 +2560,16 @@ defmodule Bash.Tokenizer do
         {:variable_braced, content, []}
     end
   end
+
+  defp parse_transform_op("Q"), do: :quote
+  defp parse_transform_op("E"), do: :escape
+  defp parse_transform_op("P"), do: :prompt
+  defp parse_transform_op("A"), do: :assignment
+  defp parse_transform_op("K"), do: :quoted_keys
+  defp parse_transform_op("k"), do: :keys
+  defp parse_transform_op("a"), do: :attributes
+  defp parse_transform_op("u"), do: :upper
+  defp parse_transform_op("L"), do: :lower
 
   # Parse offset string for substring expansion
   # Handles: "5", "-5", "(-5)", " -5"
