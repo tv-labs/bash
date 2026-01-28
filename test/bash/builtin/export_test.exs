@@ -6,17 +6,6 @@ defmodule Bash.Builtin.ExportTest do
   alias Bash.Function
   alias Bash.CommandResult
 
-  # Helper to create a minimal session state for testing
-  defp session_state(opts \\ []) do
-    variables = Keyword.get(opts, :variables, %{})
-    functions = Keyword.get(opts, :functions, %{})
-
-    %{
-      variables: variables,
-      functions: functions
-    }
-  end
-
   describe "export without options" do
     test "exports a variable with assignment" do
       state = session_state()
@@ -337,5 +326,15 @@ defmodule Bash.Builtin.ExportTest do
       assert stdout =~ "\\n"
       assert stdout =~ "\\t"
     end
+  end
+
+  defp session_state(opts \\ []) do
+    variables = Keyword.get(opts, :variables, %{})
+    functions = Keyword.get(opts, :functions, %{})
+
+    %{
+      variables: variables,
+      functions: functions
+    }
   end
 end

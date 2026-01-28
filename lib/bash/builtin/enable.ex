@@ -24,7 +24,6 @@ defmodule Bash.Builtin.Enable do
 
   alias Bash.Builtin, as: BuiltinModule
 
-  # POSIX special builtins
   @special_builtins ~w[: . break continue eval exec exit export readonly return set shift trap unset]
 
   defbash execute(args, state) do

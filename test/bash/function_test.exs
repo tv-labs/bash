@@ -190,6 +190,45 @@ defmodule Bash.FunctionTest do
     end
   end
 
+  describe "declare -f multi-line output" do
+    setup :start_session
+
+    test "declare -f shows multi-line function body", %{session: session} do
+      result =
+        run_script(session, ~S"""
+        myfunc() {
+          echo line1
+          echo line2
+          echo line3
+        }
+        declare -f myfunc
+        """)
+
+      stdout = get_stdout(result)
+      assert stdout =~ "myfunc"
+      assert stdout =~ "echo line1"
+      assert stdout =~ "echo line2"
+      assert stdout =~ "echo line3"
+    end
+
+    test "declare -f preserves function structure across lines", %{session: session} do
+      result =
+        run_script(session, ~S"""
+        compute() {
+          local x=1
+          local y=2
+          echo $((x + y))
+        }
+        declare -f compute
+        """)
+
+      stdout = get_stdout(result)
+      assert stdout =~ "local x=1"
+      assert stdout =~ "local y=2"
+      assert stdout =~ "echo"
+    end
+  end
+
   describe "local variables in functions" do
     setup :start_session
 
@@ -236,7 +275,6 @@ defmodule Bash.FunctionTest do
       result = run_script(session, script)
 
       assert result.exit_code == 0
-      # The outer echo should have empty $inner since it was local
       assert get_stdout(result) == "inside\nouter:\n"
     end
 

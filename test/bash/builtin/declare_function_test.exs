@@ -7,33 +7,6 @@ defmodule Bash.Builtin.DeclareFunctionTest do
   alias Bash.AST.Word
   alias Bash.CommandResult
 
-  # Helper to create a minimal session state for testing
-  defp session_state(opts \\ []) do
-    variables = Keyword.get(opts, :variables, %{})
-    functions = Keyword.get(opts, :functions, %{})
-
-    %{
-      variables: variables,
-      functions: functions
-    }
-  end
-
-  # Helper to create a simple function
-  defp make_function(name, command_name, command_arg, opts \\ []) do
-    exported = Keyword.get(opts, :exported, false)
-
-    %Function{
-      name: name,
-      body: [
-        %Command{
-          name: %Word{parts: [{:literal, command_name}]},
-          args: [%Word{parts: [{:literal, command_arg}]}]
-        }
-      ],
-      exported: exported
-    }
-  end
-
   describe "declare -f (show function definitions)" do
     test "lists all functions with their definitions" do
       func1 = make_function("greet", "echo", "Hello")
@@ -247,5 +220,45 @@ defmodule Bash.Builtin.DeclareFunctionTest do
       assert elem(apple_pos, 0) < elem(mango_pos, 0)
       assert elem(mango_pos, 0) < elem(zebra_pos, 0)
     end
+  end
+
+  describe "declare -p output format" do
+    test "uses -- prefix for variables with no flags" do
+      var = Bash.Variable.new("hello")
+      base_state = session_state(variables: %{"myvar" => var})
+
+      {result, stdout, _stderr} =
+        with_output_capture(base_state, fn state ->
+          Declare.execute(["-p", "myvar"], nil, state)
+        end)
+
+      assert {:ok, %CommandResult{exit_code: 0}} = result
+      assert stdout =~ "declare -- myvar=\"hello\""
+    end
+  end
+
+  defp session_state(opts \\ []) do
+    variables = Keyword.get(opts, :variables, %{})
+    functions = Keyword.get(opts, :functions, %{})
+
+    %{
+      variables: variables,
+      functions: functions
+    }
+  end
+
+  defp make_function(name, command_name, command_arg, opts \\ []) do
+    exported = Keyword.get(opts, :exported, false)
+
+    %Function{
+      name: name,
+      body: [
+        %Command{
+          name: %Word{parts: [{:literal, command_name}]},
+          args: [%Word{parts: [{:literal, command_arg}]}]
+        }
+      ],
+      exported: exported
+    }
   end
 end

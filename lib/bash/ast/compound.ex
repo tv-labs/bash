@@ -339,11 +339,13 @@ defmodule Bash.AST.Compound do
     # env_updates: string values that need Variable.new()
     # var_updates: already Variable structs (preserved for arrays like BASH_REMATCH)
     env_vars = Map.new(env_updates, fn {k, v} -> {k, Variable.new(v)} end)
+
     new_variables =
       session_state.variables
       |> Map.merge(env_vars)
       |> Map.merge(var_updates)
       |> Map.reject(fn {_k, v} -> v == :deleted end)
+
     session = %{session_state | variables: new_variables}
     if working_dir, do: %{session | working_dir: working_dir}, else: session
   end

@@ -19,8 +19,8 @@ defmodule Bash.Builtin.ShoptTest do
   alias Bash.CommandResult
 
   describe "shopt with no arguments" do
-    setup do
-      {:ok, session} = Session.start_link(id: "shopt_noargs_#{:erlang.unique_integer()}")
+    setup context do
+      {:ok, session} = Session.start_link(id: "shopt_noargs_#{context.test}")
       {:ok, session: session}
     end
 
@@ -52,8 +52,8 @@ defmodule Bash.Builtin.ShoptTest do
   end
 
   describe "shopt -s (set/enable option)" do
-    setup do
-      {:ok, session} = Session.start_link(id: "shopt_set_#{:erlang.unique_integer()}")
+    setup context do
+      {:ok, session} = Session.start_link(id: "shopt_set_#{context.test}")
       {:ok, session: session}
     end
 
@@ -97,8 +97,8 @@ defmodule Bash.Builtin.ShoptTest do
   end
 
   describe "shopt -u (unset/disable option)" do
-    setup do
-      {:ok, session} = Session.start_link(id: "shopt_unset_#{:erlang.unique_integer()}")
+    setup context do
+      {:ok, session} = Session.start_link(id: "shopt_unset_#{context.test}")
       {:ok, session: session}
     end
 
@@ -138,8 +138,8 @@ defmodule Bash.Builtin.ShoptTest do
   end
 
   describe "shopt -q (quiet mode)" do
-    setup do
-      {:ok, session} = Session.start_link(id: "shopt_quiet_#{:erlang.unique_integer()}")
+    setup context do
+      {:ok, session} = Session.start_link(id: "shopt_quiet_#{context.test}")
       {:ok, session: session}
     end
 
@@ -180,8 +180,8 @@ defmodule Bash.Builtin.ShoptTest do
   end
 
   describe "shopt -p (print in reusable format)" do
-    setup do
-      {:ok, session} = Session.start_link(id: "shopt_print_#{:erlang.unique_integer()}")
+    setup context do
+      {:ok, session} = Session.start_link(id: "shopt_print_#{context.test}")
       {:ok, session: session}
     end
 
@@ -224,8 +224,8 @@ defmodule Bash.Builtin.ShoptTest do
   end
 
   describe "shopt -o (use set -o options)" do
-    setup do
-      {:ok, session} = Session.start_link(id: "shopt_o_#{:erlang.unique_integer()}")
+    setup context do
+      {:ok, session} = Session.start_link(id: "shopt_o_#{context.test}")
       {:ok, session: session}
     end
 
@@ -281,8 +281,8 @@ defmodule Bash.Builtin.ShoptTest do
   end
 
   describe "combined flags" do
-    setup do
-      {:ok, session} = Session.start_link(id: "shopt_combined_#{:erlang.unique_integer()}")
+    setup context do
+      {:ok, session} = Session.start_link(id: "shopt_combined_#{context.test}")
       {:ok, session: session}
     end
 
@@ -311,8 +311,8 @@ defmodule Bash.Builtin.ShoptTest do
   end
 
   describe "error handling" do
-    setup do
-      {:ok, session} = Session.start_link(id: "shopt_errors_#{:erlang.unique_integer()}")
+    setup context do
+      {:ok, session} = Session.start_link(id: "shopt_errors_#{context.test}")
       {:ok, session: session}
     end
 
@@ -339,8 +339,8 @@ defmodule Bash.Builtin.ShoptTest do
   end
 
   describe "option persistence" do
-    setup do
-      {:ok, session} = Session.start_link(id: "shopt_persist_#{:erlang.unique_integer()}")
+    setup context do
+      {:ok, session} = Session.start_link(id: "shopt_persist_#{context.test}")
       {:ok, session: session}
     end
 

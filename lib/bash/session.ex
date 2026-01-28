@@ -96,6 +96,9 @@ defmodule Bash.Session do
     command_history: [],
     in_function: false,
     in_loop: false,
+    call_stack: [],
+    # Runtime snapshot at session start (ms) for `times` builtin
+    start_runtime_ms: 0,
     # Directory stack for pushd/popd/dirs
     dir_stack: [],
     # Traps for signals (EXIT, ERR, DEBUG, RETURN, INT, etc.)
@@ -142,6 +145,9 @@ defmodule Bash.Session do
           elixir_modules: %{String.t() => module()},
           in_function: boolean(),
           in_loop: boolean(),
+          call_stack: [
+            %{line_number: pos_integer(), function_name: String.t(), source_file: String.t()}
+          ],
           dir_stack: [String.t()],
           traps: %{String.t() => String.t() | :ignore},
           file_descriptors: %{non_neg_integer() => String.t()},
@@ -968,6 +974,7 @@ defmodule Bash.Session do
     options = Map.merge(default_options, opts[:options] || %{})
 
     {:ok, job_supervisor} = DynamicSupervisor.start_link(strategy: :one_for_one)
+    {start_runtime_ms, _} = :erlang.statistics(:runtime)
 
     special_vars = %{
       "?" => 0,
@@ -999,6 +1006,7 @@ defmodule Bash.Session do
       previous_job: nil,
       completed_jobs: [],
       command_history: [],
+      start_runtime_ms: start_runtime_ms,
       special_vars: special_vars,
       positional_params: positional_params
     }

@@ -355,7 +355,6 @@ defmodule Bash.Parser do
         state = advance(state)
         {seps, state} = collect_separators(state, [])
 
-        # Add separator after comment if there's a following statement
         new_acc =
           case {seps, peek_for_statement(state)} do
             {[], _} ->

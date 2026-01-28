@@ -32,22 +32,18 @@ defmodule Bash.Builtin.Unset do
     unset_names(names, mode, state)
   end
 
-  # Parse command arguments into mode and names
   @spec parse_args([String.t()]) :: {mode(), [String.t()]}
   defp parse_args(args) do
     parse_options(args, :auto, [])
   end
 
-  # Parse options and collect names
   defp parse_options([], mode, names), do: {mode, Enum.reverse(names)}
 
   defp parse_options(["--" | rest], mode, names) do
-    # -- ends option parsing, rest are all names
     {mode, Enum.reverse(names) ++ rest}
   end
 
   defp parse_options(["-" <> flags | rest], mode, names) when flags != "" do
-    # Parse combined flags like -fv
     new_mode = parse_flags(String.graphemes(flags), mode)
     parse_options(rest, new_mode, names)
   end
@@ -56,15 +52,12 @@ defmodule Bash.Builtin.Unset do
     parse_options(rest, mode, [name | names])
   end
 
-  # Parse individual flag characters
   defp parse_flags([], mode), do: mode
   defp parse_flags(["f" | rest], _mode), do: parse_flags(rest, :function)
   defp parse_flags(["v" | rest], _mode), do: parse_flags(rest, :variable)
   defp parse_flags(["n" | rest], _mode), do: parse_flags(rest, :nameref)
-  # Unknown flags are ignored (bash behavior)
   defp parse_flags([_ | rest], mode), do: parse_flags(rest, mode)
 
-  # Unset the given names according to mode
   defp unset_names(names, mode, session_state) do
     {var_deletes, func_deletes, array_updates, errors} =
       Enum.reduce(names, {[], [], %{}, []}, fn name, {vars, funcs, arr_updates, errs} ->
@@ -72,15 +65,16 @@ defmodule Bash.Builtin.Unset do
           {:ok, :variable} ->
             {[name | vars], funcs, arr_updates, errs}
 
+          {:ok, :variable, resolved_name} ->
+            {[resolved_name | vars], funcs, arr_updates, errs}
+
           {:ok, :function} ->
             {vars, [name | funcs], arr_updates, errs}
 
           {:ok, :array_element, var_name, updated_var} ->
-            # Track array element update
             {vars, funcs, Map.put(arr_updates, var_name, updated_var), errs}
 
           {:ok, :none} ->
-            # Name didn't exist - this is not an error in bash
             {vars, funcs, arr_updates, errs}
 
           {:error, message} ->
@@ -88,10 +82,7 @@ defmodule Bash.Builtin.Unset do
         end
       end)
 
-    # Report errors
     Enum.each(Enum.reverse(errors), fn err -> error(err) end)
-
-    # Build and apply updates
     updates = build_updates(var_deletes, func_deletes, array_updates, session_state)
 
     if map_size(updates) > 0 do
@@ -102,7 +93,6 @@ defmodule Bash.Builtin.Unset do
     {:ok, exit_code}
   end
 
-  # Try to unset a single name
   defp unset_name(name, :variable, session_state) do
     unset_variable(name, session_state)
   end
@@ -112,22 +102,19 @@ defmodule Bash.Builtin.Unset do
   end
 
   defp unset_name(name, :nameref, session_state) do
-    # For nameref, we unset the nameref variable itself, not what it references
-    # Since we don't fully support namerefs yet, just treat as variable
-    unset_variable(name, session_state)
+    unset_nameref_itself(name, session_state)
   end
 
   defp unset_name(name, :auto, session_state) do
-    # Try variable first, then function
     case unset_variable(name, session_state) do
       {:ok, :variable} -> {:ok, :variable}
+      {:ok, :variable, _} = result -> result
       {:ok, :array_element, _, _} = result -> result
       {:ok, :none} -> unset_function(name, session_state)
       {:error, _} = error -> error
     end
   end
 
-  # Unset a variable (or array element if name contains subscript)
   defp unset_variable(name, session_state) do
     case parse_array_subscript(name) do
       {:array_element, var_name, subscript} ->
@@ -141,9 +128,41 @@ defmodule Bash.Builtin.Unset do
           %Variable{attributes: %{readonly: true}} ->
             {:error, "unset: #{name}: cannot unset: readonly variable"}
 
-          %Variable{} ->
-            {:ok, :variable}
+          %Variable{} = var ->
+            case Variable.nameref_target(var) do
+              nil -> {:ok, :variable}
+              target -> resolve_and_unset(target, session_state)
+            end
         end
+    end
+  end
+
+  defp resolve_and_unset(name, session_state) do
+    case Map.get(session_state.variables, name) do
+      nil ->
+        {:ok, :none}
+
+      %Variable{attributes: %{readonly: true}} ->
+        {:error, "unset: #{name}: cannot unset: readonly variable"}
+
+      %Variable{} = var ->
+        case Variable.nameref_target(var) do
+          nil -> {:ok, :variable, name}
+          target -> resolve_and_unset(target, session_state)
+        end
+    end
+  end
+
+  defp unset_nameref_itself(name, session_state) do
+    case Map.get(session_state.variables, name) do
+      nil ->
+        {:ok, :none}
+
+      %Variable{attributes: %{readonly: true}} ->
+        {:error, "unset: #{name}: cannot unset: readonly variable"}
+
+      %Variable{} ->
+        {:ok, :variable}
     end
   end
 
@@ -151,16 +170,13 @@ defmodule Bash.Builtin.Unset do
   defp parse_array_subscript(name) do
     case Regex.run(~r/^([A-Za-z_][A-Za-z0-9_]*)\[([^\]]*)\]$/, name) do
       [_, var_name, subscript] ->
-        # Strip quotes from subscript (same as parser does)
-        clean_subscript = strip_subscript_quotes(subscript)
-        {:array_element, var_name, clean_subscript}
+        {:array_element, var_name, strip_subscript_quotes(subscript)}
 
       nil ->
         :not_array
     end
   end
 
-  # Strip surrounding quotes from subscript
   defp strip_subscript_quotes(str) do
     cond do
       String.starts_with?(str, "\"") and String.ends_with?(str, "\"") ->
@@ -205,13 +221,11 @@ defmodule Bash.Builtin.Unset do
             {:ok, :none}
         end
 
+      %Variable{} when subscript == "0" ->
+        {:ok, :variable}
+
       %Variable{} ->
-        # Scalar variable - unset treats arr[0] as full unset
-        if subscript == "0" do
-          {:ok, :variable}
-        else
-          {:ok, :none}
-        end
+        {:ok, :none}
     end
   end
 

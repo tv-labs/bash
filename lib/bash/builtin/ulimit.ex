@@ -297,10 +297,8 @@ defmodule Bash.Builtin.Ulimit do
     end
   end
 
-  # Try to get system limits from Erlang VM
   defp get_system_limit(:open_files) do
     try do
-      # Erlang's max file descriptors
       :erlang.system_info(:check_io) |> Keyword.get(:max_fds, 1024)
     rescue
       _ -> 1024
@@ -316,14 +314,12 @@ defmodule Bash.Builtin.Ulimit do
   end
 
   defp get_system_limit(:pending_signals) do
-    # Typical Linux default
     15649
   end
 
   # Format a limit line for -a output
   defp format_limit_line(name, unit, value) do
     value_str = format_value(value)
-    # Left-pad the name to align with bash output
     padded_name = String.pad_trailing(name, 25)
     "#{padded_name} #{unit} #{value_str}"
   end

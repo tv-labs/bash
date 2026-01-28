@@ -7,7 +7,10 @@ defmodule Bash.FileDescriptorTest do
   setup :start_session
 
   describe "file descriptor read and write" do
-    test "exec 3>file opens fd for writing, >&3 redirects to it", %{session: session, tmp_dir: tmp_dir} do
+    test "exec 3>file opens fd for writing, >&3 redirects to it", %{
+      session: session,
+      tmp_dir: tmp_dir
+    } do
       path = Path.join(tmp_dir, "output.txt")
 
       result =
@@ -21,7 +24,10 @@ defmodule Bash.FileDescriptorTest do
       assert File.read!(path) == "hello\n"
     end
 
-    test "exec 3<file opens fd for reading, read -u 3 consumes lines", %{session: session, tmp_dir: tmp_dir} do
+    test "exec 3<file opens fd for reading, read -u 3 consumes lines", %{
+      session: session,
+      tmp_dir: tmp_dir
+    } do
       path = Path.join(tmp_dir, "input.txt")
       File.write!(path, "line1\nline2\n")
 
@@ -52,7 +58,10 @@ defmodule Bash.FileDescriptorTest do
       assert File.read!(path) == "existing\nappended\n"
     end
 
-    test ">&3 after exec 3>&- errors with bad file descriptor", %{session: session, tmp_dir: tmp_dir} do
+    test ">&3 after exec 3>&- errors with bad file descriptor", %{
+      session: session,
+      tmp_dir: tmp_dir
+    } do
       path = Path.join(tmp_dir, "output.txt")
 
       result =

@@ -93,7 +93,16 @@ defmodule Bash.AST.Variable do
           | {:remove_suffix, AST.Word.t(), :shortest | :longest}
           | {:substitute, pattern :: AST.Word.t(), replacement :: AST.Word.t(), :first | :all}
           | {:prefix_names, :star | :at}
-          | {:transform, :quote | :escape | :prompt | :assignment | :quoted_keys | :keys | :attributes | :upper | :lower}
+          | {:transform,
+             :quote
+             | :escape
+             | :prompt
+             | :assignment
+             | :quoted_keys
+             | :keys
+             | :attributes
+             | :upper
+             | :lower}
 
   @type t :: %__MODULE__{
           meta: AST.Meta.t(),

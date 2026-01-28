@@ -110,9 +110,9 @@ defmodule Bash.Builtin do
     quote do
       @doc false
       def execute(args_internal__, stdin, state_internal__) do
-        # Merge stdin into state if provided and not already present
+        # Merge stdin into state if provided via redirect (e.g., here-string, heredoc, pipe)
         state_with_stdin =
-          if stdin != nil and not Map.has_key?(state_internal__, :stdin) do
+          if stdin != nil do
             Map.put(state_internal__, :stdin, stdin)
           else
             state_internal__

@@ -102,8 +102,11 @@ defmodule Bash.Builtin.Printf do
 
   # Process octal escapes like \0123
   defp process_octal_escapes(string) do
-    Regex.replace(~r/\\0([0-7]{1,3})/, string, fn _, digits ->
-      <<String.to_integer(digits, 8)::utf8>>
+    Regex.replace(~r/\\0([0-7]{0,3})/, string, fn _, digits ->
+      case digits do
+        "" -> <<0>>
+        _ -> <<String.to_integer(digits, 8)>>
+      end
     end)
   end
 
@@ -460,7 +463,6 @@ defmodule Bash.Builtin.Printf do
     end
   end
 
-  # Parse a string as a float
   defp parse_float(arg) when is_float(arg), do: arg
   defp parse_float(arg) when is_integer(arg), do: arg * 1.0
 
@@ -473,7 +475,6 @@ defmodule Bash.Builtin.Printf do
     end
   end
 
-  # Quote a string for shell reuse
   defp quote_for_shell(str) do
     if String.match?(str, ~r/^[a-zA-Z0-9_\-\.\/]+$/) do
       str

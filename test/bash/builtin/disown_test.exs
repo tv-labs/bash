@@ -10,7 +10,6 @@ defmodule Bash.Builtin.DisownTest do
 
   setup :start_session
 
-  # Helper to wait for a condition with timeout
   defp wait_until(fun, timeout_ms, interval_ms \\ 50) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
 

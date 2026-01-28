@@ -94,7 +94,14 @@ defmodule Bash.Builtin.Source do
       {:ok, script} ->
         # Execute script in current session context
         # Output flows directly through sinks during execution
-        case Script.execute(script, nil, session_state) do
+        # Clear EXIT trap so nested execution doesn't fire it
+        nested_state = %{
+          session_state
+          | traps: Map.delete(session_state.traps, "EXIT"),
+            in_function: true
+        }
+
+        case Script.execute(script, nil, nested_state) do
           {:ok, result, updates} when is_map(updates) ->
             {:ok, result.exit_code || 0, updates}
 

@@ -473,7 +473,11 @@ defmodule Bash.AST.Helpers do
   # NOTE: This returns just the value; for the assignment side effect,
   # use expand_variable_with_updates/2
   defp expand_variable(
-         %AST.Variable{name: var_name, subscript: nil, expansion: {:assign_default, default_value}},
+         %AST.Variable{
+           name: var_name,
+           subscript: nil,
+           expansion: {:assign_default, default_value}
+         },
          session_state
        ) do
     value = get_scalar_value(session_state, var_name)
@@ -635,7 +639,11 @@ defmodule Bash.AST.Helpers do
 
   # ${arr[N]@op} - parameter transformation on single array element
   defp expand_variable(
-         %AST.Variable{name: var_name, subscript: {:index, idx_expr}, expansion: {:transform, op}},
+         %AST.Variable{
+           name: var_name,
+           subscript: {:index, idx_expr},
+           expansion: {:transform, op}
+         },
          session_state
        ) do
     value = expand_array_element(session_state, var_name, idx_expr)
@@ -826,7 +834,11 @@ defmodule Bash.AST.Helpers do
   # Expand variable with env updates - only ${var:=default} produces updates
   # Returns {result, env_updates}
   defp expand_variable_with_updates(
-         %AST.Variable{name: var_name, subscript: nil, expansion: {:assign_default, default_value}},
+         %AST.Variable{
+           name: var_name,
+           subscript: nil,
+           expansion: {:assign_default, default_value}
+         },
          session_state
        ) do
     value = get_scalar_value(session_state, var_name)
@@ -1416,7 +1428,10 @@ defmodule Bash.AST.Helpers do
   defp is_special_var?(_), do: false
 
   # Check if variable name is a dynamic variable (computed on access)
-  defp is_dynamic_var?(name) when name in ~w(RANDOM LINENO SECONDS PPID BASH_VERSION), do: true
+  defp is_dynamic_var?(name)
+       when name in ~w(RANDOM LINENO SECONDS PPID BASH_VERSION EPOCHSECONDS EPOCHREALTIME),
+       do: true
+
   defp is_dynamic_var?(_), do: false
 
   # Get dynamic variable value
@@ -1437,6 +1452,17 @@ defmodule Bash.AST.Helpers do
   end
 
   defp get_dynamic_var("BASH_VERSION", _session_state), do: "5.3.3(1)-release"
+
+  defp get_dynamic_var("EPOCHSECONDS", _session_state),
+    do: System.os_time(:second) |> to_string()
+
+  defp get_dynamic_var("EPOCHREALTIME", _session_state) do
+    microseconds = System.os_time(:microsecond)
+    seconds = div(microseconds, 1_000_000)
+    remainder = rem(microseconds, 1_000_000)
+    "#{seconds}.#{String.pad_leading(to_string(remainder), 6, "0")}"
+  end
+
   defp get_dynamic_var(_, _), do: ""
 
   # Check if variable name is a positional parameter (1-9 or multi-digit)

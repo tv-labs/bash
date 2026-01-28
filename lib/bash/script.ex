@@ -64,7 +64,14 @@ defmodule Bash.Script do
 
   Output is written to sinks during execution. Read from the collector after execution.
   """
-  def execute(%__MODULE__{statements: statements, meta: meta} = script, _stdin, session_state) do
+  def execute(script, stdin, session_state, _opts \\ [])
+
+  def execute(
+        %__MODULE__{statements: statements, meta: meta} = script,
+        _stdin,
+        session_state,
+        _opts
+      ) do
     started_at = DateTime.utc_now()
 
     {executed_statements, final_exit_code, _accumulated_output, merged_updates, final_result} =
@@ -92,7 +99,6 @@ defmodule Bash.Script do
     # Get the final session state with all accumulated updates for EXIT trap
     final_session = apply_updates_to_session(session_state, merged_updates)
 
-    # Execute EXIT trap before returning (unless it's a background job or job control)
     case final_result do
       :ok when pending_bg != nil ->
         # Script completed but there's a background job to start
@@ -326,6 +332,10 @@ defmodule Bash.Script do
           # Check onecmd (-t): if enabled, exit after executing one command
           # Pass stmt_updates to onecmd_triggered? to avoid triggering on the command that sets it
           cond do
+            return_in_source?(executed_stmt, updated_session) ->
+              {Enum.reverse([executed_stmt | executed]) ++ rest, exit_code, new_output,
+               new_updates, :ok}
+
             errexit_triggered?(exit_code, new_updates, updated_session) ->
               {Enum.reverse([executed_stmt | executed]) ++ rest, exit_code, new_output,
                new_updates, :exit}
@@ -353,9 +363,11 @@ defmodule Bash.Script do
           # Update PIPESTATUS for subsequent statements
           new_updates = add_pipestatus_update(new_updates, executed_stmt, exit_code)
 
-          # Check errexit: if enabled and command failed, stop execution
-          # Check onecmd (-t): if enabled, exit after executing one command
           cond do
+            return_in_source?(executed_stmt, updated_session) ->
+              {Enum.reverse([executed_stmt | executed]) ++ rest, exit_code, new_output,
+               new_updates, :ok}
+
             errexit_triggered?(exit_code, new_updates, updated_session) ->
               {Enum.reverse([executed_stmt | executed]) ++ rest, exit_code, new_output,
                new_updates, :exit}
@@ -603,6 +615,15 @@ defmodule Bash.Script do
 
     Variable.new_indexed_array(indexed_values)
   end
+
+  defp return_in_source?(
+         %AST.Command{name: %AST.Word{parts: [{:literal, "return"}]}},
+         session_state
+       ) do
+    Map.get(session_state, :in_function, false)
+  end
+
+  defp return_in_source?(_, _), do: false
 
   # Check if noexec (-n) option is enabled
   defp noexec_enabled?(state) do

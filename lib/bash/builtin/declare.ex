@@ -457,7 +457,7 @@ defmodule Bash.Builtin.Declare do
       |> maybe_add_flag(attributes.export, "x")
 
     if Enum.empty?(flags) do
-      ""
+      "-- "
     else
       "-" <> Enum.join(flags, "") <> " "
     end

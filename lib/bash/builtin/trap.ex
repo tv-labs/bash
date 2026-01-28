@@ -95,10 +95,8 @@ defmodule Bash.Builtin.Trap do
     "SIGUSR2" => 31
   }
 
-  # All signals combined
   @all_signals Map.merge(@pseudo_signals, @standard_signals)
 
-  # Signal number to canonical name mapping
   @signal_numbers %{
     0 => "EXIT",
     1 => "HUP",

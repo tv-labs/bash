@@ -57,7 +57,10 @@ defmodule Bash.Builtin.Eval do
       {:ok, script} ->
         # Execute the parsed script in the current session context
         # Output flows directly through sinks during execution
-        case Script.execute(script, nil, session_state) do
+        # Clear EXIT trap so nested execution doesn't fire it
+        nested_state = %{session_state | traps: Map.delete(session_state.traps, "EXIT")}
+
+        case Script.execute(script, nil, nested_state) do
           {:ok, result, updates} when is_map(updates) ->
             {:ok, result.exit_code || 0, updates}
 

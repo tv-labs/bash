@@ -538,21 +538,24 @@ defmodule Bash.AST.ForLoop do
       end)
 
     # Expand ${#name[@]} and ${#name[*]} (array length) patterns
-    expr = Regex.replace(~r/\$\{#(\w+)\[@\]\}|\$\{#(\w+)\[\*\]\}/, expr, fn _, n1, n2 ->
-      name = if n1 != "", do: n1, else: n2
-      case Map.get(variables, name) do
-        %Variable{} = var -> Integer.to_string(Variable.length(var))
-        _ -> "0"
-      end
-    end)
+    expr =
+      Regex.replace(~r/\$\{#(\w+)\[@\]\}|\$\{#(\w+)\[\*\]\}/, expr, fn _, n1, n2 ->
+        name = if n1 != "", do: n1, else: n2
+
+        case Map.get(variables, name) do
+          %Variable{} = var -> Integer.to_string(Variable.length(var))
+          _ -> "0"
+        end
+      end)
 
     # Expand ${#name} (string length)
-    expr = Regex.replace(~r/\$\{#(\w+)\}/, expr, fn _, name ->
-      case Map.get(variables, name) do
-        %Variable{} = var -> Integer.to_string(Variable.length(var))
-        _ -> "0"
-      end
-    end)
+    expr =
+      Regex.replace(~r/\$\{#(\w+)\}/, expr, fn _, name ->
+        case Map.get(variables, name) do
+          %Variable{} = var -> Integer.to_string(Variable.length(var))
+          _ -> "0"
+        end
+      end)
 
     # Expand ${name} simple variable references
     Regex.replace(~r/\$\{(\w+)\}/, expr, fn _, name ->

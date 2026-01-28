@@ -391,7 +391,12 @@ defmodule Bash.ArithmeticExpansionTest do
     end
 
     test "${arr[i]} works inside C-style for loop", %{session: session} do
-      result = run_script(session, ~S|arr=(a b c); for ((i=0; i<3; i++)); do printf "%s" "${arr[i]}"; done; echo|)
+      result =
+        run_script(
+          session,
+          ~S|arr=(a b c); for ((i=0; i<3; i++)); do printf "%s" "${arr[i]}"; done; echo|
+        )
+
       assert get_stdout(result) == "abc\n"
     end
 

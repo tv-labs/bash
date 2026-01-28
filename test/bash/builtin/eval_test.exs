@@ -15,8 +15,8 @@ defmodule Bash.Builtin.EvalTest do
   }
 
   describe "basic eval" do
-    setup do
-      {:ok, session} = Session.start_link(id: "eval_basic_#{:erlang.unique_integer()}")
+    setup context do
+      {:ok, session} = Session.start_link(id: "eval_basic_#{context.test}")
       {:ok, session: session}
     end
 
@@ -244,6 +244,27 @@ defmodule Bash.Builtin.EvalTest do
 
       assert result.exit_code == 0
       assert get_stdout(result) == "hello\n"
+    end
+  end
+
+  describe "EXIT trap with eval" do
+    setup do
+      {:ok, session} = Session.start_link(id: "eval_trap_#{:erlang.unique_integer()}")
+      {:ok, session: session}
+    end
+
+    test "EXIT trap fires only once, not from nested eval", %{session: session} do
+      result =
+        run_script(session, """
+        trap 'echo EXIT_FIRED' EXIT
+        eval 'echo from_eval'
+        """)
+
+      stdout = get_stdout(result)
+      assert stdout =~ "from_eval"
+      # EXIT trap should fire exactly once (at script end), not from eval's Script.execute
+      occurrences = length(String.split(stdout, "EXIT_FIRED")) - 1
+      assert occurrences == 1
     end
   end
 end

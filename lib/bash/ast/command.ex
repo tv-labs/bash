@@ -140,7 +140,8 @@ defmodule Bash.AST.Command do
                 expanded_args,
                 exec_session,
                 effective_stdin,
-                redirects
+                redirects,
+                ast.meta
               )
             end
 
@@ -570,18 +571,22 @@ defmodule Bash.AST.Command do
   end
 
   # Dispatch order: functions -> elixir interop -> builtins -> external
-  defp resolve_and_execute(command_name, args, session_state, stdin, redirects) do
-    with nil <- try_bash_function(command_name, args, session_state),
+  defp resolve_and_execute(command_name, args, session_state, stdin, redirects, meta) do
+    with nil <- try_bash_function(command_name, args, session_state, meta),
          nil <- try_elixir_interop(command_name, args, stdin, session_state),
          nil <- try_builtin(command_name, args, stdin, session_state) do
       execute_external_command(command_name, args, session_state, stdin, redirects)
     end
   end
 
-  defp try_bash_function(command_name, args, session_state) do
+  defp try_bash_function(command_name, args, session_state, meta) do
     case Map.get(session_state.functions, command_name) do
-      %Function{} = func -> Function.call(func, args, session_state)
-      nil -> nil
+      %Function{} = func ->
+        caller_line = if meta, do: meta.line, else: 0
+        Function.call(func, args, session_state, caller_line: caller_line)
+
+      nil ->
+        nil
     end
   end
 

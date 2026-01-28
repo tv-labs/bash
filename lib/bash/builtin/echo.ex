@@ -22,10 +22,8 @@ defmodule Bash.Builtin.Echo do
 
   defbash execute(args, _state) do
     {flags, text_args} = parse_flags(args)
-
     text = Enum.join(text_args, " ")
 
-    # Apply escape sequence interpretation if enabled
     {text, suppress_output} =
       if flags.interpret_escapes do
         interpret_escapes(text)
@@ -42,7 +40,6 @@ defmodule Bash.Builtin.Echo do
     :ok
   end
 
-  # Parse echo flags (-n, -e, -E)
   defp parse_flags(args) do
     parse_flags(args, %{no_newline: false, interpret_escapes: false}, [])
   end
@@ -64,13 +61,11 @@ defmodule Bash.Builtin.Echo do
   end
 
   defp parse_flags(["-" <> arg | rest], flags, acc) when byte_size(arg) > 0 do
-    # Could be combined flags like "-ne"
     case parse_combined_flags(arg, flags) do
       {:ok, new_flags} ->
         parse_flags(rest, new_flags, acc)
 
       :error ->
-        # Not valid flags, treat as regular argument
         {flags, Enum.reverse(acc, ["-" <> arg | rest])}
     end
   end

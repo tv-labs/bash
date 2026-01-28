@@ -276,7 +276,7 @@ defmodule Bash.Builtin.Read do
   defp expand_combined_flags(flags) do
     chars = String.graphemes(flags)
 
-    if Enum.all?(chars, &(&1 in ~w[r s e])) do
+    if Enum.all?(chars, &(&1 in ~w[r s e a])) do
       {:ok, Enum.map(chars, &("-" <> &1))}
     else
       :not_combined

@@ -16,7 +16,7 @@ defmodule Bash.Builtin.Unalias do
   defbash execute(args, state) do
     case parse_args(args) do
       {:remove_all} ->
-        remove_all_aliases()
+        update_state(alias_updates: :clear_all)
 
       {:remove, names} when names != [] ->
         remove_aliases(names, state)
@@ -27,7 +27,6 @@ defmodule Bash.Builtin.Unalias do
     end
   end
 
-  # Parse command arguments
   defp parse_args([]), do: {:error, "usage: unalias [-a] name [name ...]"}
   defp parse_args(["-a"]), do: {:remove_all}
   defp parse_args(["-a" | rest]) when rest != [], do: {:remove_all}
@@ -35,13 +34,6 @@ defmodule Bash.Builtin.Unalias do
   defp parse_args(["--"]), do: {:error, "usage: unalias [-a] name [name ...]"}
   defp parse_args(args), do: {:remove, args}
 
-  # Remove all aliases
-  defp remove_all_aliases do
-    update_state(alias_updates: :clear_all)
-    :ok
-  end
-
-  # Remove specific aliases
   defp remove_aliases(names, session_state) do
     aliases = Map.get(session_state, :aliases, %{})
 

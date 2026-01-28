@@ -203,4 +203,83 @@ defmodule Bash.CaseTest do
       assert get_stdout(result) == "matched\n"
     end
   end
+
+  describe ";& fallthrough" do
+    setup do
+      {:ok, session} = Session.start_link(id: "case_fallthrough_#{:erlang.unique_integer()}")
+      {:ok, session: session}
+    end
+
+    test ";& executes the next clause unconditionally", %{session: session} do
+      result =
+        run_script(session, """
+        case foo in
+          foo) echo first ;&
+          bar) echo second ;;
+          baz) echo third ;;
+        esac
+        """)
+
+      assert get_stdout(result) == "first\nsecond\n"
+    end
+
+    test ";& falls through multiple clauses", %{session: session} do
+      result =
+        run_script(session, """
+        case foo in
+          foo) echo first ;&
+          bar) echo second ;&
+          baz) echo third ;;
+        esac
+        """)
+
+      assert get_stdout(result) == "first\nsecond\nthird\n"
+    end
+  end
+
+  describe ";;& continue matching" do
+    setup do
+      {:ok, session} = Session.start_link(id: "case_continue_#{:erlang.unique_integer()}")
+      {:ok, session: session}
+    end
+
+    test ";;& continues testing subsequent patterns", %{session: session} do
+      result =
+        run_script(session, """
+        case foo in
+          f*) echo glob_match ;;&
+          foo) echo exact_match ;;&
+          bar) echo no_match ;;
+        esac
+        """)
+
+      assert get_stdout(result) == "glob_match\nexact_match\n"
+    end
+
+    test ";;& skips non-matching clauses", %{session: session} do
+      result =
+        run_script(session, """
+        case foo in
+          f*) echo first ;;&
+          bar) echo second ;;&
+          *) echo default ;;
+        esac
+        """)
+
+      assert get_stdout(result) == "first\ndefault\n"
+    end
+
+    test ";;& stops at ;; terminator", %{session: session} do
+      result =
+        run_script(session, """
+        case foo in
+          f*) echo first ;;&
+          foo) echo second ;;
+          *) echo default ;;
+        esac
+        """)
+
+      assert get_stdout(result) == "first\nsecond\n"
+    end
+  end
 end

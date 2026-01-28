@@ -92,18 +92,30 @@ defmodule Bash.Function do
   - If `errtrace` option (`set -E`) is enabled, the ERR trap is inherited by the function
   - If `functrace` option (`set -T`) is enabled, the DEBUG trap is inherited by the function
   """
-  def call(func_def, args, session_state) do
+  def call(func_def, args, session_state, opts \\ []) do
     # Push args onto positional_params stack (they become $1, $2, etc.)
     current_params = Map.get(session_state, :positional_params, [[]])
 
     # Build inherited traps based on errtrace and functrace options
     inherited_traps = build_inherited_traps(session_state)
 
+    # Build call stack frame from caller metadata
+    caller_line = Keyword.get(opts, :caller_line, 0)
+    source_file = Map.get(session_state.special_vars, "0", "bash")
+    current_stack = Map.get(session_state, :call_stack, [])
+
+    frame = %{
+      line_number: caller_line,
+      function_name: func_def.name,
+      source_file: source_file
+    }
+
     func_state = %{
       session_state
       | in_function: true,
         positional_params: [args | current_params],
-        traps: inherited_traps
+        traps: inherited_traps,
+        call_stack: [frame | current_stack]
     }
 
     # Execute each statement in the function body
