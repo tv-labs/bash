@@ -104,6 +104,7 @@ defmodule Bash.MixProject do
           Bash.AST.Command,
           Bash.AST.Comment,
           Bash.AST.Compound,
+          Bash.AST.Coproc,
           Bash.AST.ForLoop,
           Bash.AST.If,
           Bash.AST.Meta,
@@ -113,6 +114,7 @@ defmodule Bash.MixProject do
           Bash.AST.TestCommand,
           Bash.AST.TestExpression,
           Bash.AST.Variable,
+          Bash.AST.Walkable,
           Bash.AST.WhileLoop,
           Bash.AST.Word
         ],

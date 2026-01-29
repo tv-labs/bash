@@ -1052,13 +1052,15 @@ defmodule Bash.AST.Helpers do
   end
 
   defp expand_extglob_pattern(pattern, session_state) do
-    {is_absolute, has_dot_prefix, dir, file_pattern} = split_glob_dir_and_pattern(pattern, session_state)
+    {is_absolute, has_dot_prefix, dir, file_pattern} =
+      split_glob_dir_and_pattern(pattern, session_state)
 
     regex = glob_to_regex(file_pattern)
 
     case Regex.compile("^#{regex}$") do
       {:ok, compiled} ->
-        listing_dir = if is_absolute, do: dir, else: Path.join(session_state.working_dir, dir || "")
+        listing_dir =
+          if is_absolute, do: dir, else: Path.join(session_state.working_dir, dir || "")
 
         case File.ls(listing_dir) do
           {:ok, entries} ->

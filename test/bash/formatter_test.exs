@@ -496,8 +496,7 @@ defmodule Bash.FormatterTest do
       "mixed compound" => "cmd1 && cmd2 || cmd3",
       "if" => "if true; then echo yes; fi",
       "if-else" => "if true; then echo yes; else echo no; fi",
-      "if-elif-else" =>
-        "if true; then echo 1; elif false; then echo 2; else echo 3; fi",
+      "if-elif-else" => "if true; then echo 1; elif false; then echo 2; else echo 3; fi",
       "for loop" => "for i in 1 2 3; do echo $i; done",
       "while loop" => "while true; do echo loop; done",
       "until loop" => "until false; do echo loop; done",
@@ -537,10 +536,8 @@ defmodule Bash.FormatterTest do
       "comment" => "# this is a comment",
       "double quotes" => ~s{echo "hello world"},
       "single quotes" => "echo 'hello world'",
-      "nested loops" =>
-        "for i in 1 2; do\n  for j in a b; do\n    echo $i$j\n  done\ndone",
-      "pipeline with redirects" =>
-        "cat file.txt | grep pattern > output.txt 2>&1"
+      "nested loops" => "for i in 1 2; do\n  for j in a b; do\n    echo $i$j\n  done\ndone",
+      "pipeline with redirects" => "cat file.txt | grep pattern > output.txt 2>&1"
     }
 
     for {label, input} <- @roundtrip_inputs do

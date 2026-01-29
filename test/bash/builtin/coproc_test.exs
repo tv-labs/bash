@@ -205,7 +205,7 @@ defmodule Bash.Builtin.CoprocTest do
       pid_memory_growth = pid_memory_after - pid_memory_before
 
       assert pid_memory_growth < @one_mb,
-            "Process memory grew by #{div(pid_memory_growth, 1024)}KB — data may be buffered"
+             "Process memory grew by #{div(pid_memory_growth, 1024)}KB — data may be buffered"
 
       assert vm_memory_growth < @one_mb,
              "BEAM process memory grew by #{div(vm_memory_growth, 1024)}KB — data may be buffered"

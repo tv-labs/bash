@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## unreleased
 
+- Add `mix bash.format` and `mix bash.validate` tasks
 - Improve formatter to not rely on regex
 - Support extglob
 - Support file descriptors 3+.

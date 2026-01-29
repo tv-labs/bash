@@ -702,10 +702,11 @@ defmodule Bash.ASTTest do
       ls -la
       """
 
-      result = AST.prewalk(script, fn
-        node when command_name(node) == "rm" -> nil
-        node -> node
-      end)
+      result =
+        AST.prewalk(script, fn
+          node when command_name(node) == "rm" -> nil
+          node -> node
+        end)
 
       commands = collect_commands(result)
       assert "rm" not in commands
@@ -715,10 +716,11 @@ defmodule Bash.ASTTest do
     test "is_command/2 in walker" do
       script = ~BASH"echo safe; rm danger; ls files"
 
-      result = AST.prewalk(script, fn
-        node when is_command(node, "rm") -> nil
-        node -> node
-      end)
+      result =
+        AST.prewalk(script, fn
+          node when is_command(node, "rm") -> nil
+          node -> node
+        end)
 
       commands = collect_commands(result)
       assert commands == ["echo", "ls"]
@@ -730,10 +732,11 @@ defmodule Bash.ASTTest do
       echo hello
       """
 
-      count = AST.reduce(script, 0, fn
-        node, _acc when is_command(node, "echo") -> 1
-        _, acc -> acc
-      end)
+      count =
+        AST.reduce(script, 0, fn
+          node, _acc when is_command(node, "echo") -> 1
+          _, acc -> acc
+        end)
 
       assert count == 1
     end
@@ -741,10 +744,11 @@ defmodule Bash.ASTTest do
     test "command_name/1 in reduce" do
       script = ~BASH"cat file | grep pattern | sort"
 
-      names = AST.reduce(script, [], fn
-        node, acc when is_struct(node, Command) -> [command_name(node) | acc]
-        _, acc -> acc
-      end)
+      names =
+        AST.reduce(script, [], fn
+          node, acc when is_struct(node, Command) -> [command_name(node) | acc]
+          _, acc -> acc
+        end)
 
       assert Enum.sort(names) == ["cat", "grep", "sort"]
     end
@@ -756,11 +760,12 @@ defmodule Bash.ASTTest do
       echo hello
       """
 
-      names = AST.reduce(script, [], fn
-        node, acc when is_assignment(node, "PATH") -> ["PATH" | acc]
-        node, acc when is_struct(node, Bash.AST.Assignment) -> [assignment_name(node) | acc]
-        _, acc -> acc
-      end)
+      names =
+        AST.reduce(script, [], fn
+          node, acc when is_assignment(node, "PATH") -> ["PATH" | acc]
+          node, acc when is_struct(node, Bash.AST.Assignment) -> [assignment_name(node) | acc]
+          _, acc -> acc
+        end)
 
       assert "PATH" in names
       assert "HOME" in names
@@ -773,15 +778,17 @@ defmodule Bash.ASTTest do
       Z=3
       """
 
-      result = AST.prewalk(script, fn
-        node when is_assignment(node, "Y") -> nil
-        node -> node
-      end)
+      result =
+        AST.prewalk(script, fn
+          node when is_assignment(node, "Y") -> nil
+          node -> node
+        end)
 
-      names = AST.reduce(result, [], fn
-        node, acc when is_struct(node, Bash.AST.Assignment) -> [assignment_name(node) | acc]
-        _, acc -> acc
-      end)
+      names =
+        AST.reduce(result, [], fn
+          node, acc when is_struct(node, Bash.AST.Assignment) -> [assignment_name(node) | acc]
+          _, acc -> acc
+        end)
 
       assert Enum.sort(names) == ["X", "Z"]
     end
@@ -795,19 +802,21 @@ defmodule Bash.ASTTest do
       echo end
       """
 
-      result = AST.prewalk(script, fn
-        node when is_command(node, "rm") -> nil
-        node when is_assignment(node, "X") -> nil
-        node -> node
-      end)
+      result =
+        AST.prewalk(script, fn
+          node when is_command(node, "rm") -> nil
+          node when is_assignment(node, "X") -> nil
+          node -> node
+        end)
 
       commands = collect_commands(result)
       assert commands == ["echo", "ls", "echo"]
 
-      assignments = AST.reduce(result, [], fn
-        node, acc when is_struct(node, Bash.AST.Assignment) -> [assignment_name(node) | acc]
-        _, acc -> acc
-      end)
+      assignments =
+        AST.reduce(result, [], fn
+          node, acc when is_struct(node, Bash.AST.Assignment) -> [assignment_name(node) | acc]
+          _, acc -> acc
+        end)
 
       assert assignments == []
     end
@@ -820,10 +829,11 @@ defmodule Bash.ASTTest do
       fi
       """
 
-      result = AST.prewalk(script, fn
-        node when is_command(node, "rm") -> nil
-        node -> node
-      end)
+      result =
+        AST.prewalk(script, fn
+          node when is_command(node, "rm") -> nil
+          node -> node
+        end)
 
       commands = collect_commands(result)
       assert "rm" not in commands

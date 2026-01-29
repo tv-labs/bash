@@ -703,13 +703,17 @@ defmodule Bash.AST.Command do
        ) do
     target_fd =
       case target do
-        {:fd, n} -> n
+        {:fd, n} ->
+          n
+
         {:file, word} ->
           case Integer.parse(Helpers.word_to_string(word, session_state)) do
             {n, ""} -> n
             _ -> nil
           end
-        _ -> nil
+
+        _ ->
+          nil
       end
 
     if target_fd do

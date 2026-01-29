@@ -82,7 +82,7 @@ defmodule Bash.AST do
                   elem(hd(node.name.parts), 0) == :literal
 
   defguard is_command(node, name)
-            when is_command(node) and command_name(node) == name
+           when is_command(node) and command_name(node) == name
 
   @doc """
   Extracts the variable name from an `Assignment` node.

@@ -18,24 +18,18 @@ The shell is built around GenServer-based session management with a multi-layer 
 ```mermaid
 graph TB
     subgraph Application["Bash.Application"]
-        SR[SessionRegistry<br/>Registry]
-        SS[SessionSupervisor<br/>DynamicSupervisor]
-        OS[OrphanSupervisor<br/>GenServer]
+        SR[SessionRegistry<br>Registry]
+        SS[SessionSupervisor<br>DynamicSupervisor]
+        OSUP[OrphanSupervisor<br>GenServer]
     end
 
     subgraph Session1["Session"]
         S1[Session GenServer]
-        JS1[JobSupervisor<br/>DynamicSupervisor]
-        OC1[OutputCollector<br/>GenServer]
-
-        subgraph Jobs1["Background Jobs"]
-            JP1[JobProcess 1]
-            JP2[JobProcess 2]
-        end
-
-        subgraph Coprocs1["Coprocesses"]
-            CP1[Coproc GenServer]
-        end
+        JS1[JobSupervisor<br>DynamicSupervisor]
+        OC1[OutputCollector<br>GenServer]
+        JP1[JobProcess 1]
+        JP2[JobProcess 2]
+        CP1[Coproc GenServer]
     end
 
     SS --> S1
@@ -44,14 +38,7 @@ graph TB
     JS1 --> JP1
     JS1 --> JP2
     JS1 --> CP1
-    OS -->|orphaned jobs| JP3[Disowned JobProcess]
-
-    style S1 fill:#e1f5fe
-    style OC1 fill:#fff3e0
-    style JP1 fill:#f3e5f5
-    style JP2 fill:#f3e5f5
-    style JP3 fill:#ffebee
-    style CP1 fill:#e8f5e9
+    OSUP -->|orphaned jobs| JP3[Disowned JobProcess]
 ```
 
 ## GenServers
@@ -165,7 +152,7 @@ graph LR
         W[ExCmd Owner]
     end
 
-    subgraph OS["OS Process"]
+    subgraph OSUP["OS Process"]
         P[External Command]
     end
 
@@ -190,7 +177,7 @@ Manages a coprocess — a command running asynchronously with its stdin/stdout c
 
 ```mermaid
 stateDiagram-v2
-    [*] --> running: start_link(:external | :internal)
+    [*] --> running : start_link
     running --> running: read/write I/O
     running --> closing: close_stdin
     closing --> stopped: process exits
@@ -250,15 +237,15 @@ graph TB
     end
 
     subgraph Sinks["Sink Functions"]
-        SC[Sink.collector]
-        SS[Sink.stream]
-        SF[Sink.file]
-        SN[Sink.null]
+        SC["Sink.collector"]
+        SS["Sink.stream"]
+        SF["Sink.file"]
+        SN["Sink.null"]
     end
 
     subgraph Destinations
         OC[OutputCollector]
-        FS[File.Stream]
+        FS["File.Stream"]
         FH[File Handle]
         DEV["/dev/null"]
     end
@@ -416,7 +403,7 @@ graph TB
         JP[JobProcess]
         CP[Coproc]
         W[Worker]
-        EX[ExCmd.Process]
+        EX["ExCmd.Process"]
     end
 
     S ---|link| JS

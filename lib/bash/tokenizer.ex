@@ -1667,9 +1667,14 @@ defmodule Bash.Tokenizer do
 
       :ok ->
         case peek(state) do
-          nil -> {:ok, acc, state}
-          c when c in @metacharacters -> {:ok, acc, state}
-          c when c in [?\\, ?', ?", ?$, ?`, ?], ?[, ?{, ?}] -> {:ok, acc, state}
+          nil ->
+            {:ok, acc, state}
+
+          c when c in @metacharacters ->
+            {:ok, acc, state}
+
+          c when c in [?\\, ?', ?", ?$, ?`, ?], ?[, ?{, ?}] ->
+            {:ok, acc, state}
 
           c when c in [??, ?*, ?+, ?@, ?!] ->
             # Check for extglob prefix: ?( *( +( @( !(

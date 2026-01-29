@@ -131,7 +131,11 @@ defmodule Bash.AST.Compound do
   # Executes in an isolated copy of session state - env/cwd changes don't affect parent
   # Note: We DON'T spawn a child GenServer to avoid nested GenServer.call deadlock.
   # Instead, we execute directly with a copy of state and discard the updates.
-  def execute(%__MODULE__{kind: :subshell, statements: statements, redirects: redirects}, _stdin, session_state) do
+  def execute(
+        %__MODULE__{kind: :subshell, statements: statements, redirects: redirects},
+        _stdin,
+        session_state
+      ) do
     # Create an isolated copy of session state for subshell execution
     # Per bash behavior: inherit env_vars, working_dir, functions, options
     # Do NOT inherit: aliases, hash table
@@ -169,7 +173,11 @@ defmodule Bash.AST.Compound do
 
   # Command group: { commands; }
   # Executes in current session - env/cwd changes persist
-  def execute(%__MODULE__{kind: :group, statements: statements, redirects: redirects}, stdin, session_state) do
+  def execute(
+        %__MODULE__{kind: :group, statements: statements, redirects: redirects},
+        stdin,
+        session_state
+      ) do
     # If we have piped stdin, set up a StringIO device for the read builtin
     {stdin_session, stdin_cleanup} = setup_stdin_device(stdin, session_state)
 

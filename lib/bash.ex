@@ -295,6 +295,29 @@ defmodule Bash do
     end
   end
 
+  @doc """
+  Validate a Bash script file without executing it.
+
+  Reads the file and validates its contents. Returns `:ok` if valid,
+  or `{:error, reason}` on failure (either file read error or syntax error).
+
+  ## Examples
+
+      iex> Bash.validate_file("valid_script.sh")
+      :ok
+
+      iex> {:error, %Bash.SyntaxError{}} = Bash.validate_file("invalid.sh")
+
+      iex> {:error, :enoent} = Bash.validate_file("missing.sh")
+
+  """
+  @spec validate_file(Path.t()) :: :ok | {:error, SyntaxError.t() | File.posix()}
+  def validate_file(path) when is_binary(path) do
+    with {:ok, content} <- File.read(path) do
+      validate(content)
+    end
+  end
+
   @doc ~S"""
   Escape a string for safe interpolation within a Bash quoted context.
 
@@ -337,27 +360,41 @@ defmodule Bash do
       #=> raises Bash.EscapeError
 
   """
-  @spec escape!(String.t(), integer() | String.t()) :: String.t()
-  def escape!(string, context)
+  @spec escape(String.t(), integer() | String.t()) ::
+          {:ok, String.t()} | {:error, EscapeError.t()}
+  def escape(string, context)
 
-  def escape!(string, ?") when is_binary(string) do
-    string
-    |> String.replace("\\", "\\\\")
-    |> String.replace("\"", "\\\"")
-  end
-
-  def escape!(string, ?') when is_binary(string) do
-    String.replace(string, "'", "'\\''")
-  end
-
-  def escape!(string, delimiter) when is_binary(string) and is_binary(delimiter) do
-    if heredoc_contains_delimiter?(string, delimiter) do
-      raise Bash.EscapeError,
-        reason: :delimiter_in_content,
-        content: string,
-        context: delimiter
-    else
+  def escape(string, ?") when is_binary(string) do
+    escaped =
       string
+      |> String.replace("\\", "\\\\")
+      |> String.replace("\"", "\\\"")
+
+    {:ok, escaped}
+  end
+
+  def escape(string, ?') when is_binary(string) do
+    {:ok, String.replace(string, "'", "'\\''")}
+  end
+
+  def escape(string, delimiter) when is_binary(string) and is_binary(delimiter) do
+    if heredoc_contains_delimiter?(string, delimiter) do
+      {:error,
+       %Bash.EscapeError{
+         reason: :delimiter_in_content,
+         content: string,
+         context: delimiter
+       }}
+    else
+      {:ok, string}
+    end
+  end
+
+  @spec escape!(String.t(), integer() | String.t()) :: String.t()
+  def escape!(string, context) do
+    case escape(string, context) do
+      {:ok, escaped} -> escaped
+      {:error, error} -> raise error
     end
   end
 
@@ -370,9 +407,9 @@ defmodule Bash do
   @doc "Format a file"
   @spec format_file(Path.t(), Keyword.t()) :: :ok
   def format_file(file, opts \\ []) do
-    content = File.read!(file)
-    formatted = Bash.Formatter.format(content, opts)
-    File.write!(file, formatted)
+    with {:ok, content} <- File.read(file) do
+      File.write(file, format(content, opts))
+    end
   end
 
   @spec format_file(String.t(), Keyword.t()) :: String.t()
