@@ -99,4 +99,28 @@ defmodule Bash.Builtin.ExecTest do
       end
     end
   end
+
+  describe "exec FD redirect" do
+    test "exec 3>&1 then echo >&3 writes to stdout", %{session: session} do
+      result =
+        run_script(session, ~S"""
+        exec 3>&1
+        echo "to fd 3" >&3
+        exec 3>&-
+        """)
+
+      assert get_stdout(result) |> String.trim() == "to fd 3"
+    end
+
+    test "exec 4>&1 then echo >&4 writes to stdout", %{session: session} do
+      result =
+        run_script(session, ~S"""
+        exec 4>&1
+        echo "to fd 4" >&4
+        exec 4>&-
+        """)
+
+      assert get_stdout(result) |> String.trim() == "to fd 4"
+    end
+  end
 end

@@ -616,7 +616,12 @@ defmodule Bash.Tokenizer do
         read_rbracket(state)
 
       ?! ->
-        {:ok, {:bang, state.line, state.column}, advance(state)}
+        if peek_next(state) == ?( do
+          # Extglob !(pattern) - read as word
+          read_word(state)
+        else
+          {:ok, {:bang, state.line, state.column}, advance(state)}
+        end
 
       c when c in ?0..?9 ->
         # Check if this is an io_number (digit followed by < or >)
@@ -1665,8 +1670,41 @@ defmodule Bash.Tokenizer do
           nil -> {:ok, acc, state}
           c when c in @metacharacters -> {:ok, acc, state}
           c when c in [?\\, ?', ?", ?$, ?`, ?], ?[, ?{, ?}] -> {:ok, acc, state}
-          c -> read_literal_chars(advance(state), [c | acc])
+
+          c when c in [??, ?*, ?+, ?@, ?!] ->
+            # Check for extglob prefix: ?( *( +( @( !(
+            if peek_next(state) == ?( do
+              case read_extglob_pattern(advance(state, 2), [?(, c | acc], 1) do
+                {:ok, _acc, _state} = result -> result
+                {:error, _, _, _} -> read_literal_chars(advance(state), [c | acc])
+              end
+            else
+              read_literal_chars(advance(state), [c | acc])
+            end
+
+          c ->
+            read_literal_chars(advance(state), [c | acc])
         end
+    end
+  end
+
+  # Read through an extglob pattern like ?(a|b) tracking nested parens
+  defp read_extglob_pattern(state, acc, depth) do
+    case peek(state) do
+      nil ->
+        {:error, "unterminated extglob pattern", state.line, state.column}
+
+      ?) when depth == 1 ->
+        read_literal_chars(advance(state), [?) | acc])
+
+      ?) ->
+        read_extglob_pattern(advance(state), [?) | acc], depth - 1)
+
+      ?( ->
+        read_extglob_pattern(advance(state), [?( | acc], depth + 1)
+
+      c ->
+        read_extglob_pattern(advance(state), [c | acc], depth)
     end
   end
 

@@ -1,0 +1,236 @@
+Basic: 8 2 15 1 2 125
+Bitwise: 1 7 6 -6 20 2
+Comparison: 0 1 0 1 0 1
+Logical: 1 1 0
+Ternary: 1
+Comma: 3
+Compound: 5
+Pre++: 6 Post++: 6 now: 7
+Pre--: 4 Post--: 4 now: 3
+Bitwise compound: 11
+let: 15 30 10
+hello world 11 hello world world
+hello world hello world alternative
+usr/local/bin/bash bash /usr/local/bin 
+bXnana bXnXnX Xanana bananX
+HElLo HELLO hElLo hello
+hello world
+Array: one two three four five ten appended one two three four five ten appended
+Length: 7 Element: 3
+Indices: 0 1 2 3 4 10 11
+Slice: two three four
+Hash: value three value1 value2
+Keys: key three key1 key2
+After unset: key three key1
+Script: bash Args: 0 All:  Star: 
+PID: 76272 PPID: 76272
+Exit status: 0
+Options: hB
+Background PID: 97101
+BASH_VERSION: 5.3.3(1)-release
+RANDOM: 23915 LINENO: 1 SECONDS: 0
+single quotes: $HOME ~
+double quotes: /Users/dbern /Users/dbern/bash
+ANSI-C:	
+A
+backslash escape: $HOME `cmd`
+a1 a2 a3 b1 b2 b3 c1 c2 c3
+1 2 3 4 5 a b c d e 10 9 8 7 6 5 4 3 2 1 01 02 03 04 05 06 07 08 09 10
+1 3 5 7 9 a f k p u z
+prefix present pretend
+/Users/dbern /Users/dbern/bash /Users/dbern/bash
+Date: 2026
+Legacy: backticks
+Nested: nested
+Same
+from process sub
+Here doc with hello world expansion
+and command substitution
+Here doc NO expansion: $myvar $(pwd)
+indented here doc (tabs stripped)
+second line
+here string
+to stdout
+to fd 3
+HELLO
+Pipeline status: 0 0 0
+Pipefail exit: 1
+Read: a
+Read: b
+Read: c
+if true
+compact if
+pattern match
+string compare
+string tests
+numeric in [[
+arithmetic conditional
+for: 1
+for: 2
+for: 3
+brace for: 1
+brace for: 2
+brace for: 3
+C-style for: 0
+C-style for: 1
+C-style for: 2
+glob for: *.bash
+while: 0
+while: 1
+while: 2
+until: 0
+until: 1
+until: 2
+break/continue: 1
+break/continue: 3
+nested: 1a
+nested: 1b
+matched bar or baz
+also qux
+default
+function keyword: arg1
+parens style: arg2
+Return value: 42
+Inside: local
+Outside: global
+Factorial 5: 120
+DEBUG trap
+DEBUG trap
+Printf: string 42 ff
+Formatted: 00007
+read: hello
+parts: a b c
+[ -d works
+[[ -e works
+true works
+false works
+colon works
+cd works: /tmp
+lowercase: upper
+uppercase: LOWER
+declare -i intvar="10"
+evaluated
+command echo
+builtin echo
+echo is a shell builtin
+Sourced: 123
+getopts: a 
+getopts: b arg
+getopts: c 
+Before shift: one two three
+After shift: two three
+umask: 0022
+0m0.034s 0m0.000s
+wait completed
+[1]+  Done                sleep 0.01 &
+/tmp ~/bash
+mapfile: line1 line2 line3
+printf -v: formatted 42
+322 main bash
+echo: echo [-neE] [arg ...]
+Extended: /tmp/glob_?(a|b).txt
+/tmp/glob_a.txt
+/tmp/glob_b.txt
+Extended: /tmp/glob_*(a|b).txt
+/tmp/glob_a.txt
+/tmp/glob_ab.txt
+/tmp/glob_b.txt
+Extended: /tmp/glob_+(a|b).txt
+/tmp/glob_a.txt
+/tmp/glob_ab.txt
+/tmp/glob_b.txt
+Extended: /tmp/glob_@(a|b).txt
+/tmp/glob_a.txt
+/tmp/glob_b.txt
+Extended: /tmp/glob_!(ab).txt
+/tmp/glob_a.txt
+/tmp/glob_ab.txt
+/tmp/glob_abc.txt
+/tmp/glob_b.txt
+/tmp/glob_c.txt
+Globstar: /tmp/globtest/a/b/c/file.txt
+Coproc reply: hello coproc
+Nameref: hello world
+Modified: modified via nameref
+Subshell pwd: /tmp
+Parent pwd: /Users/dbern/bash
+Subshell arithmetic: 42
+grouped
+commands
+subshell
+group
+and-then
+or-else
+negation
+infinite
+no increment
+suffix match
+prefix match
+regex match
+regex groups: foo bar
+Array copy: a b c d e
+Array reverse iteration:
+  e
+  d
+  c
+  b
+  a
+Negative index: 5 4
+First upper: HeLLo WoRLD
+All upper: HELLO WORLD
+First lower: heLLo WoRLD
+All lower: hello world
+Quoted: 'one' 'two' 'three'
+Escaped: one
+Prompt: one
+Assignment: declare -a arr=([0]="one" [1]="two" [2]="three")
+Attributes: a a a
+Appended array: one two three
+Multi assign: 1 2 3
+Empty expansion: []
+before^@after6
+after semicolons
+before
+after
+continued line
+line 1
+line 2
+line 3
+a
+b
+d
+inner: 2
+outer after subshell: 1
+WRAPPED: custom echo
+normal echo
+Slice from 5: 5 6 7 8 9
+Slice 2 from end: 8 9
+Slice 3 items from 2: 2 3 4
+Hex: 255
+Octal: 63
+Binary: 10
+Base 36: 1295
+Float via bc: 3.33
+All: arg1 arg2 arg3
+Count: 3
+First: arg1 Second: arg2
+IFS split: a b c
+source returned successfully
+to fd 4
+Readonly array: one two three
+declare -- myvar="modified via nameref"
+First length: 34
+Second length: 5
+Array count: 2
+aa[one]=1
+aa[three]=3
+aa[two]=2
+Indirect: /Users/dbern/.local/share/mise/installs/erlang/28.3/erts-16.2/bin:/Users/dbern/.tvlabs/bin:/Users/dbern/tizen-studio/tools:/Users/dbern/.tvlabs/bin:/Users/dbern/tizen-studio/tools:/Users/dbern/.lmstudio/bin:/Users/dbern/.lmstudio/bin:/Users/dbern/.local/share/mise/installs/elixir/1.20.0-rc.1-otp-28/bin:/Users/dbern/.local/share/mise/installs/elixir/1.20.0-rc.1-otp-28/.mix/escripts:/Users/dbern/.local/share/mise/installs/erlang/28.3/bin:/Users/dbern/.local/share/mise/installs/uv/0.9.24/uv-aarch64-apple-darwin:/Users/dbern/.local/share/mise/installs/rebar/3.26.0/bin:/Users/dbern/.local/share/mise/installs/ruby/3.4.8/bin:/Users/dbern/.local/share/mise/installs/node/22.22.0/bin:/Users/dbern/.local/share/mise/installs/python/3.11.14/bin:/Users/dbern/.mix/escripts:/Users/dbern/.asdf/shims:/opt/homebrew/bin:/opt/homebrew/sbin:/Users/dbern/.cargo/bin:/Users/dbern/.local/bin:/usr/local/bin:/usr/local/sbin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/opt/pmk/env/global/bin:/Library/Apple/usr/bin:/Applications/Ghostty.app/Contents/MacOS
+EPOCHSECONDS: 1769708911
+EPOCHREALTIME: 1769708911.774393
+-v: myvar is set
+-R: nameref is a nameref
+====================
+All tests completed!
+====================
+EXIT trap

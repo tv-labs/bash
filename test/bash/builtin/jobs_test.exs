@@ -33,4 +33,19 @@ defmodule Bash.Builtin.JobsTest do
 
     assert get_stdout(result) == ""
   end
+
+  test "jobs shows running background process without extra notification", %{session: session} do
+    result =
+      run_script(session, """
+      sleep 0.5 &
+      jobs
+      wait
+      """)
+
+    stdout = get_stdout(result)
+    lines = String.split(stdout, "\n", trim: true)
+    job_lines = Enum.filter(lines, &(&1 =~ ~r/\[\d+\]/))
+    assert length(job_lines) == 1
+    assert hd(job_lines) =~ "Running"
+  end
 end

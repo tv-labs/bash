@@ -9,6 +9,8 @@ The shell is built around GenServer-based session management with a multi-layer 
 - **Session** - Central GenServer managing execution context
 - **OutputCollector** - GenServer accumulating stdout/stderr
 - **JobProcess** - GenServer managing background OS processes
+- **Coproc** - GenServer managing coprocess I/O in external or internal mode
+- **ProcessSubst** - GenServer managing process substitution FIFOs
 - **Sink** - Pluggable output destinations
 
 ## Supervision Tree
@@ -18,7 +20,7 @@ graph TB
     subgraph Application["Bash.Application"]
         SR[SessionRegistry<br/>Registry]
         SS[SessionSupervisor<br/>DynamicSupervisor]
-        OS[OrphanSupervisor<br/>DynamicSupervisor]
+        OS[OrphanSupervisor<br/>GenServer]
     end
 
     subgraph Session1["Session"]
@@ -30,6 +32,10 @@ graph TB
             JP1[JobProcess 1]
             JP2[JobProcess 2]
         end
+
+        subgraph Coprocs1["Coprocesses"]
+            CP1[Coproc GenServer]
+        end
     end
 
     SS --> S1
@@ -37,6 +43,7 @@ graph TB
     S1 -.->|links| OC1
     JS1 --> JP1
     JS1 --> JP2
+    JS1 --> CP1
     OS -->|orphaned jobs| JP3[Disowned JobProcess]
 
     style S1 fill:#e1f5fe
@@ -44,6 +51,7 @@ graph TB
     style JP1 fill:#f3e5f5
     style JP2 fill:#f3e5f5
     style JP3 fill:#ffebee
+    style CP1 fill:#e8f5e9
 ```
 
 ## GenServers
@@ -91,11 +99,13 @@ stateDiagram-v2
 | `current` | Execution.t | Active execution context |
 | `special_vars` | Map | `$?`, `$!`, `$$`, `$0`, `$_` |
 | `positional_params` | list | Function argument stack |
+| `file_descriptors` | Map | FD number to pid or `{:coproc, pid, :read \| :write}` |
 
 **Internal fields (opaque):**
 - `job_supervisor`, `output_collector` - Process pids
 - `stdout_sink`, `stderr_sink` - Sink functions
 - `executions`, `current`, `is_pipeline_tail` - Execution tracking
+- `file_descriptors` - Routes FD reads/writes to coproc GenServers or StringIO devices
 
 ### OutputCollector GenServer
 
@@ -170,6 +180,62 @@ graph LR
     style W fill:#e8f5e9
     style P fill:#fff3e0
 ```
+
+### Coproc GenServer
+
+Manages a coprocess — a command running asynchronously with its stdin/stdout connected to the session via file descriptors. Operates in two modes:
+
+- **External** — simple commands (e.g., `coproc cat`) backed by `ExCmd.Process`
+- **Internal** — compound commands (e.g., `coproc NAME { cat; }`) backed by spawned BEAM processes with `Bash.Pipe` FIFOs
+
+```mermaid
+stateDiagram-v2
+    [*] --> running: start_link(:external | :internal)
+    running --> running: read/write I/O
+    running --> closing: close_stdin
+    closing --> stopped: process exits
+    running --> stopped: process exits
+    stopped --> [*]
+```
+
+The session registers coproc file descriptors in `file_descriptors` as `{:coproc, pid, :read | :write}` tuples. Reads and writes on those FDs are routed through this GenServer. On session termination, all coproc FDs are closed and the coproc processes are stopped.
+
+**Operations:**
+- `read_output/2` - Read from coproc stdout
+- `write_input/3` - Write to coproc stdin
+- `close_read/2`, `close_write/2` - Close pipe ends
+- `get_status/2` - Query coproc state
+
+### ProcessSubst GenServer
+
+Manages process substitution (`<(command)` and `>(command)`). Creates a named pipe (FIFO) and runs a background command connected to it. The FIFO path is substituted into the parent command as a filename.
+
+```mermaid
+sequenceDiagram
+    participant P as Parent Command
+    participant PS as ProcessSubst
+    participant FIFO as Named Pipe
+    participant C as Substituted Command
+
+    PS->>FIFO: mkfifo
+    PS->>C: spawn command
+    PS-->>P: /path/to/fifo
+    P->>FIFO: read or write
+    C->>FIFO: write or read
+    C->>PS: exit
+    PS->>FIFO: rm fifo
+```
+
+**State fields:**
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `fifo_path` | String | Path to the named pipe |
+| `direction` | `:input \| :output` | Whether parent reads or writes the FIFO |
+| `command_ast` | term | AST of the substituted command |
+| `session_state` | map | Snapshot of session state for execution |
+| `worker_pid` | pid | Spawned process running the command |
+| `os_pid` | integer | OS pid when using external commands |
 
 ## Output Flow
 
@@ -348,6 +414,7 @@ graph TB
         JS[JobSupervisor]
         OC[OutputCollector]
         JP[JobProcess]
+        CP[Coproc]
         W[Worker]
         EX[ExCmd.Process]
     end
@@ -355,6 +422,7 @@ graph TB
     S ---|link| JS
     S ---|link| OC
     JS -->|supervises| JP
+    JS -->|supervises| CP
     JP -.->|spawn, no link| W
     W ---|owns| EX
 
@@ -364,6 +432,7 @@ graph TB
         B3["OutputCollector dies → Session continues (trap_exit)"]
         B4["JobProcess dies → removed from JobSupervisor"]
         B5["Worker dies → JobProcess handles gracefully"]
+        B6["Coproc dies → removed from JobSupervisor, FDs become stale"]
     end
 ```
 

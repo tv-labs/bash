@@ -174,41 +174,13 @@ defmodule Bash.Builtin.CoprocTest do
       refute is_pid(read_entry)
     end
 
-    test "large data streams through OS pipes without growing BEAM memory", %{session: session} do
+    @one_mb 1 * 1024 * 1024
+    test "random data from /dev/urandom streams without growing BEAM memory", %{session: session} do
       line_count = 10_000
 
       :erlang.garbage_collect()
-      memory_before = :erlang.memory(:processes)
-
-      result =
-        run_script(session, """
-        coproc bash -c 'while IFS= read -r line; do echo "$line"; done'
-        i=0
-        while [ $i -lt #{line_count} ]; do
-          echo "AAAAAAAAAA" >&${COPROC[1]}
-          read -u ${COPROC[0]} discard
-          i=$((i + 1))
-        done
-        eval "exec ${COPROC[1]}>&-"
-        echo "$i"
-        """)
-
-      :erlang.garbage_collect()
-      memory_after = :erlang.memory(:processes)
-
-      assert get_stdout(result) |> String.trim() == "#{line_count}"
-
-      memory_growth = memory_after - memory_before
-
-      assert memory_growth < 1 * 1024 * 1024,
-             "BEAM process memory grew by #{div(memory_growth, 1024)}KB — data may be buffered"
-    end
-
-    test "random data from /dev/urandom streams without growing BEAM memory", %{session: session} do
-      line_count = 1_000
-
-      :erlang.garbage_collect()
-      memory_before = :erlang.memory(:processes)
+      vm_memory_before = :erlang.memory(:processes)
+      {:memory, pid_memory_before} = Process.info(self(), :memory)
 
       result =
         run_script(session, """
@@ -225,14 +197,19 @@ defmodule Bash.Builtin.CoprocTest do
         """)
 
       :erlang.garbage_collect()
-      memory_after = :erlang.memory(:processes)
+      vm_memory_after = :erlang.memory(:processes)
+      {:memory, pid_memory_after} = Process.info(self(), :memory)
 
       assert get_stdout(result) |> String.trim() == "#{line_count}"
 
-      memory_growth = memory_after - memory_before
+      vm_memory_growth = vm_memory_after - vm_memory_before
+      pid_memory_growth = pid_memory_after - pid_memory_before
 
-      assert memory_growth < 2 * 1024 * 1024,
-             "BEAM process memory grew by #{div(memory_growth, 1024)}KB — data may be buffered"
+      assert pid_memory_growth < @one_mb,
+            "Process memory grew by #{div(pid_memory_growth, 1024)}KB — data may be buffered"
+
+      assert vm_memory_growth < @one_mb,
+             "BEAM process memory grew by #{div(vm_memory_growth, 1024)}KB — data may be buffered"
     end
 
     test "closing write FD signals EOF to coproc", %{session: session} do
@@ -258,6 +235,25 @@ defmodule Bash.Builtin.CoprocTest do
     test "no arguments returns error", %{session: session} do
       result = run_script(session, "coproc")
       assert result.exit_code != 0
+    end
+  end
+
+  describe "coproc I/O with default expansion guard" do
+    test "coproc I/O works with ${NAME[N]:-} guard", %{session: session} do
+      result =
+        run_script(session, ~S"""
+        coproc MYCP { cat; }
+        if [[ -n "${MYCP[1]:-}" ]]; then
+          echo "hello coproc" >&${MYCP[1]}
+          eval "exec ${MYCP[1]}>&-"
+          read -u ${MYCP[0]} reply
+          echo "Coproc reply: $reply"
+        else
+          echo "Coproc: skipped"
+        fi
+        """)
+
+      assert get_stdout(result) |> String.trim() == "Coproc reply: hello coproc"
     end
   end
 end

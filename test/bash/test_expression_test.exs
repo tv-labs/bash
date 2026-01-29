@@ -218,4 +218,26 @@ defmodule Bash.TestExpressionTest do
       assert %RegexPattern{parts: [{:double_quoted, _}]} = regex
     end
   end
+
+  describe "-R test operator for namerefs" do
+    test "[[ -R nameref ]] returns true for nameref variable", %{session: session} do
+      result =
+        run_script(session, ~S"""
+        declare -n nameref=myvar
+        [[ -R nameref ]] && echo "-R: nameref is a nameref"
+        """)
+
+      assert get_stdout(result) |> String.trim() == "-R: nameref is a nameref"
+    end
+
+    test "[[ -R normalvar ]] returns false for regular variable", %{session: session} do
+      result =
+        run_script(session, ~S"""
+        normalvar="hello"
+        [[ -R normalvar ]] && echo "yes" || echo "no"
+        """)
+
+      assert get_stdout(result) |> String.trim() == "no"
+    end
+  end
 end

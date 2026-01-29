@@ -261,4 +261,72 @@ defmodule Bash.Builtin.DeclareFunctionTest do
       exported: exported
     }
   end
+
+  describe "declare -p (integration)" do
+    setup :start_session
+
+    test "declare -p shows variable declaration", %{session: session} do
+      result =
+        run_script(session, ~S"""
+        myvar="hello"
+        declare -p myvar
+        """)
+
+      assert get_stdout(result) |> String.trim() == ~S'declare -- myvar="hello"'
+    end
+
+    test "declare -p shows integer variable", %{session: session} do
+      result =
+        run_script(session, ~S"""
+        declare -i intvar=10
+        declare -p intvar
+        """)
+
+      assert get_stdout(result) |> String.trim() == ~S'declare -i intvar="10"'
+    end
+  end
+
+  describe "array subscript default expansion" do
+    setup :start_session
+
+    test "${arr[N]:-default} returns element value when set", %{session: session} do
+      result =
+        run_script(session, ~S"""
+        declare -a arr=(foo bar)
+        echo "${arr[1]:-fallback}"
+        """)
+
+      assert get_stdout(result) |> String.trim() == "bar"
+    end
+
+    test "${arr[N]:-default} returns default when unset index", %{session: session} do
+      result =
+        run_script(session, ~S"""
+        declare -a arr=(foo bar)
+        echo "${arr[5]:-fallback}"
+        """)
+
+      assert get_stdout(result) |> String.trim() == "fallback"
+    end
+
+    test "${arr[N]:-} returns element value when set (empty default)", %{session: session} do
+      result =
+        run_script(session, ~S"""
+        declare -a arr=(foo bar)
+        echo "[${arr[1]:-}]"
+        """)
+
+      assert get_stdout(result) |> String.trim() == "[bar]"
+    end
+
+    test "${arr[N]:+alternate} returns alternate when set", %{session: session} do
+      result =
+        run_script(session, ~S"""
+        declare -a arr=(foo bar)
+        echo "${arr[1]:+yes}"
+        """)
+
+      assert get_stdout(result) |> String.trim() == "yes"
+    end
+  end
 end

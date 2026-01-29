@@ -86,5 +86,17 @@ defmodule Bash.Builtin.DirsTest do
       assert stdout =~ " 0  "
       refute stdout =~ "~"
     end
+
+    test "dirs shows directory stack with tilde shortening after pushd", %{session: session} do
+      result =
+        run_script(session, """
+        pushd /tmp > /dev/null
+        dirs
+        popd > /dev/null
+        """)
+
+      stdout = get_stdout(result) |> String.trim()
+      assert stdout =~ "/tmp"
+    end
   end
 end

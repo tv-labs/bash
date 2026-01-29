@@ -97,11 +97,17 @@ defmodule Bash.AST.ForLoop do
 
         executable_body = Helpers.executable_statements(body)
 
+        baseline_env = build_arith_env(loop_session, %{})
+
         {result, env_updates, iter_count} =
           execute_c_style_for(init, condition, update, executable_body, loop_session, %{}, 0)
 
+        # Only return variables that actually changed from baseline
+        changed_env =
+          Map.filter(env_updates, fn {k, v} -> Map.get(baseline_env, k) != to_string(v) end)
+
         exit_code = for_loop_exit_code(result)
-        {{result, env_updates, iter_count}, %{iteration_count: iter_count, exit_code: exit_code}}
+        {{result, changed_env, iter_count}, %{iteration_count: iter_count, exit_code: exit_code}}
       end)
 
     completed_at = DateTime.utc_now()

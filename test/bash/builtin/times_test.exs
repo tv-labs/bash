@@ -36,5 +36,12 @@ defmodule Bash.Builtin.TimesTest do
       assert result.exit_code == 0
       assert get_stdout(result) =~ "done"
     end
+
+    test "times output piped through head -1", %{session: session} do
+      result = run_script(session, "times 2>/dev/null | head -1 || true")
+
+      stdout = get_stdout(result) |> String.trim()
+      assert stdout =~ ~r/\d+m\d+\.\d+s\s+\d+m\d+\.\d+s/
+    end
   end
 end

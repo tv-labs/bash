@@ -73,5 +73,18 @@ defmodule Bash.Builtin.CallerTest do
 
       assert Bash.ExecutionResult.exit_code(result) == 2
     end
+
+    test "caller 0 in named function shows line number and main", %{session: session} do
+      result =
+        run_script(session, ~S"""
+        showcaller() { caller 0; }
+        showcaller
+        """)
+
+      stdout = get_stdout(result) |> String.trim()
+      parts = String.split(stdout)
+      assert length(parts) >= 2
+      assert {_, ""} = Integer.parse(hd(parts))
+    end
   end
 end

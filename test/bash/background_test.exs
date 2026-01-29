@@ -262,4 +262,18 @@ defmodule Bash.BackgroundTest do
       assert resumed.status == :running
     end
   end
+
+  describe "background echo output capture" do
+    test "echo c & echo d produces both c and d", %{session: session} do
+      result =
+        run_script(session, """
+        echo c & echo d
+        wait
+        """)
+
+      stdout = get_stdout(result)
+      assert stdout =~ "c"
+      assert stdout =~ "d"
+    end
+  end
 end

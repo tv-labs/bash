@@ -1001,44 +1001,228 @@ defmodule Bash.AST.Helpers do
 
   defp expand_glob_pattern(pattern, session_state) do
     if noglob_enabled?(session_state) do
-      # noglob (-f) is set - don't expand
       pattern
     else
-      # For absolute paths, use them directly; for relative paths, join with working_dir
-      {glob_path, is_absolute, has_dot_prefix} =
-        if String.starts_with?(pattern, "/") do
-          {pattern, true, false}
-        else
-          # Track if pattern starts with ./ to preserve it in output
-          has_dot = String.starts_with?(pattern, "./")
-          {Path.join(session_state.working_dir, pattern), false, has_dot}
-        end
-
-      case Path.wildcard(glob_path, match_dot: false) do
-        # No matches, return pattern literally
-        [] ->
-          pattern
-
-        matches ->
-          if is_absolute do
-            # For absolute patterns, return matches as-is
-            Enum.join(matches, " ")
-          else
-            # Convert absolute paths to relative paths (from working_dir)
-            # Preserve ./ prefix if original pattern had it
-            Enum.map_join(matches, " ", fn match ->
-              relative = Path.relative_to(match, session_state.working_dir)
-
-              if has_dot_prefix do
-                "./" <> relative
-              else
-                relative
-              end
-            end)
-          end
+      if has_extglob_pattern?(pattern) and extglob_enabled?(session_state) do
+        expand_extglob_pattern(pattern, session_state)
+      else
+        expand_standard_glob(pattern, session_state)
       end
     end
   end
+
+  defp expand_standard_glob(pattern, session_state) do
+    # For absolute paths, use them directly; for relative paths, join with working_dir
+    {glob_path, is_absolute, has_dot_prefix} =
+      if String.starts_with?(pattern, "/") do
+        {pattern, true, false}
+      else
+        # Track if pattern starts with ./ to preserve it in output
+        has_dot = String.starts_with?(pattern, "./")
+        {Path.join(session_state.working_dir, pattern), false, has_dot}
+      end
+
+    case Path.wildcard(glob_path, match_dot: false) do
+      [] ->
+        pattern
+
+      matches ->
+        if is_absolute do
+          Enum.join(matches, " ")
+        else
+          Enum.map_join(matches, " ", fn match ->
+            relative = Path.relative_to(match, session_state.working_dir)
+
+            if has_dot_prefix do
+              "./" <> relative
+            else
+              relative
+            end
+          end)
+        end
+    end
+  end
+
+  @extglob_prefix_regex ~r/[?*+@!]\(/
+  defp has_extglob_pattern?(pattern), do: Regex.match?(@extglob_prefix_regex, pattern)
+
+  defp extglob_enabled?(session_state) do
+    options = Map.get(session_state, :options, %{})
+    Map.get(options, :shopt_extglob, false) == true
+  end
+
+  defp expand_extglob_pattern(pattern, session_state) do
+    {is_absolute, has_dot_prefix, dir, file_pattern} = split_glob_dir_and_pattern(pattern, session_state)
+
+    regex = glob_to_regex(file_pattern)
+
+    case Regex.compile("^#{regex}$") do
+      {:ok, compiled} ->
+        listing_dir = if is_absolute, do: dir, else: Path.join(session_state.working_dir, dir || "")
+
+        case File.ls(listing_dir) do
+          {:ok, entries} ->
+            matches =
+              entries
+              |> Enum.filter(&Regex.match?(compiled, &1))
+              |> Enum.reject(&String.starts_with?(&1, "."))
+              |> Enum.sort()
+
+            case matches do
+              [] ->
+                pattern
+
+              _ ->
+                Enum.map_join(matches, " ", fn entry ->
+                  cond do
+                    is_absolute -> Path.join(dir, entry)
+                    has_dot_prefix -> "./" <> join_dir_entry(dir, entry)
+                    true -> join_dir_entry(dir, entry)
+                  end
+                end)
+            end
+
+          {:error, _} ->
+            pattern
+        end
+
+      {:error, _} ->
+        pattern
+    end
+  end
+
+  defp split_glob_dir_and_pattern(pattern, session_state) do
+    is_absolute = String.starts_with?(pattern, "/")
+    has_dot_prefix = String.starts_with?(pattern, "./")
+
+    case Path.split(pattern) do
+      [file] ->
+        {is_absolute, has_dot_prefix, nil, file}
+
+      parts ->
+        dir = parts |> Enum.slice(0..-2//1) |> Path.join()
+        file = List.last(parts)
+
+        full_dir =
+          if is_absolute do
+            dir
+          else
+            Path.join(session_state.working_dir, dir)
+          end
+
+        if File.dir?(full_dir) do
+          {is_absolute, has_dot_prefix, dir, file}
+        else
+          # Directory part contains glob chars, fall back to standard
+          {is_absolute, has_dot_prefix, nil, pattern}
+        end
+    end
+  end
+
+  defp join_dir_entry(nil, entry), do: entry
+  defp join_dir_entry(".", entry), do: entry
+  defp join_dir_entry(dir, entry), do: Path.join(dir, entry)
+
+  defp glob_to_regex(pattern) do
+    glob_to_regex_chars(String.to_charlist(pattern), [])
+    |> Enum.reverse()
+    |> IO.iodata_to_binary()
+  end
+
+  @extglob_operators [??, ?*, ?+, ?@, ?!]
+  defp glob_to_regex_chars([], acc), do: acc
+
+  defp glob_to_regex_chars([op, ?( | rest], acc) when op in @extglob_operators do
+    {inner, remaining} = read_extglob_inner(rest, [], 1)
+    regex_inner = convert_extglob_alternatives(inner)
+
+    regex_part =
+      case op do
+        ?? -> "(?:#{regex_inner})?"
+        ?* -> "(?:#{regex_inner})*"
+        ?+ -> "(?:#{regex_inner})+"
+        ?@ -> "(?:#{regex_inner})"
+        ?! -> "(?!(?:#{regex_inner})$).*"
+      end
+
+    glob_to_regex_chars(remaining, [regex_part | acc])
+  end
+
+  defp glob_to_regex_chars([?* | rest], acc) do
+    glob_to_regex_chars(rest, ["[^/]*" | acc])
+  end
+
+  defp glob_to_regex_chars([?? | rest], acc) do
+    glob_to_regex_chars(rest, ["[^/]" | acc])
+  end
+
+  defp glob_to_regex_chars([?[, ?! | rest], acc) do
+    {class_chars, remaining} = read_bracket_class(rest)
+    glob_to_regex_chars(remaining, ["[^#{class_chars}]" | acc])
+  end
+
+  defp glob_to_regex_chars([?[ | rest], acc) do
+    {class_chars, remaining} = read_bracket_class(rest)
+    glob_to_regex_chars(remaining, ["[#{class_chars}]" | acc])
+  end
+
+  defp glob_to_regex_chars([c | rest], acc) do
+    escaped = regex_escape_char(c)
+    glob_to_regex_chars(rest, [escaped | acc])
+  end
+
+  defp read_extglob_inner([], acc, _depth), do: {Enum.reverse(acc), []}
+
+  defp read_extglob_inner([?) | rest], acc, 1), do: {Enum.reverse(acc), rest}
+
+  defp read_extglob_inner([?) | rest], acc, depth) do
+    read_extglob_inner(rest, [?) | acc], depth - 1)
+  end
+
+  defp read_extglob_inner([?( | rest], acc, depth) do
+    read_extglob_inner(rest, [?( | acc], depth + 1)
+  end
+
+  defp read_extglob_inner([c | rest], acc, depth) do
+    read_extglob_inner(rest, [c | acc], depth)
+  end
+
+  defp convert_extglob_alternatives(chars) do
+    # Split on | at depth 0, convert each alternative via glob_to_regex
+    chars
+    |> split_on_pipe([], [], 0)
+    |> Enum.map(&glob_to_regex(List.to_string(&1)))
+    |> Enum.join("|")
+  end
+
+  defp split_on_pipe([], current, acc, _depth) do
+    Enum.reverse([Enum.reverse(current) | acc])
+  end
+
+  defp split_on_pipe([?| | rest], current, acc, 0) do
+    split_on_pipe(rest, [], [Enum.reverse(current) | acc], 0)
+  end
+
+  defp split_on_pipe([?( | rest], current, acc, depth) do
+    split_on_pipe(rest, [?( | current], acc, depth + 1)
+  end
+
+  defp split_on_pipe([?) | rest], current, acc, depth) when depth > 0 do
+    split_on_pipe(rest, [?) | current], acc, depth - 1)
+  end
+
+  defp split_on_pipe([c | rest], current, acc, depth) do
+    split_on_pipe(rest, [c | current], acc, depth)
+  end
+
+  defp read_bracket_class(chars), do: read_bracket_class(chars, [])
+  defp read_bracket_class([], acc), do: {Enum.reverse(acc) |> List.to_string(), []}
+  defp read_bracket_class([?] | rest], acc), do: {Enum.reverse(acc) |> List.to_string(), rest}
+  defp read_bracket_class([c | rest], acc), do: read_bracket_class(rest, [c | acc])
+
+  @regex_escape_chars ~c".^$+{}|\\()"
+  defp regex_escape_char(c) when c in @regex_escape_chars, do: <<?\\, c>>
+  defp regex_escape_char(c), do: <<c>>
 
   defp noglob_enabled?(session_state) do
     options = Map.get(session_state, :options, %{})
@@ -1285,25 +1469,31 @@ defmodule Bash.AST.Helpers do
 
   # Check if a pattern matches a value (supports glob patterns)
   def pattern_matches?(pattern, value, session_state) do
-    # For case patterns, use pattern_to_string which does NOT do pathname expansion
-    # Glob characters (* ? [...]) are for matching, not filename expansion
     pattern_str = pattern_to_string(pattern, session_state)
 
-    if String.contains?(pattern_str, ["*", "?", "["]) do
-      # Glob pattern - convert to regex
-      regex_pattern =
-        pattern_str
-        |> String.graphemes()
-        |> convert_glob_to_regex([])
-        |> Enum.reverse()
-        |> Enum.join()
+    if has_extglob_pattern?(pattern_str) and extglob_enabled?(session_state) do
+      regex_pattern = glob_to_regex(pattern_str)
 
       case Regex.compile("^#{regex_pattern}$") do
         {:ok, regex} -> Regex.match?(regex, value)
         {:error, _} -> pattern_str == value
       end
     else
-      pattern_str == value
+      if String.contains?(pattern_str, ["*", "?", "["]) do
+        regex_pattern =
+          pattern_str
+          |> String.graphemes()
+          |> convert_glob_to_regex([])
+          |> Enum.reverse()
+          |> Enum.join()
+
+        case Regex.compile("^#{regex_pattern}$") do
+          {:ok, regex} -> Regex.match?(regex, value)
+          {:error, _} -> pattern_str == value
+        end
+      else
+        pattern_str == value
+      end
     end
   end
 

@@ -1742,13 +1742,35 @@ defmodule Bash.Session do
 
   @impl GenServer
   def terminate(_reason, state) do
+    stop_all_coprocs(state)
     close_all_file_descriptors(state)
 
-    if state.job_supervisor do
+    if state.job_supervisor && Process.alive?(state.job_supervisor) do
       DynamicSupervisor.stop(state.job_supervisor, :shutdown)
     end
 
     :ok
+  end
+
+  defp stop_all_coprocs(state) do
+    state.file_descriptors
+    |> Enum.reduce(MapSet.new(), fn
+      {_fd, {:coproc, pid, _direction}}, seen ->
+        if MapSet.member?(seen, pid) do
+          seen
+        else
+          try do
+            GenServer.stop(pid, :shutdown, 5_000)
+          catch
+            :exit, _ -> :ok
+          end
+
+          MapSet.put(seen, pid)
+        end
+
+      _, seen ->
+        seen
+    end)
   end
 
   defp close_all_file_descriptors(state) do
@@ -2729,14 +2751,22 @@ defmodule Bash.Session do
   defp maybe_update_working_dir(state, _), do: state
 
   defp maybe_update_env_vars(state, %{env_updates: env_updates}) do
-    # Convert env_updates to Variable structs with export attribute set
+    # env_updates represents variables that should be exported (from export, allexport, etc.)
     exported_vars =
       Map.new(env_updates, fn {k, v} ->
-        {k,
-         %Variable{
-           value: v,
-           attributes: %{export: true, readonly: false, integer: false, array_type: nil}
-         }}
+        var =
+          case v do
+            %Variable{} = var_struct ->
+              var_struct
+
+            _ ->
+              %Variable{
+                value: v,
+                attributes: %{export: true, readonly: false, integer: false, array_type: nil}
+              }
+          end
+
+        {k, %{var | attributes: Map.put(var.attributes, :export, true)}}
       end)
 
     new_variables = Map.merge(state.variables, exported_vars)
