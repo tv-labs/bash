@@ -75,9 +75,8 @@ defmodule Bash.AST.Compound do
     state_updates: %{}
   ]
 
-  @doc """
-  Get exit code from the last evaluated statement.
-  """
+  # Get exit code from the last evaluated statement.
+  @doc false
   @spec get_exit_code(t()) :: 0..255 | nil
   def get_exit_code(%__MODULE__{statements: statements}) do
     statements
@@ -90,9 +89,8 @@ defmodule Bash.AST.Compound do
     end
   end
 
-  @doc """
-  Filter to only evaluated statements (no operators, only statements with evaluated: true).
-  """
+  # Filter to only evaluated statements (no operators, only statements with evaluated: true).
+  @doc false
   @spec evaluated_statements(t()) :: [map()]
   def evaluated_statements(%__MODULE__{statements: statements}) do
     statements

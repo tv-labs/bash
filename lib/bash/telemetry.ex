@@ -96,28 +96,26 @@ defmodule Bash.Telemetry do
   if you need to capture command output.
   """
 
-  @doc """
-  Execute a function with span telemetry for `Bash.run/3`.
-
-  Emits:
-  - `[:bash, :session, :run, :start]` before execution
-  - `[:bash, :session, :run, :stop]` on successful completion
-  - `[:bash, :session, :run, :exception]` if an exception is raised (then re-raises)
-  """
+  @doc false
+  # Execute a function with span telemetry for `Bash.run/3`.
+  #
+  # Emits:
+  # - `[:bash, :session, :run, :start]` before execution
+  # - `[:bash, :session, :run, :stop]` on successful completion
+  # - `[:bash, :session, :run, :exception]` if an exception is raised (then re-raises)
   @spec span(pid(), (-> {term(), map()})) :: term()
   def span(session_pid, fun) when is_pid(session_pid) and is_function(fun, 0) do
     start_metadata = %{session: session_pid}
     do_span([:bash, :session, :run], start_metadata, fun)
   end
 
-  @doc """
-  Execute a command with span telemetry.
-
-  Emits:
-  - `[:bash, :command, :start]` before execution
-  - `[:bash, :command, :stop]` on successful completion
-  - `[:bash, :command, :exception]` if an exception is raised (then re-raises)
-  """
+  @doc false
+  # Execute a command with span telemetry.
+  #
+  # Emits:
+  # - `[:bash, :command, :start]` before execution
+  # - `[:bash, :command, :stop]` on successful completion
+  # - `[:bash, :command, :exception]` if an exception is raised (then re-raises)
   @spec command_span(String.t(), list(String.t()), (-> {term(), map()})) :: term()
   def command_span(command, args, fun)
       when is_binary(command) and is_list(args) and is_function(fun, 0) do
@@ -125,14 +123,13 @@ defmodule Bash.Telemetry do
     do_span([:bash, :command], start_metadata, fun)
   end
 
-  @doc """
-  Execute a for loop with span telemetry.
-
-  Emits:
-  - `[:bash, :for_loop, :start]` before execution
-  - `[:bash, :for_loop, :stop]` on successful completion
-  - `[:bash, :for_loop, :exception]` if an exception is raised (then re-raises)
-  """
+  @doc false
+  # Execute a for loop with span telemetry.
+  #
+  # Emits:
+  # - `[:bash, :for_loop, :start]` before execution
+  # - `[:bash, :for_loop, :stop]` on successful completion
+  # - `[:bash, :for_loop, :exception]` if an exception is raised (then re-raises)
   @spec for_loop_span(String.t() | nil, non_neg_integer(), (-> {term(), map()})) :: term()
   def for_loop_span(variable, item_count, fun)
       when (is_binary(variable) or is_nil(variable)) and is_integer(item_count) and
@@ -143,14 +140,13 @@ defmodule Bash.Telemetry do
     do_span([:bash, :for_loop], start_metadata, fun)
   end
 
-  @doc """
-  Execute a while/until loop with span telemetry.
-
-  Emits:
-  - `[:bash, :while_loop, :start]` before execution
-  - `[:bash, :while_loop, :stop]` on successful completion
-  - `[:bash, :while_loop, :exception]` if an exception is raised (then re-raises)
-  """
+  @doc false
+  # Execute a while/until loop with span telemetry.
+  #
+  # Emits:
+  # - `[:bash, :while_loop, :start]` before execution
+  # - `[:bash, :while_loop, :stop]` on successful completion
+  # - `[:bash, :while_loop, :exception]` if an exception is raised (then re-raises)
   @spec while_loop_span(boolean(), (-> {term(), map()})) :: term()
   def while_loop_span(until_mode, fun) when is_boolean(until_mode) and is_function(fun, 0) do
     start_metadata = %{until: until_mode}

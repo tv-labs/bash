@@ -533,11 +533,10 @@ defmodule Bash.Tokenizer do
     end
   end
 
-  @doc """
-  Read a single token from the input.
-
-  Returns `{:ok, token, new_state}` or `{:error, reason, line, column}`.
-  """
+  # Read a single token from the input.
+  #
+  # Returns `{:ok, token, new_state}` or `{:error, reason, line, column}`.
+  @doc false
   @spec read_token(state()) ::
           {:ok, token(), state()} | {:error, String.t(), pos_integer(), pos_integer()}
   def read_token(state) do
@@ -1523,17 +1522,16 @@ defmodule Bash.Tokenizer do
     end
   end
 
-  @doc """
-  Read a word token (including assignments and redirections with fd prefixes).
-
-  Words can contain:
-  - Literal text
-  - Single-quoted strings
-  - Double-quoted strings (with expansions)
-  - Variable references ($VAR, ${VAR}, ${VAR:-default}, etc.)
-  - Command substitutions ($(cmd) or `cmd`)
-  - Arithmetic expansions ($((expr)))
-  """
+  # Read a word token (including assignments and redirections with fd prefixes).
+  #
+  # Words can contain:
+  # - Literal text
+  # - Single-quoted strings
+  # - Double-quoted strings (with expansions)
+  # - Variable references ($VAR, ${VAR}, ${VAR:-default}, etc.)
+  # - Command substitutions ($(cmd) or `cmd`)
+  # - Arithmetic expansions ($((expr)))
+  @doc false
   def read_word(state) do
     start_line = state.line
     start_col = state.column

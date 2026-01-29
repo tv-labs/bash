@@ -56,9 +56,8 @@ defmodule Bash.Builtin.Test do
 
   import Bitwise
 
-  @doc """
-  Resolve a path relative to the working directory.
-  """
+  # Resolve a path relative to the working directory.
+  @doc false
   def resolve_path(path, working_dir) do
     if Path.absname(path) == path do
       path
@@ -67,9 +66,8 @@ defmodule Bash.Builtin.Test do
     end
   end
 
-  @doc """
-  Convert a string to an integer, returning 0 for invalid strings.
-  """
+  # Convert a string to an integer, returning 0 for invalid strings.
+  @doc false
   def to_integer(str) when is_binary(str) do
     case Integer.parse(str) do
       {int, _} -> int

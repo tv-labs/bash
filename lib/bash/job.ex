@@ -43,16 +43,15 @@ defmodule Bash.Job do
     :completed_at
   ]
 
-  @doc """
-  Create a new Job struct.
-
-  ## Options
-
-  - `:job_number` - Job number assigned by Session (required)
-  - `:command` - Command string for display (required)
-  - `:os_pid` - OS process ID from ExCmd
-  - `:erlang_pid` - JobProcess GenServer pid
-  """
+  # Create a new Job struct.
+  #
+  # ## Options
+  #
+  # - `:job_number` - Job number assigned by Session (required)
+  # - `:command` - Command string for display (required)
+  # - `:os_pid` - OS process ID from ExCmd
+  # - `:erlang_pid` - JobProcess GenServer pid
+  @doc false
   @spec new(keyword()) :: t()
   def new(opts) do
     %__MODULE__{
@@ -67,66 +66,58 @@ defmodule Bash.Job do
     }
   end
 
-  @doc """
-  Mark the job as completed with the given exit code.
-  """
+  # Mark the job as completed with the given exit code.
+  @doc false
   @spec complete(t(), integer()) :: t()
   def complete(%__MODULE__{} = job, exit_code) do
     %{job | status: :done, exit_code: exit_code, completed_at: DateTime.utc_now()}
   end
 
-  @doc """
-  Mark the job as stopped (suspended).
-  """
+  # Mark the job as stopped (suspended).
+  @doc false
   @spec stop(t()) :: t()
   def stop(%__MODULE__{} = job) do
     %{job | status: :stopped}
   end
 
-  @doc """
-  Mark the job as running (resumed from stopped).
-  """
+  # Mark the job as running (resumed from stopped).
+  @doc false
   @spec resume(t()) :: t()
   def resume(%__MODULE__{} = job) do
     %{job | status: :running}
   end
 
-  @doc """
-  Check if the job has completed successfully (exit code 0).
-  """
+  # Check if the job has completed successfully (exit code 0).
+  @doc false
   @spec success?(t()) :: boolean()
   def success?(%__MODULE__{status: :done, exit_code: 0}), do: true
   def success?(_), do: false
 
-  @doc """
-  Check if the job is still running.
-  """
+  # Check if the job is still running.
+  @doc false
   @spec running?(t()) :: boolean()
   def running?(%__MODULE__{status: :running}), do: true
   def running?(_), do: false
 
-  @doc """
-  Check if the job is stopped (suspended).
-  """
+  # Check if the job is stopped (suspended).
+  @doc false
   @spec stopped?(t()) :: boolean()
   def stopped?(%__MODULE__{status: :stopped}), do: true
   def stopped?(_), do: false
 
-  @doc """
-  Check if the job is done (completed).
-  """
+  # Check if the job is done (completed).
+  @doc false
   @spec done?(t()) :: boolean()
   def done?(%__MODULE__{status: :done}), do: true
   def done?(_), do: false
 
-  @doc """
-  Format job for display in `jobs` output.
-
-  Returns a string like:
-
-      [1]+  Running                 sleep 100 &
-      [2]-  Done                    echo hello
-  """
+  # Format job for display in `jobs` output.
+  #
+  # Returns a string like:
+  #
+  # [1]+  Running                 sleep 100 &
+  # [2]-  Done                    echo hello
+  @doc false
   @spec format(t(), keyword()) :: String.t()
   def format(%__MODULE__{} = job, opts \\ []) do
     current = Keyword.get(opts, :current, false)

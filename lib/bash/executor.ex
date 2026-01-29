@@ -12,31 +12,30 @@ defmodule Bash.Executor do
   alias Bash.Function
   alias Bash.Script
 
-  @doc """
-  Executes a command AST or list of ASTs within session state.
-  Optionally accepts stdin input for piped commands.
-
-  ## Options
-
-    * `:sink` - Output sink function for streaming. When provided, output is
-      streamed to the sink instead of accumulated in the result.
-
-  ## Examples
-
-      # Execute a single command
-      session_state = %Session{...}
-      ast = %AST.Command{...}
-      {:ok, result, state_updates} = Executor.execute(ast, session_state)
-
-      # Execute a list of ASTs
-      asts = [%AST.Assignment{...}, %AST.Command{...}]
-      {:ok, result, state_updates} = Executor.execute(asts, session_state)
-
-      # Execute with streaming output
-      sink = Bash.Sink.Passthrough.new(fn chunk -> IO.write(elem(chunk, 1)) end)
-      Executor.execute(ast, session_state, nil, sink: sink)
-
-  """
+  # Executes a command AST or list of ASTs within session state.
+  # Optionally accepts stdin input for piped commands.
+  #
+  # ## Options
+  #
+  # * `:sink` - Output sink function for streaming. When provided, output is
+  # streamed to the sink instead of accumulated in the result.
+  #
+  # ## Examples
+  #
+  # # Execute a single command
+  # session_state = %Session{...}
+  # ast = %AST.Command{...}
+  # {:ok, result, state_updates} = Executor.execute(ast, session_state)
+  #
+  # # Execute a list of ASTs
+  # asts = [%AST.Assignment{...}, %AST.Command{...}]
+  # {:ok, result, state_updates} = Executor.execute(asts, session_state)
+  #
+  # # Execute with streaming output
+  # sink = Bash.Sink.Passthrough.new(fn chunk -> IO.write(elem(chunk, 1)) end)
+  # Executor.execute(ast, session_state, nil, sink: sink)
+  #
+  @doc false
   def execute(ast_or_list, session_state, stdin \\ nil, opts \\ [])
 
   def execute(asts, session_state, stdin, opts) when is_list(asts) do

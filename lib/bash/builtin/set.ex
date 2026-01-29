@@ -312,9 +312,8 @@ defmodule Bash.Builtin.Set do
 
   defp format_value(value), do: to_string(value)
 
-  @doc """
-  Get the current shell options as a string for $- variable.
-  """
+  # Get the current shell options as a string for $- variable.
+  @doc false
   def get_flags_string(options) do
     @flag_to_option
     |> Enum.filter(fn {_flag, opt} -> Map.get(options, opt, false) end)
@@ -323,9 +322,8 @@ defmodule Bash.Builtin.Set do
     |> Enum.join("")
   end
 
-  @doc """
-  Get the current shell options as SHELLOPTS format.
-  """
+  # Get the current shell options as SHELLOPTS format.
+  @doc false
   def get_shellopts_string(options) do
     options
     |> Enum.filter(fn {_opt, value} -> value == true end)

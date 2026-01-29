@@ -75,28 +75,27 @@ defmodule Bash.Sink do
     end
   end
 
-  @doc """
-  Creates a sink that writes to a File.Stream or any Collectable.
-
-  Use this for `:stdout_into` and `:stderr_into` options to stream
-  output directly to files without accumulating in memory.
-
-  ## Options
-
-    * `:stream_type` - Which stream to capture (`:stdout`, `:stderr`, or `:both`).
-      Defaults to `:both`.
-
-  ## Examples
-
-      # Stream stdout to a file
-      file_stream = File.stream!("/tmp/output.txt")
-      sink = Sink.stream(file_stream)
-      sink.({:stdout, "hello"})
-
-      # Stream to any Collectable
-      sink = Sink.stream(some_collectable, stream_type: :stderr)
-
-  """
+  # Creates a sink that writes to a File.Stream or any Collectable.
+  #
+  # Use this for `:stdout_into` and `:stderr_into` options to stream
+  # output directly to files without accumulating in memory.
+  #
+  # ## Options
+  #
+  # * `:stream_type` - Which stream to capture (`:stdout`, `:stderr`, or `:both`).
+  # Defaults to `:both`.
+  #
+  # ## Examples
+  #
+  # # Stream stdout to a file
+  # file_stream = File.stream!("/tmp/output.txt")
+  # sink = Sink.stream(file_stream)
+  # sink.({:stdout, "hello"})
+  #
+  # # Stream to any Collectable
+  # sink = Sink.stream(some_collectable, stream_type: :stderr)
+  #
+  @doc false
   @spec stream(Collectable.t(), keyword()) :: t()
   def stream(collectable, opts \\ []) do
     stream_type = Keyword.get(opts, :stream_type, :both)
@@ -124,31 +123,29 @@ defmodule Bash.Sink do
     end
   end
 
-  @doc """
-  Finalizes a stream sink created with `stream/2`.
-
-  Must be called after all output has been written to ensure the
-  Collectable is properly closed.
-  """
+  # Finalizes a stream sink created with `stream/2`.
+  #
+  # Must be called after all output has been written to ensure the
+  # Collectable is properly closed.
+  @doc false
   @spec finalize_stream(Collectable.t()) :: term()
   def finalize_stream(collectable) do
     {_acc, collector_fun} = Collectable.into(collectable)
     collector_fun.(nil, :done)
   end
 
-  @doc """
-  Creates a passthrough sink that calls the given callback for each chunk.
-
-  Useful for real-time streaming to the caller or for testing.
-
-  ## Examples
-
-      sink = Sink.passthrough(fn
-        {:stdout, data} -> IO.write(data)
-        {:stderr, data} -> IO.write(:stderr, data)
-      end)
-
-  """
+  # Creates a passthrough sink that calls the given callback for each chunk.
+  #
+  # Useful for real-time streaming to the caller or for testing.
+  #
+  # ## Examples
+  #
+  # sink = Sink.passthrough(fn
+  # {:stdout, data} -> IO.write(data)
+  # {:stderr, data} -> IO.write(:stderr, data)
+  # end)
+  #
+  @doc false
   @spec passthrough((chunk() -> any())) :: t()
   def passthrough(callback) when is_function(callback, 1) do
     fn chunk ->
@@ -157,23 +154,22 @@ defmodule Bash.Sink do
     end
   end
 
-  @doc """
-  Creates a file sink that writes output directly to a file path.
-
-  ## Options
-
-    * `:append` - Append to file instead of overwriting (default: false)
-    * `:stream_type` - Which stream to write (`:stdout`, `:stderr`, or `:both`, default: `:stdout`)
-
-  Returns `{sink_fun, close_fun}` where close_fun must be called to close the file.
-
-  ## Examples
-
-      {sink, close} = Sink.file("/tmp/output.txt")
-      sink.({:stdout, "hello\\n"})
-      close.()
-
-  """
+  # Creates a file sink that writes output directly to a file path.
+  #
+  # ## Options
+  #
+  # * `:append` - Append to file instead of overwriting (default: false)
+  # * `:stream_type` - Which stream to write (`:stdout`, `:stderr`, or `:both`, default: `:stdout`)
+  #
+  # Returns `{sink_fun, close_fun}` where close_fun must be called to close the file.
+  #
+  # ## Examples
+  #
+  # {sink, close} = Sink.file("/tmp/output.txt")
+  # sink.({:stdout, "hello\\n"})
+  # close.()
+  #
+  @doc false
   @spec file(Path.t(), keyword()) :: {t(), (-> :ok | {:error, term()})}
   def file(path, opts \\ []) do
     append = Keyword.get(opts, :append, false)
@@ -206,17 +202,16 @@ defmodule Bash.Sink do
     end
   end
 
-  @doc """
-  Creates a null sink that discards all output.
-
-  Used for `/dev/null` redirections.
-
-  ## Examples
-
-      sink = Sink.null()
-      sink.({:stdout, "discarded"})  # => :ok
-
-  """
+  # Creates a null sink that discards all output.
+  #
+  # Used for `/dev/null` redirections.
+  #
+  # ## Examples
+  #
+  # sink = Sink.null()
+  # sink.({:stdout, "discarded"})  # => :ok
+  #
+  @doc false
   @spec null() :: t()
   def null do
     fn _ -> :ok end
@@ -274,24 +269,22 @@ defmodule Bash.Sink do
     end
   end
 
-  @doc """
-  Write data to the specified stream's sink if available.
-
-  ## Examples
-
-      Sink.write(session_state, :stdout, "hello\\n")
-      Sink.write(session_state, :stderr, "error\\n")
-
-  """
+  # Write data to the specified stream's sink if available.
+  #
+  # ## Examples
+  #
+  # Sink.write(session_state, :stdout, "hello\\n")
+  # Sink.write(session_state, :stderr, "error\\n")
+  #
+  @doc false
   @spec write(map(), :stdout | :stderr, binary()) :: :ok | :no_sink
   def write(session_state, :stdout, data), do: write_stdout(session_state, data)
   def write(session_state, :stderr, data), do: write_stderr(session_state, data)
 
-  @doc """
-  Creates a sink that writes to a `Bash.Pipe`.
-
-  Strips the stream tag and writes raw data to the pipe's write end.
-  """
+  # Creates a sink that writes to a `Bash.Pipe`.
+  #
+  # Strips the stream tag and writes raw data to the pipe's write end.
+  @doc false
   @spec pipe(Bash.Pipe.t()) :: t()
   def pipe(%Bash.Pipe{} = p) do
     fn {_stream, data} when is_binary(data) ->

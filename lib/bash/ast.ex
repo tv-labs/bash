@@ -109,17 +109,15 @@ defmodule Bash.AST do
   defguard is_assignment(node) when is_struct(node, AST.Assignment)
   defguard is_assignment(node, name) when is_assignment(node) and assignment_name(node) == name
 
-  @doc """
-  Create metadata from line and column information.
-  """
+  # Create metadata from line and column information.
+  @doc false
   def meta(line, column, source_range \\ nil) do
     %AST.Meta{line: line, column: column, source_range: source_range}
   end
 
-  @doc """
-  Check if an AST node is a constant (no expansions needed).
-  Returns true if the node contains only literals.
-  """
+  # Check if an AST node is a constant (no expansions needed).
+  # Returns true if the node contains only literals.
+  @doc false
   def constant?(%AST.Word{parts: parts}) do
     Enum.all?(parts, fn
       {:literal, _} -> true
@@ -129,10 +127,9 @@ defmodule Bash.AST do
 
   def constant?(_), do: false
 
-  @doc """
-  Extract the literal value from a constant word.
-  Returns {:ok, string} or :error if not constant.
-  """
+  # Extract the literal value from a constant word.
+  # Returns {:ok, string} or :error if not constant.
+  @doc false
   def literal_value(%AST.Word{} = word) do
     if constant?(word) do
       value =
@@ -222,15 +219,14 @@ defmodule Bash.AST do
     acc
   end
 
-  @doc """
-  Extracts only stdout from an AST node's output field.
-
-  ## Examples
-
-      iex> AST.stdout(%AST.Command{output: [{:stdout, "hello\\n"}]})
-      "hello\\n"
-
-  """
+  # Extracts only stdout from an AST node's output field.
+  #
+  # ## Examples
+  #
+  #     iex> AST.stdout(%AST.Command{output: [{:stdout, "hello\\n"}]})
+  #     "hello\\n"
+  #
+  @doc false
   def stdout(%{output: output}) when is_list(output) do
     output
     |> Enum.flat_map(fn
@@ -243,15 +239,14 @@ defmodule Bash.AST do
 
   def stdout(_), do: ""
 
-  @doc """
-  Extracts only stderr from an AST node's output field.
-
-  ## Examples
-
-      iex> AST.stderr(%AST.Command{output: [{:stderr, "error\\n"}]})
-      "error\\n"
-
-  """
+  # Extracts only stderr from an AST node's output field.
+  #
+  # ## Examples
+  #
+  #     iex> AST.stderr(%AST.Command{output: [{:stderr, "error\\n"}]})
+  #     "error\\n"
+  #
+  @doc false
   def stderr(%{output: output}) when is_list(output) do
     output
     |> Enum.flat_map(fn
@@ -264,15 +259,14 @@ defmodule Bash.AST do
 
   def stderr(_), do: ""
 
-  @doc """
-  Returns all output as a single binary, preserving order.
-
-  ## Examples
-
-      iex> AST.all_output(%AST.Command{output: [{:stdout, "out"}, {:stderr, "err"}]})
-      "outerr"
-
-  """
+  # Returns all output as a single binary, preserving order.
+  #
+  # ## Examples
+  #
+  #     iex> AST.all_output(%AST.Command{output: [{:stdout, "out"}, {:stderr, "err"}]})
+  #     "outerr"
+  #
+  @doc false
   def all_output(%{output: output}) when is_list(output) do
     output
     |> Enum.flat_map(fn
@@ -285,50 +279,47 @@ defmodule Bash.AST do
 
   def all_output(_), do: ""
 
-  @doc """
-  Returns true if the AST node executed successfully (exit code 0).
-
-  ## Examples
-
-      iex> AST.success?(%AST.Command{exit_code: 0})
-      true
-
-      iex> AST.success?(%AST.Command{exit_code: 1})
-      false
-
-  """
+  # Returns true if the AST node executed successfully (exit code 0).
+  #
+  # ## Examples
+  #
+  #     iex> AST.success?(%AST.Command{exit_code: 0})
+  #     true
+  #
+  #     iex> AST.success?(%AST.Command{exit_code: 1})
+  #     false
+  #
+  @doc false
   def success?(%{exit_code: 0}), do: true
   def success?(%{exit_code: _}), do: false
   def success?(_), do: false
 
-  @doc """
-  Returns true if the AST node has been executed (has an exit code).
-
-  ## Examples
-
-      iex> AST.executed?(%AST.Command{exit_code: 0})
-      true
-
-      iex> AST.executed?(%AST.Command{exit_code: nil})
-      false
-
-  """
+  # Returns true if the AST node has been executed (has an exit code).
+  #
+  # ## Examples
+  #
+  #     iex> AST.executed?(%AST.Command{exit_code: 0})
+  #     true
+  #
+  #     iex> AST.executed?(%AST.Command{exit_code: nil})
+  #     false
+  #
+  @doc false
   def executed?(%{exit_code: nil}), do: false
   def executed?(%{exit_code: _}), do: true
   def executed?(_), do: false
 
-  @doc """
-  Gets the exit code from an AST node.
-
-  ## Examples
-
-      iex> AST.get_exit_code(%AST.Command{exit_code: 0})
-      0
-
-      iex> AST.get_exit_code(%AST.Command{exit_code: nil})
-      nil
-
-  """
+  # Gets the exit code from an AST node.
+  #
+  # ## Examples
+  #
+  #     iex> AST.get_exit_code(%AST.Command{exit_code: 0})
+  #     0
+  #
+  #     iex> AST.get_exit_code(%AST.Command{exit_code: nil})
+  #     nil
+  #
+  @doc false
   def get_exit_code(%{exit_code: code}), do: code
   def get_exit_code(_), do: nil
 end

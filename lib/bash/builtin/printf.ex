@@ -22,9 +22,8 @@ defmodule Bash.Builtin.Printf do
 
   alias Bash.Variable
 
-  @doc """
-  Execute the printf builtin command.
-  """
+  # Execute the printf builtin command.
+  @doc false
   defbash execute(args, _state) do
     case parse_args(args) do
       {:ok, var_name, format, arguments} ->
@@ -61,9 +60,8 @@ defmodule Bash.Builtin.Printf do
   defp parse_args(["-v", _var_name]), do: {:error, "usage: printf [-v var] format [arguments]"}
   defp parse_args([format | args]), do: {:ok, nil, format, args}
 
-  @doc """
-  Format a string with the given arguments, repeating the format if necessary.
-  """
+  # Format a string with the given arguments, repeating the format if necessary.
+  @doc false
   def format_string(format, arguments) do
     # First, process escape sequences in the format string
     format = process_escapes(format)

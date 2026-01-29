@@ -22,20 +22,19 @@ defmodule Bash.CommandPort do
 
   alias Bash.CommandResult
 
-  @doc """
-  Executes a command with optional stdin input.
-
-  Returns {:ok, %CommandResult{}} or {:error, %CommandResult{}}.
-  Output is streamed to the sink during execution rather than accumulated.
-
-  ## Options
-
-  - `:stdin` - Binary data to write to the command's stdin
-  - `:timeout` - Timeout in milliseconds (default: 5000)
-  - `:cd` - Working directory for the command
-  - `:env` - Environment variables as a list of `{key, value}` tuples
-  - `:sink` - Output sink function (default: uses Sink.List for backwards compat)
-  """
+  # Executes a command with optional stdin input.
+  #
+  # Returns {:ok, %CommandResult{}} or {:error, %CommandResult{}}.
+  # Output is streamed to the sink during execution rather than accumulated.
+  #
+  # ## Options
+  #
+  # - `:stdin` - Binary data to write to the command's stdin
+  # - `:timeout` - Timeout in milliseconds (default: 5000)
+  # - `:cd` - Working directory for the command
+  # - `:env` - Environment variables as a list of `{key, value}` tuples
+  # - `:sink` - Output sink function (default: uses Sink.List for backwards compat)
+  @doc false
   def execute(command_name, args, opts \\ []) do
     stdin = opts[:stdin]
     timeout = opts[:timeout] || 5000

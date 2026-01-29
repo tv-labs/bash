@@ -30,14 +30,13 @@ defmodule Bash.Pipe do
 
   defstruct [:path, :read_end, :write_end]
 
-  @doc """
-  Create a new FIFO pipe. Returns `{:ok, pipe}`.
-
-  The read and write ends must be opened separately with `open_read/1`
-  and `open_write/1`, each from different processes (opening both from
-  the same process will deadlock since FIFO open blocks until both ends
-  are connected).
-  """
+  # Create a new FIFO pipe. Returns `{:ok, pipe}`.
+  #
+  # The read and write ends must be opened separately with `open_read/1`
+  # and `open_write/1`, each from different processes (opening both from
+  # the same process will deadlock since FIFO open blocks until both ends
+  # are connected).
+  @doc false
   @spec create(Path.t()) :: {:ok, t()} | {:error, term()}
   def create(dir \\ System.tmp_dir!()) do
     path = Path.join(dir, "bash_pipe_#{:erlang.unique_integer([:positive])}")
@@ -48,35 +47,31 @@ defmodule Bash.Pipe do
     end
   end
 
-  @doc """
-  Open the read end of the pipe. Blocks until a writer opens the other end.
-  """
+  # Open the read end of the pipe. Blocks until a writer opens the other end.
+  @doc false
   @spec open_read(t()) :: {:ok, t()}
   def open_read(%__MODULE__{path: path} = pipe) do
     {:ok, device} = File.open(path, [:read, :binary, :raw])
     {:ok, %{pipe | read_end: device}}
   end
 
-  @doc """
-  Open the write end of the pipe. Blocks until a reader opens the other end.
-  """
+  # Open the write end of the pipe. Blocks until a reader opens the other end.
+  @doc false
   @spec open_write(t()) :: {:ok, t()}
   def open_write(%__MODULE__{path: path} = pipe) do
     {:ok, device} = File.open(path, [:write, :binary, :raw])
     {:ok, %{pipe | write_end: device}}
   end
 
-  @doc """
-  Write data to the pipe.
-  """
+  # Write data to the pipe.
+  @doc false
   @spec write(t(), iodata()) :: :ok | {:error, term()}
   def write(%__MODULE__{write_end: device}, data) do
     IO.binwrite(device, data)
   end
 
-  @doc """
-  Read a line from the pipe. Blocks until data is available or EOF.
-  """
+  # Read a line from the pipe. Blocks until data is available or EOF.
+  @doc false
   @spec read_line(t()) :: {:ok, binary()} | :eof
   def read_line(%__MODULE__{read_end: device}) do
     case IO.binread(device, :line) do
@@ -86,9 +81,8 @@ defmodule Bash.Pipe do
     end
   end
 
-  @doc """
-  Read all data from the pipe until EOF.
-  """
+  # Read all data from the pipe until EOF.
+  @doc false
   @spec read_all(t()) :: binary()
   def read_all(%__MODULE__{read_end: device}) do
     case IO.binread(device, :all) do
@@ -98,23 +92,20 @@ defmodule Bash.Pipe do
     end
   end
 
-  @doc """
-  Close the write end, signaling EOF to readers.
-  """
+  # Close the write end, signaling EOF to readers.
+  @doc false
   @spec close_write(t()) :: :ok
   def close_write(%__MODULE__{write_end: nil}), do: :ok
   def close_write(%__MODULE__{write_end: device}), do: File.close(device)
 
-  @doc """
-  Close the read end.
-  """
+  # Close the read end.
+  @doc false
   @spec close_read(t()) :: :ok
   def close_read(%__MODULE__{read_end: nil}), do: :ok
   def close_read(%__MODULE__{read_end: device}), do: File.close(device)
 
-  @doc """
-  Remove the FIFO from the filesystem and close both ends.
-  """
+  # Remove the FIFO from the filesystem and close both ends.
+  @doc false
   @spec destroy(t()) :: :ok
   def destroy(%__MODULE__{} = pipe) do
     close_write(pipe)

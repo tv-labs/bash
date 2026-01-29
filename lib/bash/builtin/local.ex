@@ -16,13 +16,12 @@ defmodule Bash.Builtin.Local do
 
   alias Bash.Builtin.Declare
 
-  @doc """
-  Execute the local builtin command.
-
-  Delegates to the declare builtin, which handles variable creation.
-  The distinction between local and declare is primarily about scope,
-  which is handled by the execution context.
-  """
+  # Execute the local builtin command.
+  #
+  # Delegates to the declare builtin, which handles variable creation.
+  # The distinction between local and declare is primarily about scope,
+  # which is handled by the execution context.
+  @doc false
   def execute(args, stdin, session_state) do
     # Delegate to declare - the scope handling happens at the execution level
     Declare.execute(args, stdin, session_state)

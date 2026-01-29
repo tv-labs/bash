@@ -26,15 +26,13 @@ defmodule Bash.CommandResult do
           error: error_type() | nil
         }
 
-  @doc """
-  Returns true if the command succeeded (exit code 0, no error).
-  """
+  # Returns true if the command succeeded (exit code 0, no error).
+  @doc false
   def success?(%__MODULE__{exit_code: 0, error: nil}), do: true
   def success?(%__MODULE__{}), do: false
 
-  @doc """
-  Returns true if there was an error.
-  """
+  # Returns true if there was an error.
+  @doc false
   def error?(%__MODULE__{error: nil}), do: false
   def error?(%__MODULE__{}), do: true
 

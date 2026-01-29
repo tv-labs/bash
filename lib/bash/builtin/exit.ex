@@ -10,17 +10,16 @@ defmodule Bash.Builtin.Exit do
 
   alias Bash.CommandResult
 
-  @doc """
-  Execute the exit builtin.
-
-  ## Exit Code Behavior
-
-  - No arguments: Uses the exit code of the last executed command
-  - Numeric argument: Uses that value wrapped to 0-255 (modulo 256)
-  - Negative numbers: Wrapped modulo 256 (-1 becomes 255)
-  - Non-numeric argument: Returns exit code 2 with error message
-  - Too many arguments: Returns exit code 1 with error message
-  """
+  # Execute the exit builtin.
+  #
+  # ## Exit Code Behavior
+  #
+  # - No arguments: Uses the exit code of the last executed command
+  # - Numeric argument: Uses that value wrapped to 0-255 (modulo 256)
+  # - Negative numbers: Wrapped modulo 256 (-1 becomes 255)
+  # - Non-numeric argument: Returns exit code 2 with error message
+  # - Too many arguments: Returns exit code 1 with error message
+  @doc false
   defbash execute(args, state) do
     case args do
       [] ->

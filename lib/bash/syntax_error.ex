@@ -81,14 +81,13 @@ defmodule Bash.SyntaxError do
     |> Enum.join("\n")
   end
 
-  @doc """
-  Build a SyntaxError from a parser failure.
-
-  ## Examples
-
-      iex> SyntaxError.from_parse_error("echo \\"hello", "expected end of string")
-      %SyntaxError{code: "SC1009", hint: "unclosed quote or expression", ...}
-  """
+  @doc false
+  # Build a SyntaxError from a parser failure.
+  #
+  # ## Examples
+  #
+  #     iex> SyntaxError.from_parse_error("echo \\"hello", "expected end of string")
+  #     %SyntaxError{code: "SC1009", hint: "unclosed quote or expression", ...}
   @spec from_parse_error(String.t(), String.t(), pos_integer(), non_neg_integer()) ::
           %__MODULE__{}
   def from_parse_error(script, reason, line \\ 1, column \\ 0) do
@@ -105,9 +104,7 @@ defmodule Bash.SyntaxError do
     %{error | message: message(error)}
   end
 
-  @doc """
-  Build a SyntaxError from validator results.
-  """
+  @doc false
   @spec from_validation(String.t(), String.t(), String.t(), map() | nil) :: %__MODULE__{}
   def from_validation(script, code, hint, meta \\ nil) do
     {line, column} = extract_position(meta)

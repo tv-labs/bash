@@ -41,12 +41,11 @@ defmodule Bash.AST.RegexPattern do
 
   defstruct [:meta, parts: []]
 
-  @doc """
-  Expand the regex pattern parts into a string for compilation.
-
-  Variables are expanded using the session state. Unlike word expansion,
-  no word splitting or glob expansion is performed.
-  """
+  # Expand the regex pattern parts into a string for compilation.
+  #
+  # Variables are expanded using the session state. Unlike word expansion,
+  # no word splitting or glob expansion is performed.
+  @doc false
   def expand(%__MODULE__{parts: parts}, session_state) do
     parts
     |> Enum.map(&expand_part(&1, session_state))

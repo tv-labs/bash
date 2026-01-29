@@ -420,16 +420,14 @@ defmodule Bash.Builtin.Shopt do
     Map.get(session_state.options || %{}, key, default)
   end
 
-  @doc """
-  Get all shopt option names.
-  """
+  # Get all shopt option names.
+  @doc false
   def shopt_option_names do
     Map.keys(@shopt_options)
   end
 
-  @doc """
-  Get the default value for a shopt option.
-  """
+  # Get the default value for a shopt option.
+  @doc false
   def default_value(optname) do
     case Map.get(@shopt_options, optname) do
       {default, _desc} -> default
@@ -437,9 +435,8 @@ defmodule Bash.Builtin.Shopt do
     end
   end
 
-  @doc """
-  Check if an option name is valid.
-  """
+  # Check if an option name is valid.
+  @doc false
   def valid_option?(optname, use_set_o \\ false) do
     if use_set_o do
       Map.has_key?(@set_o_options, optname)

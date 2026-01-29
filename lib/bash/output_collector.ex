@@ -1,16 +1,16 @@
 defmodule Bash.OutputCollector do
-  @moduledoc """
-  Linked GenServer that collects stdout/stderr as interleaved chunks.
+  @moduledoc false
+  # Linked GenServer that collects stdout/stderr as interleaved chunks.
+  #
+  # This process is spawned by Session on execution start and linked to it.
+  # If the session crashes, the collector dies with it.
+  #
+  # Output is accumulated as a single interleaved list of `{:stdout, data}` and
+  # `{:stderr, data}` tuples, preserving the order in which output was received.
+  # This is important for accurate reproduction in formatters and debugging.
+  #
+  # Chunks are prepended for efficiency, then reversed on read.
 
-  This process is spawned by Session on execution start and linked to it.
-  If the session crashes, the collector dies with it.
-
-  Output is accumulated as a single interleaved list of `{:stdout, data}` and
-  `{:stderr, data}` tuples, preserving the order in which output was received.
-  This is important for accurate reproduction in formatters and debugging.
-
-  Chunks are prepended for efficiency, then reversed on read.
-  """
   use GenServer
 
   defstruct chunks: []
@@ -20,87 +20,79 @@ defmodule Bash.OutputCollector do
           chunks: [chunk()]
         }
 
-  @doc """
-  Starts an OutputCollector process.
-
-  ## Options
-
-    * `:name` - Optional name registration
-
-  ## Examples
-
-      {:ok, pid} = OutputCollector.start_link()
-
-  """
+  # Starts an OutputCollector process.
+  #
+  # ## Options
+  #
+  # * `:name` - Optional name registration
+  #
+  # ## Examples
+  #
+  # {:ok, pid} = OutputCollector.start_link()
+  #
+  @doc false
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, %__MODULE__{}, opts)
   end
 
-  @doc """
-  Writes a chunk to the collector.
-
-  This is an async cast for performance - writes don't block.
-
-  ## Examples
-
-      OutputCollector.write(pid, :stdout, "hello\\n")
-      OutputCollector.write(pid, :stderr, "error message")
-
-  """
+  # Writes a chunk to the collector.
+  #
+  # This is an async cast for performance - writes don't block.
+  #
+  # ## Examples
+  #
+  # OutputCollector.write(pid, :stdout, "hello\\n")
+  # OutputCollector.write(pid, :stderr, "error message")
+  #
+  @doc false
   @spec write(pid(), :stdout | :stderr, binary()) :: :ok
   def write(pid, stream, data) when stream in [:stdout, :stderr] and is_binary(data) do
     GenServer.cast(pid, {:write, stream, data})
   end
 
-  @doc """
-  Gets all interleaved chunks in order.
-
-  Returns a list of `{:stdout, data}` and `{:stderr, data}` tuples
-  in the order they were received.
-  """
+  # Gets all interleaved chunks in order.
+  #
+  # Returns a list of `{:stdout, data}` and `{:stderr, data}` tuples
+  # in the order they were received.
+  @doc false
   @spec chunks(pid()) :: [chunk()]
   def chunks(pid), do: GenServer.call(pid, :chunks)
 
-  @doc """
-  Gets accumulated stdout as iodata (list of binaries).
-
-  ## Examples
-
-      iodata = OutputCollector.stdout(pid)
-      binary = IO.iodata_to_binary(iodata)
-
-  """
+  # Gets accumulated stdout as iodata (list of binaries).
+  #
+  # ## Examples
+  #
+  # iodata = OutputCollector.stdout(pid)
+  # binary = IO.iodata_to_binary(iodata)
+  #
+  @doc false
   @spec stdout(pid()) :: iodata()
   def stdout(pid), do: GenServer.call(pid, :stdout)
 
-  @doc """
-  Gets accumulated stderr as iodata (list of binaries).
-  """
+  # Gets accumulated stderr as iodata (list of binaries).
+  @doc false
   @spec stderr(pid()) :: iodata()
   def stderr(pid), do: GenServer.call(pid, :stderr)
 
-  @doc """
-  Gets both stdout and stderr as `{stdout_iodata, stderr_iodata}`.
-
-  Note: This separates the interleaved chunks, losing ordering.
-  Use `chunks/1` if you need ordering preserved.
-  """
+  # Gets both stdout and stderr as `{stdout_iodata, stderr_iodata}`.
+  #
+  # Note: This separates the interleaved chunks, losing ordering.
+  # Use `chunks/1` if you need ordering preserved.
+  @doc false
   @spec output(pid()) :: {iodata(), iodata()}
   def output(pid), do: GenServer.call(pid, :output)
 
-  @doc """
-  Clears accumulated output and returns what was collected as interleaved chunks.
-  """
+  # Clears accumulated output and returns what was collected as interleaved chunks.
+  @doc false
   @spec flush(pid()) :: [chunk()]
   def flush(pid), do: GenServer.call(pid, :flush)
 
-  @doc """
-  Clears accumulated output and returns it as separate stdout/stderr iodata.
-
-  This is a convenience function for backward compatibility.
-  Use `flush/1` if you need ordering preserved.
-  """
+  # Clears accumulated output and returns it as separate stdout/stderr iodata.
+  #
+  # This is a convenience function for backward compatibility.
+  # Use `flush/1` if you need ordering preserved.
+  @doc false
   @spec flush_split(pid()) :: {iodata(), iodata()}
   def flush_split(pid), do: GenServer.call(pid, :flush_split)
 

@@ -13,9 +13,8 @@ defmodule Bash.Builtin.Readonly do
 
   alias Bash.Builtin.Declare
 
-  @doc """
-  Execute the readonly builtin by delegating to declare -r.
-  """
+  # Execute the readonly builtin by delegating to declare -r.
+  @doc false
   def execute(args, stdin, session_state) do
     # readonly is equivalent to declare -r
     # Prepend -r to the args

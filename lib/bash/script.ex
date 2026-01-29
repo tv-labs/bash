@@ -53,17 +53,16 @@ defmodule Bash.Script do
     collector: nil
   ]
 
-  @doc """
-  Execute a script, updating all statements with their execution results.
-
-  Returns the script with:
-  - All statements updated with their exit_code and meta
-  - The script's exit_code set to the last statement's exit code
-  - The script's state_updates merged from all statements
-  - The script's collector set to the output collector (for reading output)
-
-  Output is written to sinks during execution. Read from the collector after execution.
-  """
+  # Execute a script, updating all statements with their execution results.
+  #
+  # Returns the script with:
+  # - All statements updated with their exit_code and meta
+  # - The script's exit_code set to the last statement's exit code
+  # - The script's state_updates merged from all statements
+  # - The script's collector set to the output collector (for reading output)
+  #
+  # Output is written to sinks during execution. Read from the collector after execution.
+  @doc false
   def execute(script, stdin, session_state, _opts \\ [])
 
   def execute(
@@ -135,12 +134,11 @@ defmodule Bash.Script do
     end
   end
 
-  @doc """
-  Continue executing a script from where it left off (after wait, fg, etc).
-
-  This finds the first unexecuted statement (exit_code: nil) and continues
-  from there. Used by Session to resume scripts after job control operations.
-  """
+  # Continue executing a script from where it left off (after wait, fg, etc).
+  #
+  # This finds the first unexecuted statement (exit_code: nil) and continues
+  # from there. Used by Session to resume scripts after job control operations.
+  @doc false
   def continue_execution(%__MODULE__{statements: statements} = script, session_state) do
     # Find the split point: executed statements have exit_code set
     {executed_stmts, remaining_stmts} = split_at_unexecuted(statements)
@@ -204,10 +202,9 @@ defmodule Bash.Script do
     end
   end
 
-  @doc """
-  Split a script's statements into executed and remaining (unexecuted).
-  Public wrapper for debugging script continuation.
-  """
+  # Split a script's statements into executed and remaining (unexecuted).
+  # Public wrapper for debugging script continuation.
+  @doc false
   def split_executed(%__MODULE__{statements: statements}) do
     split_at_unexecuted(statements)
   end
@@ -914,10 +911,9 @@ defmodule Bash.Script do
     end
   end
 
-  @doc """
-  Get exit code from the last evaluated statement.
-  Returns nil if no statements have been evaluated.
-  """
+  # Get exit code from the last evaluated statement.
+  # Returns nil if no statements have been evaluated.
+  @doc false
   @spec exit_code(t()) :: 0..255 | nil
   def exit_code(%__MODULE__{statements: statements}) do
     statements
@@ -930,9 +926,8 @@ defmodule Bash.Script do
     end
   end
 
-  @doc """
-  Filter to only evaluated statements (no separators, only statements with evaluated: true).
-  """
+  # Filter to only evaluated statements (no separators, only statements with evaluated: true).
+  @doc false
   @spec evaluated_statements(t()) :: [map()]
   def evaluated_statements(%__MODULE__{statements: statements}) do
     statements

@@ -18,13 +18,12 @@ defmodule Bash.Builtin.Builtin do
 
   alias Bash.Builtin
 
-  @doc """
-  Execute the builtin builtin.
-
-  With no arguments, returns exit code 0.
-  With a builtin name and optional args, executes that builtin.
-  Returns exit code 1 if the specified name is not a shell builtin.
-  """
+  # Execute the builtin builtin.
+  #
+  # With no arguments, returns exit code 0.
+  # With a builtin name and optional args, executes that builtin.
+  # Returns exit code 1 if the specified name is not a shell builtin.
+  @doc false
   defbash execute(args, state) do
     case args do
       [] ->

@@ -10,24 +10,23 @@ defmodule Bash.Builtin.Break do
 
   alias Bash.CommandResult
 
-  @doc """
-  Execute the break builtin.
-
-  Returns a control flow tuple `{:break, result, levels}` to signal loop exit.
-  The loop executor is responsible for handling this and breaking out of
-  the appropriate number of loop levels.
-
-  ## Arguments
-
-  - No arguments: break from innermost loop (levels = 1)
-  - n: break from n levels of loops
-
-  ## Exit Status
-
-  - 0 if inside a loop and successfully signaling break
-  - 1 if not inside a loop (error)
-  - 2 if argument is not a valid positive integer
-  """
+  # Execute the break builtin.
+  #
+  # Returns a control flow tuple `{:break, result, levels}` to signal loop exit.
+  # The loop executor is responsible for handling this and breaking out of
+  # the appropriate number of loop levels.
+  #
+  # ## Arguments
+  #
+  # - No arguments: break from innermost loop (levels = 1)
+  # - n: break from n levels of loops
+  #
+  # ## Exit Status
+  #
+  # - 0 if inside a loop and successfully signaling break
+  # - 1 if not inside a loop (error)
+  # - 2 if argument is not a valid positive integer
+  @doc false
   defbash execute(args, state) do
     loop_depth = Map.get(state, :loop_depth, 0)
 

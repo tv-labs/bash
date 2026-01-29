@@ -69,12 +69,11 @@ defmodule Bash.AST.TestExpression do
     state_updates: %{}
   ]
 
-  @doc """
-  Execute the conditional test expression builtin.
-
-  Takes a list of arguments and session state, returns a CommandResult
-  with exit code 0 (true) or 1 (false).
-  """
+  # Execute the conditional test expression builtin.
+  #
+  # Takes a list of arguments and session state, returns a CommandResult
+  # with exit code 0 (true) or 1 (false).
+  @doc false
   def execute(%__MODULE__{expression: expression}, _stdin, session_state) do
     case Helpers.expand_word_list(expression, session_state) do
       {[], _} ->

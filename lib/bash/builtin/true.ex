@@ -9,12 +9,11 @@ defmodule Bash.Builtin.True do
   """
   use Bash.Builtin
 
-  @doc """
-  Execute the true builtin.
-
-  The true builtin always succeeds and returns exit code 0.
-  All arguments are ignored.
-  """
+  # Execute the true builtin.
+  #
+  # The true builtin always succeeds and returns exit code 0.
+  # All arguments are ignored.
+  @doc false
   defbash execute(_args, _state) do
     :ok
   end

@@ -58,18 +58,17 @@ defmodule Bash.ProcessSubst do
 
   # --- Public API ---
 
-  @doc """
-  Start a process substitution.
-
-  ## Options
-
-  - `:direction` - `:input` for `<(cmd)` or `:output` for `>(cmd)` (required)
-  - `:command_ast` - The parsed AST of the command to execute (required)
-  - `:session_state` - Current session state for variable expansion (required)
-  - `:temp_dir` - Directory for FIFO creation (defaults to /tmp)
-
-  Returns `{:ok, pid, fifo_path}` on success.
-  """
+  # Start a process substitution.
+  #
+  # ## Options
+  #
+  # - `:direction` - `:input` for `<(cmd)` or `:output` for `>(cmd)` (required)
+  # - `:command_ast` - The parsed AST of the command to execute (required)
+  # - `:session_state` - Current session state for variable expansion (required)
+  # - `:temp_dir` - Directory for FIFO creation (defaults to /tmp)
+  #
+  # Returns `{:ok, pid, fifo_path}` on success.
+  @doc false
   @spec start_link(keyword()) :: {:ok, pid(), String.t()} | {:error, term()}
   def start_link(opts) do
     case GenServer.start_link(__MODULE__, opts) do
@@ -85,19 +84,17 @@ defmodule Bash.ProcessSubst do
     end
   end
 
-  @doc """
-  Wait for the process substitution to complete.
-
-  Returns the command result.
-  """
+  # Wait for the process substitution to complete.
+  #
+  # Returns the command result.
+  @doc false
   @spec wait(pid()) :: {:ok, CommandResult.t()} | {:error, term()}
   def wait(pid) do
     GenServer.call(pid, :wait, :infinity)
   end
 
-  @doc """
-  Stop the process substitution and cleanup.
-  """
+  # Stop the process substitution and cleanup.
+  @doc false
   @spec stop(pid()) :: :ok
   def stop(pid) do
     GenServer.stop(pid, :normal)

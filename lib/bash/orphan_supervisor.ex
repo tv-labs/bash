@@ -28,13 +28,12 @@ defmodule Bash.OrphanSupervisor do
     {:ok, %__MODULE__{}}
   end
 
-  @doc """
-  Adopt a job from a session's supervisor.
-
-  This is called by the disown builtin to move a job to the orphan supervisor.
-  The job will continue running but will no longer be associated with any session.
-  The job unlinks from its original supervisor and is monitored by this supervisor.
-  """
+  # Adopt a job from a session's supervisor.
+  #
+  # This is called by the disown builtin to move a job to the orphan supervisor.
+  # The job will continue running but will no longer be associated with any session.
+  # The job unlinks from its original supervisor and is monitored by this supervisor.
+  @doc false
   @spec adopt(pid()) :: :ok | {:error, term()}
   def adopt(job_pid) when is_pid(job_pid) do
     GenServer.call(__MODULE__, {:adopt, job_pid}, 5000)
@@ -42,9 +41,8 @@ defmodule Bash.OrphanSupervisor do
     :exit, reason -> {:error, {:exit, reason}}
   end
 
-  @doc """
-  List all orphaned job PIDs being monitored.
-  """
+  # List all orphaned job PIDs being monitored.
+  @doc false
   @spec list_orphans() :: [pid()]
   def list_orphans do
     GenServer.call(__MODULE__, :list_orphans)

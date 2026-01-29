@@ -34,7 +34,7 @@ defmodule Bash.Builtin.Coproc do
 
   ```mermaid
   stateDiagram-v2
-      [*] --> running: start_link(:external)
+      [*] --> running: start_link external
       running --> running: read/write via ExCmd.Process
       running --> closing: close_stdin
       closing --> stopped: process exits
@@ -46,7 +46,7 @@ defmodule Bash.Builtin.Coproc do
 
   ```mermaid
   stateDiagram-v2
-      [*] --> running: start_link(:internal)
+      [*] --> running: start_link internal
       running --> running: read/write via message passing
       running --> closing: close_stdin
       closing --> stopped: body task exits
@@ -99,9 +99,8 @@ defmodule Bash.Builtin.Coproc do
     {:ok, "COPROC", command, rest}
   end
 
-  @doc """
-  Start a coproc running an external OS command via ExCmd.
-  """
+  # Start a coproc running an external OS command via ExCmd.
+  @doc false
   def start_external_coproc(name, command, cmd_args, session_state) do
     child_spec = %{
       id: {__MODULE__, name},
@@ -122,9 +121,8 @@ defmodule Bash.Builtin.Coproc do
     start_coproc_child(name, child_spec, session_state)
   end
 
-  @doc """
-  Start a coproc running a compound command body within the Elixir interpreter.
-  """
+  # Start a coproc running a compound command body within the Elixir interpreter.
+  @doc false
   def start_internal_coproc(name, body_ast, session_state) do
     child_spec = %{
       id: {__MODULE__, name},
@@ -426,37 +424,32 @@ defmodule Bash.Builtin.Coproc do
     :ok
   end
 
-  @doc """
-  Read from a coprocess's stdout.
-  """
+  # Read from a coprocess's stdout.
+  @doc false
   def read_output(coproc_pid, timeout \\ :infinity) do
     GenServer.call(coproc_pid, :read, timeout)
   end
 
-  @doc """
-  Write to a coprocess's stdin.
-  """
+  # Write to a coprocess's stdin.
+  @doc false
   def write_input(coproc_pid, data, timeout \\ :infinity) do
     GenServer.call(coproc_pid, {:write, data}, timeout)
   end
 
-  @doc """
-  Close the coprocess's stdin (write end).
-  """
+  # Close the coprocess's stdin (write end).
+  @doc false
   def close_write(coproc_pid, timeout \\ :infinity) do
     GenServer.call(coproc_pid, :close_stdin, timeout)
   end
 
-  @doc """
-  Close the coprocess's stdout (read end).
-  """
+  # Close the coprocess's stdout (read end).
+  @doc false
   def close_read(coproc_pid, timeout \\ :infinity) do
     GenServer.call(coproc_pid, :close_stdout, timeout)
   end
 
-  @doc """
-  Get the status of a coprocess.
-  """
+  # Get the status of a coprocess.
+  @doc false
   def get_status(coproc_pid, timeout \\ :infinity) do
     GenServer.call(coproc_pid, :status, timeout)
   end

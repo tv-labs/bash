@@ -248,9 +248,8 @@ defmodule Bash.Parser do
     find_matching_paren(rest, depth, [c | acc])
   end
 
-  @doc """
-  Parse a list of tokens into an AST.
-  """
+  # Parse a list of tokens into an AST.
+  @doc false
   @spec parse_tokens([token()]) ::
           {:ok, Script.t()} | {:error, String.t(), pos_integer(), pos_integer()}
   def parse_tokens(tokens) when is_list(tokens) do

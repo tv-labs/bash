@@ -337,6 +337,69 @@ defmodule Bash.ParserTest do
     end
   end
 
+  describe "missing terminators" do
+    test "rejects if without fi" do
+      assert {:error, "expected 'elif', 'else', or 'fi'", 1, _col} =
+               Bash.Parser.parse("if true; then echo hi")
+    end
+
+    test "rejects while without done" do
+      assert {:error, "expected 'done' to close while loop", 1, _col} =
+               Bash.Parser.parse("while true; do echo hi")
+    end
+
+    test "rejects for without done" do
+      assert {:error, "expected 'done' to close for loop", 1, _col} =
+               Bash.Parser.parse("for i in a b; do echo $i")
+    end
+
+    test "rejects unclosed command group" do
+      assert {:error, "expected '}' to close group", 1, 13} =
+               Bash.Parser.parse("{ echo hello")
+    end
+
+    test "rejects bare case keyword" do
+      assert {:error, "expected word after 'case'", 1, 5} = Bash.Parser.parse("case")
+    end
+  end
+
+  describe "orphan keywords" do
+    test "rejects orphan then" do
+      assert {:error, "'then' outside of if/elif block", 1, 1} =
+               Bash.Parser.parse("then echo hi")
+    end
+
+    test "rejects orphan else" do
+      assert {:error, "'else' outside of if block", 1, 1} =
+               Bash.Parser.parse("else echo hi")
+    end
+
+    test "rejects orphan fi" do
+      assert {:error, "'fi' without matching 'if'", 1, 1} = Bash.Parser.parse("fi")
+    end
+
+    test "rejects orphan do" do
+      assert {:error, "'do' outside of loop context", 1, 1} =
+               Bash.Parser.parse("do echo hi; done")
+    end
+
+    test "rejects orphan done" do
+      assert {:error, "'done' without matching loop", 1, 1} = Bash.Parser.parse("done")
+    end
+
+    test "rejects orphan esac" do
+      assert {:error, "'esac' without matching 'case'", 1, 1} = Bash.Parser.parse("esac")
+    end
+
+    test "rejects standalone closing brace" do
+      assert {:error, "unexpected '}' - no matching '{'", 1, 1} = Bash.Parser.parse("}")
+    end
+
+    test "rejects orphan in" do
+      assert {:error, _msg, 1, 1} = Bash.Parser.parse("in a b c")
+    end
+  end
+
   describe "control flow syntax errors" do
     test "SC1051: semicolon after then" do
       assert {:error, error} = Bash.parse("if true; then; echo hi; fi")

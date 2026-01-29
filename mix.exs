@@ -91,8 +91,7 @@ defmodule Bash.MixProject do
           Bash.Parser,
           Bash.Parser.Arithmetic,
           Bash.Parser.VariableExpander,
-          Bash.Tokenizer,
-          Bash.Validator
+          Bash.Tokenizer
         ],
         "AST Nodes": [
           Bash.AST,
@@ -135,7 +134,7 @@ defmodule Bash.MixProject do
         "I/O & Output": [
           Bash.Output,
           Bash.Sink,
-          Bash.OutputCollector
+          Bash.Pipe
         ],
         "Job Control": [
           Bash.Job,

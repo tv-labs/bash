@@ -31,15 +31,14 @@ defmodule Bash.Arithmetic do
   alias Bash.AST
   alias Bash.Parser.Arithmetic, as: ArithmeticParser
 
-  @doc """
-  Evaluate an arithmetic expression string.
-
-  Returns `{:ok, result, updated_env}` on success, or `{:error, reason}` on failure.
-  The result is an integer, and updated_env contains any variables modified by assignments.
-
-  This is the entry point for string-based arithmetic evaluation.
-  It parses (using NimbleParsec) and evaluates the expression.
-  """
+  # Evaluate an arithmetic expression string.
+  #
+  # Returns `{:ok, result, updated_env}` on success, or `{:error, reason}` on failure.
+  # The result is an integer, and updated_env contains any variables modified by assignments.
+  #
+  # This is the entry point for string-based arithmetic evaluation.
+  # It parses (using NimbleParsec) and evaluates the expression.
+  @doc false
   def evaluate(expr_string, env_vars) when is_binary(expr_string) and is_map(env_vars) do
     with {:ok, ast} <- ArithmeticParser.parse(expr_string),
          {:ok, result, new_env} <- AST.Arithmetic.execute(ast, env_vars) do

@@ -15,11 +15,10 @@ defmodule Bash.Builtin.TestCommand do
 
   alias Bash.Builtin.Test
 
-  @doc """
-  Execute the test command with the given arguments.
-
-  Returns exit code 0 (true) or 1 (false).
-  """
+  # Execute the test command with the given arguments.
+  #
+  # Returns exit code 0 (true) or 1 (false).
+  @doc false
   defbash execute(args, state) do
     case args do
       [] ->

@@ -51,12 +51,11 @@ defmodule Bash.AST.ArrayAssignment do
     state_updates: %{}
   ]
 
-  @doc """
-  Execute an array assignment.
-
-  For array literals `arr=(a b c)`, creates an indexed array.
-  For array elements `arr[idx]=value`, updates a single element.
-  """
+  # Execute an array assignment.
+  #
+  # For array literals `arr=(a b c)`, creates an indexed array.
+  # For array elements `arr[idx]=value`, updates a single element.
+  @doc false
   def execute(
         %__MODULE__{name: name, elements: elements, subscript: subscript, meta: meta} = ast,
         _stdin,

@@ -112,18 +112,17 @@ defmodule Bash.AST.Arithmetic do
 
   alias Bash.{Arithmetic, CommandResult}
 
-  @doc """
-  Execute an arithmetic expression as a command.
-
-  This is the interface used by the Executor. In bash, `(( expr ))` evaluates
-  the expression and returns exit code 0 if the result is non-zero (true),
-  or exit code 1 if the result is zero (false).
-
-  ## Examples
-
-      # (( 5 > 3 )) returns exit code 0 (true)
-      # (( 3 > 5 )) returns exit code 1 (false)
-  """
+  # Execute an arithmetic expression as a command.
+  #
+  # This is the interface used by the Executor. In bash, `(( expr ))` evaluates
+  # the expression and returns exit code 0 if the result is non-zero (true),
+  # or exit code 1 if the result is zero (false).
+  #
+  # ## Examples
+  #
+  # # (( 5 > 3 )) returns exit code 0 (true)
+  # # (( 3 > 5 )) returns exit code 1 (false)
+  @doc false
   def execute(%__MODULE__{expression: expression}, _stdin, session_state)
       when is_binary(expression) do
     # Build environment map from session variables
@@ -199,22 +198,21 @@ defmodule Bash.AST.Arithmetic do
     )
   end
 
-  @doc """
-  Execute (evaluate) an arithmetic AST node.
-
-  Takes an AST node (from the Arithmetic parser) and an environment map.
-  Returns `{:ok, result, updated_env}` or `{:error, reason}`.
-
-  The AST format matches what Arithmetic produces:
-  - `{:number, n}` - integer literal
-  - `{:var, name}` - variable reference
-  - `{:binop, op, left, right}` - binary operation
-  - `{:unop, op, expr}` - unary operation
-  - `{:assign, op, var, expr}` - assignment
-  - `{:ternary, cond, true_expr, false_expr}` - ternary operator
-  - `{:pre_inc, name}` / `{:pre_dec, name}` - pre-increment/decrement
-  - `{:post_inc, var}` / `{:post_dec, var}` - post-increment/decrement
-  """
+  # Execute (evaluate) an arithmetic AST node.
+  #
+  # Takes an AST node (from the Arithmetic parser) and an environment map.
+  # Returns `{:ok, result, updated_env}` or `{:error, reason}`.
+  #
+  # The AST format matches what Arithmetic produces:
+  # - `{:number, n}` - integer literal
+  # - `{:var, name}` - variable reference
+  # - `{:binop, op, left, right}` - binary operation
+  # - `{:unop, op, expr}` - unary operation
+  # - `{:assign, op, var, expr}` - assignment
+  # - `{:ternary, cond, true_expr, false_expr}` - ternary operator
+  # - `{:pre_inc, name}` / `{:pre_dec, name}` - pre-increment/decrement
+  # - `{:post_inc, var}` / `{:post_dec, var}` - post-increment/decrement
+  @doc false
   def execute(ast, env) do
     case eval(ast, env) do
       {:ok, result, new_env} -> {:ok, to_int(result), new_env}

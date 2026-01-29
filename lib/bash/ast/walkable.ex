@@ -16,11 +16,10 @@ defprotocol Bash.AST.Walkable do
   @spec children(t()) :: [Bash.Statement.t()]
   def children(node)
 
-  @doc """
-  Returns the node with children replaced from a flat list.
-
-  The list must be in the same order as returned by `children/1`.
-  """
+  # Returns the node with children replaced from a flat list.
+  #
+  # The list must be in the same order as returned by `children/1`.
+  @doc false
   @spec update_children(t(), [Bash.Statement.t()]) :: t()
   def update_children(node, children)
 end
@@ -28,15 +27,13 @@ end
 defmodule Bash.AST.Walkable.Helpers do
   @moduledoc false
 
-  @doc """
-  Extracts struct nodes from a list that may contain separator/operator tuples.
-  """
+  # Extracts struct nodes from a list that may contain separator/operator tuples.
+  @doc false
   def extract_structs(list), do: Enum.filter(list, &is_struct/1)
 
-  @doc """
-  Replaces struct positions in a mixed list with nodes from a queue,
-  preserving non-struct elements (separators, operators) in place.
-  """
+  # Replaces struct positions in a mixed list with nodes from a queue,
+  # preserving non-struct elements (separators, operators) in place.
+  @doc false
   def splice_structs(original, new_children) do
     queue = :queue.from_list(new_children)
 

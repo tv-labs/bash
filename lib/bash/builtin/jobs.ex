@@ -16,9 +16,8 @@ defmodule Bash.Builtin.Jobs do
   alias Bash.Job
   alias Bash.JobProcess
 
-  @doc """
-  Execute jobs command and return list of active jobs.
-  """
+  # Execute jobs command and return list of active jobs.
+  @doc false
   defbash execute(args, state) do
     {flags, job_specs} = parse_args(args)
 

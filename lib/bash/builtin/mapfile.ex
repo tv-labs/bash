@@ -38,31 +38,30 @@ defmodule Bash.Builtin.Mapfile do
 
   @default_array "MAPFILE"
 
-  @doc """
-  Execute the mapfile/readarray builtin.
-
-  ## Arguments
-
-    * `args` - Command arguments including flags and array name
-    * `stdin` - Input string to read lines from
-    * `session_state` - Current session state with variables
-
-  ## Returns
-
-    * `{:ok, result, state_updates}` - Success with array variable updates
-    * `{:error, result}` - Error occurred
-
-  ## Examples
-
-      # Read lines into MAPFILE (default)
-      iex> Mapfile.execute([], "line1\\nline2\\n", %{variables: %{}})
-      {:ok, %CommandResult{exit_code: 0}, %{var_updates: %{"MAPFILE" => %Variable{...}}}}
-
-      # Read lines into named array with -t (strip newlines)
-      iex> Mapfile.execute(["-t", "myarray"], "line1\\nline2\\n", %{variables: %{}})
-      {:ok, %CommandResult{exit_code: 0}, %{var_updates: %{"myarray" => %Variable{...}}}}
-
-  """
+  # Execute the mapfile/readarray builtin.
+  #
+  # ## Arguments
+  #
+  # * `args` - Command arguments including flags and array name
+  # * `stdin` - Input string to read lines from
+  # * `session_state` - Current session state with variables
+  #
+  # ## Returns
+  #
+  # * `{:ok, result, state_updates}` - Success with array variable updates
+  # * `{:error, result}` - Error occurred
+  #
+  # ## Examples
+  #
+  # # Read lines into MAPFILE (default)
+  # iex> Mapfile.execute([], "line1\\nline2\\n", %{variables: %{}})
+  # {:ok, %CommandResult{exit_code: 0}, %{var_updates: %{"MAPFILE" => %Variable{...}}}}
+  #
+  # # Read lines into named array with -t (strip newlines)
+  # iex> Mapfile.execute(["-t", "myarray"], "line1\\nline2\\n", %{variables: %{}})
+  # {:ok, %CommandResult{exit_code: 0}, %{var_updates: %{"myarray" => %Variable{...}}}}
+  #
+  @doc false
   defbash execute(args, state) do
     case parse_args(args) do
       {:ok, opts, array_name} ->

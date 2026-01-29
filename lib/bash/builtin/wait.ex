@@ -11,10 +11,9 @@ defmodule Bash.Builtin.Wait do
   """
   use Bash.Builtin
 
-  @doc """
-  Execute wait command.
-  Returns a special tuple for Session to handle since wait blocks until job completion.
-  """
+  # Execute wait command.
+  # Returns a special tuple for Session to handle since wait blocks until job completion.
+  @doc false
   defbash execute(args, state) do
     job_specs = parse_job_specs(args, state)
 

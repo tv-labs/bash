@@ -114,32 +114,31 @@ defmodule Bash.Variable do
   def is_associative_array?(%__MODULE__{attributes: %{array_type: :associative}}), do: true
   def is_associative_array?(_), do: false
 
-  @doc """
-  Get variable value from a session or a Variable struct.
-
-  ## Session-based access
-
-  If the first parameter is a PID or Session struct, retrieves the session state
-  and looks up the variable by name.
-
-      Variable.get(session, "myvar")
-      Variable.get(session_pid, "HOME")
-
-  With optional array index or key:
-
-      Variable.get(session, "myarray", 0)      # Get first element
-      Variable.get(session, "myassoc", "key")  # Get value for "key"
-
-  ## Variable struct access
-
-  If the first parameter is a Variable struct, returns the value at the given
-  index (for arrays) or the full value (for scalars).
-
-      Variable.get(var, nil)   # Get scalar value
-      Variable.get(var, 0)     # Get array element at index 0
-      Variable.get(var, "key") # Get associative array value
-
-  """
+  # Get variable value from a session or a Variable struct.
+  #
+  # ## Session-based access
+  #
+  # If the first parameter is a PID or Session struct, retrieves the session state
+  # and looks up the variable by name.
+  #
+  # Variable.get(session, "myvar")
+  # Variable.get(session_pid, "HOME")
+  #
+  # With optional array index or key:
+  #
+  # Variable.get(session, "myarray", 0)      # Get first element
+  # Variable.get(session, "myassoc", "key")  # Get value for "key"
+  #
+  # ## Variable struct access
+  #
+  # If the first parameter is a Variable struct, returns the value at the given
+  # index (for arrays) or the full value (for scalars).
+  #
+  # Variable.get(var, nil)   # Get scalar value
+  # Variable.get(var, 0)     # Get array element at index 0
+  # Variable.get(var, "key") # Get associative array value
+  #
+  @doc false
   # Session-based get/2
   def get(%Session{} = session, var_name) when is_binary(var_name) do
     get(session, var_name, nil)

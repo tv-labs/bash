@@ -13,10 +13,9 @@ defmodule Bash.AST.Helpers do
   alias Bash.Sink
   alias Bash.Variable
 
-  @doc """
-  Filter separator tuples from a statement list for execution.
-  Separators are preserved in the AST for formatting but skipped during execution.
-  """
+  # Filter separator tuples from a statement list for execution.
+  # Separators are preserved in the AST for formatting but skipped during execution.
+  @doc false
   def executable_statements(statements) when is_list(statements) do
     Enum.reject(statements, &match?({:separator, _}, &1))
   end
@@ -145,15 +144,14 @@ defmodule Bash.AST.Helpers do
 
   def word_to_string(str, _session_state) when is_binary(str), do: str
 
-  @doc """
-  Expand a word to a string and return env updates from arithmetic expressions
-  and ${var:=default} expansions.
-
-  This is needed because $((n++)) and ${x:=default} should update variables.
-
-  The env_updates are threaded through each part expansion, so $((++n)) followed
-  by $((n++)) will see the updated value of n from the first expansion.
-  """
+  # Expand a word to a string and return env updates from arithmetic expressions
+  # and ${var:=default} expansions.
+  #
+  # This is needed because $((n++)) and ${x:=default} should update variables.
+  #
+  # The env_updates are threaded through each part expansion, so $((++n)) followed
+  # by $((n++)) will see the updated value of n from the first expansion.
+  @doc false
   def word_to_string_with_updates(%AST.Word{parts: parts}, session_state) do
     {result_parts, env_updates, _final_state} =
       Enum.reduce(parts, {[], %{}, session_state}, fn part,
@@ -251,17 +249,16 @@ defmodule Bash.AST.Helpers do
 
   defp expand_part(other, _session_state), do: inspect(other)
 
-  @doc """
-  Expand a word to a list of strings, handling brace expansion.
-
-  Unlike word_to_string/2 which returns a single string, this function
-  properly handles brace expansion which can produce multiple words.
-
-  ## Examples
-
-      expand_word(%Word{parts: [{:literal, "file"}, {:brace_expand, %{type: :list, items: ...}}]}, state)
-      #=> ["file1", "file2", "file3"]
-  """
+  # Expand a word to a list of strings, handling brace expansion.
+  #
+  # Unlike word_to_string/2 which returns a single string, this function
+  # properly handles brace expansion which can produce multiple words.
+  #
+  # ## Examples
+  #
+  # expand_word(%Word{parts: [{:literal, "file"}, {:brace_expand, %{type: :list, items: ...}}]}, state)
+  # #=> ["file1", "file2", "file3"]
+  @doc false
   @spec expand_word(AST.Word.t(), map()) :: [String.t()]
   def expand_word(%AST.Word{parts: parts, quoted: :none}, session_state) do
     # Check if any part is a brace expansion
@@ -280,9 +277,8 @@ defmodule Bash.AST.Helpers do
 
   def expand_word(str, _session_state) when is_binary(str), do: [str]
 
-  @doc """
-  Expand a word to a list of strings and return env updates from arithmetic expressions.
-  """
+  # Expand a word to a list of strings and return env updates from arithmetic expressions.
+  @doc false
   def expand_word_with_updates(%AST.Word{parts: parts, quoted: :none}, session_state) do
     if has_brace_expansion?(parts) do
       # For brace expansion, we need to collect updates from each expanded word
@@ -1237,10 +1233,9 @@ defmodule Bash.AST.Helpers do
     result
   end
 
-  @doc """
-  Expand arithmetic expression and return both result and env updates.
-  In bash, $((n++)) updates the variable n.
-  """
+  # Expand arithmetic expression and return both result and env updates.
+  # In bash, $((n++)) updates the variable n.
+  @doc false
   def expand_arithmetic_with_updates(expr_string, session_state) do
     # Convert variables to plain string map for Arithmetic
     vars =
@@ -1385,13 +1380,12 @@ defmodule Bash.AST.Helpers do
     )
   end
 
-  @doc """
-  Expand a simple string expression for use as an associative array key.
-
-  This expands variable references like $var and ${var} but does NOT
-  perform arithmetic evaluation. The string is returned as-is if it
-  contains no variables.
-  """
+  # Expand a simple string expression for use as an associative array key.
+  #
+  # This expands variable references like $var and ${var} but does NOT
+  # perform arithmetic evaluation. The string is returned as-is if it
+  # contains no variables.
+  @doc false
   def expand_simple_string(expr_string, session_state) do
     {expanded, _updates} = VariableExpander.expand_variables(expr_string, session_state)
     expanded
@@ -1452,12 +1446,11 @@ defmodule Bash.AST.Helpers do
     Map.get(session_state, :temp_dir, "/tmp")
   end
 
-  @doc """
-  Cleanup a list of process substitution PIDs.
-
-  This should be called after a command that used process substitution
-  completes to ensure the background processes and FIFOs are cleaned up.
-  """
+  # Cleanup a list of process substitution PIDs.
+  #
+  # This should be called after a command that used process substitution
+  # completes to ensure the background processes and FIFOs are cleaned up.
+  @doc false
   @spec cleanup_process_substs([pid()]) :: :ok
   def cleanup_process_substs(pids) when is_list(pids) do
     Enum.each(pids, fn pid ->

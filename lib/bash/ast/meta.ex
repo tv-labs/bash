@@ -35,9 +35,8 @@ defmodule Bash.AST.Meta do
             started_at: nil,
             completed_at: nil
 
-  @doc """
-  Mark meta as evaluated with timing information.
-  """
+  # Mark meta as evaluated with timing information.
+  @doc false
   @spec mark_evaluated(t(), DateTime.t(), DateTime.t()) :: t()
   def mark_evaluated(%__MODULE__{} = meta, started_at, completed_at) do
     duration_ms = DateTime.diff(completed_at, started_at, :millisecond)
@@ -51,9 +50,8 @@ defmodule Bash.AST.Meta do
     }
   end
 
-  @doc """
-  Mark meta as skipped (not evaluated).
-  """
+  # Mark meta as skipped (not evaluated).
+  @doc false
   @spec mark_skipped(t()) :: t()
   def mark_skipped(%__MODULE__{} = meta) do
     %{meta | evaluated: false}

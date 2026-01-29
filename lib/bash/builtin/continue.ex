@@ -12,24 +12,23 @@ defmodule Bash.Builtin.Continue do
 
   alias Bash.CommandResult
 
-  @doc """
-  Execute the continue builtin.
-
-  Returns a control flow tuple `{:continue, result, levels}` to signal loop continuation.
-  The loop executor is responsible for handling this and continuing at the
-  appropriate loop level.
-
-  ## Arguments
-
-  - No arguments: continue innermost loop (levels = 1)
-  - n: continue from n levels up
-
-  ## Exit Status
-
-  - 0 if inside a loop and successfully signaling continue
-  - 1 if not inside a loop (error)
-  - 2 if argument is not a valid positive integer
-  """
+  # Execute the continue builtin.
+  #
+  # Returns a control flow tuple `{:continue, result, levels}` to signal loop continuation.
+  # The loop executor is responsible for handling this and continuing at the
+  # appropriate loop level.
+  #
+  # ## Arguments
+  #
+  # - No arguments: continue innermost loop (levels = 1)
+  # - n: continue from n levels up
+  #
+  # ## Exit Status
+  #
+  # - 0 if inside a loop and successfully signaling continue
+  # - 1 if not inside a loop (error)
+  # - 2 if argument is not a valid positive integer
+  @doc false
   defbash execute(args, state) do
     loop_depth = Map.get(state, :loop_depth, 0)
 

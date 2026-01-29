@@ -9,10 +9,9 @@ defmodule Bash.Builtin.Bg do
   """
   use Bash.Builtin
 
-  @doc """
-  Execute bg command.
-  Returns a special tuple for Session to handle.
-  """
+  # Execute bg command.
+  # Returns a special tuple for Session to handle.
+  @doc false
   defbash execute(args, state) do
     job_specs = parse_job_specs(args, state)
 

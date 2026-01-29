@@ -378,14 +378,13 @@ defmodule Bash.Builtin.Trap do
     |> Kernel.<>("\n")
   end
 
-  @doc """
-  Get the trap action for a specific signal.
-
-  Returns:
-  - `nil` - signal uses default behavior
-  - `:ignore` - signal is ignored
-  - `command` - command string to execute
-  """
+  # Get the trap action for a specific signal.
+  #
+  # Returns:
+  # - `nil` - signal uses default behavior
+  # - `:ignore` - signal is ignored
+  # - `command` - command string to execute
+  @doc false
   def get_trap(session_state, signal) do
     traps = Map.get(session_state, :traps, %{})
 
@@ -395,37 +394,32 @@ defmodule Bash.Builtin.Trap do
     end
   end
 
-  @doc """
-  Check if a signal has a trap set.
-  """
+  # Check if a signal has a trap set.
+  @doc false
   def has_trap?(session_state, signal) do
     get_trap(session_state, signal) != nil
   end
 
-  @doc """
-  Get the EXIT trap command, if set.
-  """
+  # Get the EXIT trap command, if set.
+  @doc false
   def get_exit_trap(session_state) do
     get_trap(session_state, "EXIT")
   end
 
-  @doc """
-  Get the ERR trap command, if set.
-  """
+  # Get the ERR trap command, if set.
+  @doc false
   def get_err_trap(session_state) do
     get_trap(session_state, "ERR")
   end
 
-  @doc """
-  Get the DEBUG trap command, if set.
-  """
+  # Get the DEBUG trap command, if set.
+  @doc false
   def get_debug_trap(session_state) do
     get_trap(session_state, "DEBUG")
   end
 
-  @doc """
-  Get the RETURN trap command, if set.
-  """
+  # Get the RETURN trap command, if set.
+  @doc false
   def get_return_trap(session_state) do
     get_trap(session_state, "RETURN")
   end

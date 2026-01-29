@@ -8,12 +8,11 @@ defmodule Bash.Builtin.Colon do
   """
   use Bash.Builtin
 
-  @doc """
-  Execute the colon builtin.
-
-  The colon builtin is a null command that does nothing and always succeeds.
-  It ignores all arguments.
-  """
+  # Execute the colon builtin.
+  #
+  # The colon builtin is a null command that does nothing and always succeeds.
+  # It ignores all arguments.
+  @doc false
   defbash execute(_args, _state) do
     :ok
   end

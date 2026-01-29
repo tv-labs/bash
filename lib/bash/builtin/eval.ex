@@ -19,12 +19,11 @@ defmodule Bash.Builtin.Eval do
   alias Bash.Parser
   alias Bash.Script
 
-  @doc """
-  Execute the eval builtin.
-
-  Concatenates all arguments with spaces, parses them as bash commands,
-  and executes the resulting AST.
-  """
+  # Execute the eval builtin.
+  #
+  # Concatenates all arguments with spaces, parses them as bash commands,
+  # and executes the resulting AST.
+  @doc false
   defbash execute(args, state) do
     # Concatenate all arguments with spaces (like bash does)
     command_string = Enum.join(args, " ")

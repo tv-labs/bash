@@ -106,11 +106,10 @@ defmodule Bash.Parser.Arithmetic do
     ":" => {0, :left}
   }
 
-  @doc """
-  Tokenize an arithmetic expression string.
-
-  Returns `{:ok, tokens}` or `{:error, reason}`.
-  """
+  @doc false
+  # Tokenize an arithmetic expression string.
+  #
+  # Returns `{:ok, tokens}` or `{:error, reason}`.
   def tokenize(expr) when is_binary(expr), do: tokenize(expr, [])
   def tokenize("", acc), do: {:ok, Enum.reverse(acc)}
   def tokenize(<<c, rest::binary>>, acc) when c in @whitespace, do: tokenize(rest, acc)

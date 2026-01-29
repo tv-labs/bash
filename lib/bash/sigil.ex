@@ -31,7 +31,6 @@ defmodule Bash.Sigil do
 
   alias Bash.Parser
   alias Bash.SyntaxError
-  alias Bash.Validator
 
   @doc ~S"""
   The ~BASH sigil for parsing Bash scripts into a Script AST struct.
@@ -226,10 +225,7 @@ defmodule Bash.Sigil do
   defp parse_and_validate(script) do
     case Parser.parse(script) do
       {:ok, ast} ->
-        case Validator.validate(ast, script) do
-          :ok -> {:ok, ast}
-          {:error, error} -> {:error, error}
-        end
+        {:ok, ast}
 
       {:error, reason, line, column} ->
         {:error, SyntaxError.from_parse_error(script, reason, line, column)}

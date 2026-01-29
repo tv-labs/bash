@@ -36,9 +36,8 @@ defmodule Bash.Builtin.Unsupported do
     {:ok, 1}
   end
 
-  @doc """
-  Execute with explicit command name (called by dispatcher when known).
-  """
+  # Execute with explicit command name (called by dispatcher when known).
+  @doc false
   def execute_named(cmd_name, args, stdin, state) when is_binary(cmd_name) do
     Process.put(:current_builtin_name, cmd_name)
     result = execute(args, stdin, state)
@@ -63,22 +62,19 @@ defmodule Bash.Builtin.Unsupported do
     end
   end
 
-  @doc """
-  Returns list of all unsupported builtin names.
-  """
+  # Returns list of all unsupported builtin names.
+  @doc false
   def unsupported_builtins do
     Map.keys(@interactive_builtins) ++ Map.keys(@os_builtins)
   end
 
-  @doc """
-  Check if a builtin is unsupported.
-  """
+  # Check if a builtin is unsupported.
+  @doc false
   def unsupported?(name) do
     Map.has_key?(@interactive_builtins, name) or Map.has_key?(@os_builtins, name)
   end
 
-  @doc """
-  Get the reason a builtin is unsupported.
-  """
+  # Get the reason a builtin is unsupported.
+  @doc false
   def reason(name), do: get_message(name)
 end

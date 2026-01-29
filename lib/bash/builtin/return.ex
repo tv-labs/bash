@@ -9,19 +9,18 @@ defmodule Bash.Builtin.Return do
   """
   use Bash.Builtin
 
-  @doc """
-  Execute the return builtin.
-
-  ## Return Code Behavior
-
-  - Can only be used inside a function or sourced script
-  - No arguments: Uses the exit code of the last executed command
-  - Numeric argument: Uses that value wrapped to 0-255 (modulo 256)
-  - Negative numbers: Wrapped modulo 256 (-1 becomes 255)
-  - Non-numeric argument: Returns exit code 2 with error message
-  - Too many arguments: Returns exit code 1 with error message
-  - Outside function context: Returns exit code 1 with error message
-  """
+  # Execute the return builtin.
+  #
+  # ## Return Code Behavior
+  #
+  # - Can only be used inside a function or sourced script
+  # - No arguments: Uses the exit code of the last executed command
+  # - Numeric argument: Uses that value wrapped to 0-255 (modulo 256)
+  # - Negative numbers: Wrapped modulo 256 (-1 becomes 255)
+  # - Non-numeric argument: Returns exit code 2 with error message
+  # - Too many arguments: Returns exit code 1 with error message
+  # - Outside function context: Returns exit code 1 with error message
+  @doc false
   defbash execute(args, state) do
     in_function = Map.get(state, :in_function, false)
 

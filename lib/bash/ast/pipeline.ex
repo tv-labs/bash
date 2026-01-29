@@ -48,15 +48,13 @@ defmodule Bash.AST.Pipeline do
     pipestatus: nil
   ]
 
-  @doc """
-  Get exit code from the last command (respects PIPEFAIL session option).
-  """
+  # Get exit code from the last command (respects PIPEFAIL session option).
+  @doc false
   @spec get_exit_code(t()) :: 0..255 | nil
   def get_exit_code(%__MODULE__{exit_code: exit_code}), do: exit_code
 
-  @doc """
-  Get array of all exit codes from each command in the pipeline.
-  """
+  # Get array of all exit codes from each command in the pipeline.
+  @doc false
   @spec pipestatus(t()) :: [0..255] | nil
   def pipestatus(%__MODULE__{pipestatus: pipestatus}), do: pipestatus
 
@@ -513,9 +511,8 @@ defmodule Bash.AST.Pipeline do
   # External Command Detection
   # =============================================================================
 
-  @doc """
-  Check if all commands in a pipeline are external commands (not builtins/functions).
-  """
+  # Check if all commands in a pipeline are external commands (not builtins/functions).
+  @doc false
   def all_external_commands?(commands, session_state) do
     Enum.all?(commands, &external_command?(&1, session_state))
   end
@@ -557,14 +554,13 @@ defmodule Bash.AST.Pipeline do
   # Streaming Pipeline Execution
   # =============================================================================
 
-  @doc """
-  Execute a pipeline using ExCmd stream composition for memory-efficient streaming.
-  Only works for pure external command pipelines.
-
-  Options:
-    - :sink - Output sink function for streaming. When provided, output streams
-      to the sink without accumulating in memory.
-  """
+  # Execute a pipeline using ExCmd stream composition for memory-efficient streaming.
+  # Only works for pure external command pipelines.
+  #
+  # Options:
+  # - :sink - Output sink function for streaming. When provided, output streams
+  # to the sink without accumulating in memory.
+  @doc false
   def execute_streaming(
         %__MODULE__{commands: commands, negate: negate, meta: meta} = pipeline,
         stdin,

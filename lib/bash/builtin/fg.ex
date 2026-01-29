@@ -9,10 +9,9 @@ defmodule Bash.Builtin.Fg do
   """
   use Bash.Builtin
 
-  @doc """
-  Execute fg command.
-  Returns a special tuple for Session to handle since fg blocks until job completion.
-  """
+  # Execute fg command.
+  # Returns a special tuple for Session to handle since fg blocks until job completion.
+  @doc false
   defbash execute(args, state) do
     job_spec = parse_job_spec(args, state)
 

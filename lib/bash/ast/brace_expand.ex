@@ -50,12 +50,11 @@ defmodule Bash.AST.BraceExpand do
 
   defstruct [:meta, :type, :items, :range_start, :range_end, :step, :zero_pad]
 
-  @doc """
-  Expand a brace expansion into a list of strings.
-
-  For list type, returns the items.
-  For range type, generates the sequence.
-  """
+  # Expand a brace expansion into a list of strings.
+  #
+  # For list type, returns the items.
+  # For range type, generates the sequence.
+  @doc false
   @spec expand(t()) :: [String.t()]
   def expand(%__MODULE__{type: :list, items: items}) do
     Enum.flat_map(items, &expand_item/1)
@@ -72,11 +71,10 @@ defmodule Bash.AST.BraceExpand do
 
   defp expand_item(str) when is_binary(str), do: [str]
 
-  @doc """
-  Expand a list of word parts, handling nested brace expansions.
-
-  Returns a list of all possible string combinations.
-  """
+  # Expand a list of word parts, handling nested brace expansions.
+  #
+  # Returns a list of all possible string combinations.
+  @doc false
   @spec expand_parts([word_part()]) :: [String.t()]
   def expand_parts([]), do: [""]
 

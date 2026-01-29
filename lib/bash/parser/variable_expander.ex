@@ -36,13 +36,12 @@ defmodule Bash.Parser.VariableExpander do
 
   defguardp is_special_var(char) when char in ?0..?9 or char in @special_vars
 
-  @doc """
-  Expand variables in text using session environment variables.
-
-  Accepts either a binary string or a pre-parsed token list from the Parser.
-  Returns `{expanded_text, env_updates}` where env_updates is a map of variables
-  that were assigned during expansion (e.g., via `${var:=default}`).
-  """
+  @doc false
+  # Expand variables in text using session environment variables.
+  #
+  # Accepts either a binary string or a pre-parsed token list from the Parser.
+  # Returns `{expanded_text, env_updates}` where env_updates is a map of variables
+  # that were assigned during expansion (e.g., via `${var:=default}`).
   @spec expand_variables(String.t() | [term()], map()) :: {String.t(), map()}
   def expand_variables(text, session_state) when is_binary(text) do
     case parse(text) do

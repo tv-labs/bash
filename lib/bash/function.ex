@@ -46,12 +46,11 @@ defmodule Bash.Function do
     state_updates: %{}
   ]
 
-  @doc """
-  Execute a function definition.
-
-  When a function is defined, we store it in the session's functions map.
-  This doesn't execute the function body - it just registers the function.
-  """
+  # Execute a function definition.
+  #
+  # When a function is defined, we store it in the session's functions map.
+  # This doesn't execute the function body - it just registers the function.
+  @doc false
   def execute(%__MODULE__{name: name, body: body, meta: meta} = ast, _stdin, _session_state) do
     started_at = DateTime.utc_now()
 
@@ -81,17 +80,16 @@ defmodule Bash.Function do
     AST.Meta.mark_evaluated(meta, started_at, completed_at)
   end
 
-  @doc """
-  Call a function with the given arguments.
-
-  This executes the function body in a new context with the function marked as active.
-  The function arguments become the positional parameters ($1, $2, etc.) within the function.
-
-  ## Trap Inheritance
-
-  - If `errtrace` option (`set -E`) is enabled, the ERR trap is inherited by the function
-  - If `functrace` option (`set -T`) is enabled, the DEBUG trap is inherited by the function
-  """
+  # Call a function with the given arguments.
+  #
+  # This executes the function body in a new context with the function marked as active.
+  # The function arguments become the positional parameters ($1, $2, etc.) within the function.
+  #
+  # ## Trap Inheritance
+  #
+  # - If `errtrace` option (`set -E`) is enabled, the ERR trap is inherited by the function
+  # - If `functrace` option (`set -T`) is enabled, the DEBUG trap is inherited by the function
+  @doc false
   def call(func_def, args, session_state, opts \\ []) do
     # Push args onto positional_params stack (they become $1, $2, etc.)
     current_params = Map.get(session_state, :positional_params, [[]])

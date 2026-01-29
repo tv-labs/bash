@@ -142,9 +142,8 @@ defmodule Bash.AST.Case do
 
   alias Bash.AST.Formatter
 
-  @doc """
-  Convert to Bash string with formatting context.
-  """
+  # Convert to Bash string with formatting context.
+  @doc false
   def to_bash(%__MODULE__{word: word, cases: cases}, %Formatter{} = fmt) do
     indent = Formatter.current_indent(fmt)
     pattern_fmt = Formatter.indent(fmt)

@@ -15,9 +15,8 @@ defmodule Bash.Builtin.Source do
   alias Bash.Script
   alias Bash.Variable
 
-  @doc """
-  Execute the source builtin.
-  """
+  # Execute the source builtin.
+  @doc false
   defbash execute(args, state) do
     case args do
       [] ->

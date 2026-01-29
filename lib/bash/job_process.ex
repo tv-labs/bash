@@ -66,78 +66,71 @@ defmodule Bash.JobProcess do
           env: [{String.t(), String.t()}]
         }
 
-  @doc """
-  Start a background job process.
-
-  ## Options
-
-  - `:job_number` - Job number assigned by Session (required)
-  - `:command` - Command string to execute (required)
-  - `:args` - List of arguments (default: [])
-  - `:session_pid` - Parent Session pid for notifications (required)
-  - `:working_dir` - Working directory (required)
-  - `:env` - Environment variables as keyword list (default: [])
-  """
+  # Start a background job process.
+  #
+  # ## Options
+  #
+  # - `:job_number` - Job number assigned by Session (required)
+  # - `:command` - Command string to execute (required)
+  # - `:args` - List of arguments (default: [])
+  # - `:session_pid` - Parent Session pid for notifications (required)
+  # - `:working_dir` - Working directory (required)
+  # - `:env` - Environment variables as keyword list (default: [])
+  @doc false
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
   end
 
-  @doc """
-  Get current job status and accumulated output.
-  """
+  # Get current job status and accumulated output.
+  @doc false
   @spec get_job(pid()) :: Job.t()
   def get_job(job_pid) do
     GenServer.call(job_pid, :get_job)
   end
 
-  @doc """
-  Bring job to foreground.
-
-  Blocks until the job completes and returns a CommandResult with all output.
-  If job is stopped, it will be resumed first.
-  """
+  # Bring job to foreground.
+  #
+  # Blocks until the job completes and returns a CommandResult with all output.
+  # If job is stopped, it will be resumed first.
+  @doc false
   @spec foreground(pid()) :: {:ok, CommandResult.t()} | {:error, term()}
   def foreground(job_pid) do
     GenServer.call(job_pid, :foreground, :infinity)
   end
 
-  @doc """
-  Resume a stopped job in the background.
-
-  Sends SIGCONT to the OS process if it's stopped.
-  """
+  # Resume a stopped job in the background.
+  #
+  # Sends SIGCONT to the OS process if it's stopped.
+  @doc false
   @spec background(pid()) :: :ok | {:error, term()}
   def background(job_pid) do
     GenServer.call(job_pid, :background)
   end
 
-  @doc """
-  Send a signal to the job's OS process.
-
-  Signal can be an atom (:sigterm, :sigkill, :sigstop, :sigcont) or integer.
-  """
+  # Send a signal to the job's OS process.
+  #
+  # Signal can be an atom (:sigterm, :sigkill, :sigstop, :sigcont) or integer.
+  @doc false
   @spec signal(pid(), atom() | integer()) :: :ok | {:error, term()}
   def signal(job_pid, sig) do
     GenServer.call(job_pid, {:signal, sig})
   end
 
-  @doc """
-  Wait for the job to complete.
-
-  Blocks until the job finishes and returns the exit code.
-  """
+  # Wait for the job to complete.
+  #
+  # Blocks until the job finishes and returns the exit code.
+  @doc false
   @spec wait(pid()) :: {:ok, integer()} | {:error, term()}
   def wait(job_pid) do
     GenServer.call(job_pid, :wait, :infinity)
   end
 
-  @doc """
-  Wait for the job to start and return its OS PID.
-
-  Blocks until the OS process has actually started. This is useful
-  for getting the correct value for $! immediately after backgrounding.
-  """
+  # Wait for the job to start and return its OS PID.
+  #
+  # Blocks until the OS process has actually started. This is useful
+  # for getting the correct value for $! immediately after backgrounding.
+  @doc false
   @spec await_start(pid()) :: {:ok, pos_integer()} | {:error, term()}
   def await_start(job_pid) do
     GenServer.call(job_pid, :await_start, 5_000)

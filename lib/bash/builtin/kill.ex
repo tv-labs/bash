@@ -47,10 +47,9 @@ defmodule Bash.Builtin.Kill do
 
   @signal_names Map.new(@signals, fn {k, v} -> {v, k} end)
 
-  @doc """
-  Execute kill command.
-  Returns a special tuple for Session to handle.
-  """
+  # Execute kill command.
+  # Returns a special tuple for Session to handle.
+  @doc false
   defbash execute(args, state) do
     case parse_args(args) do
       {:list, nums} ->

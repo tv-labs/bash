@@ -52,15 +52,13 @@ defmodule Bash.AST.WhileLoop do
     iteration_count: nil
   ]
 
-  @doc """
-  Get exit code from the last loop iteration.
-  """
+  # Get exit code from the last loop iteration.
+  @doc false
   @spec get_exit_code(t()) :: 0..255 | nil
   def get_exit_code(%__MODULE__{exit_code: exit_code}), do: exit_code
 
-  @doc """
-  Get the number of times the loop was executed.
-  """
+  # Get the number of times the loop was executed.
+  @doc false
   @spec iteration_count(t()) :: non_neg_integer() | nil
   def iteration_count(%__MODULE__{iteration_count: count}), do: count
 
@@ -420,9 +418,8 @@ defmodule Bash.AST.WhileLoop do
 
   alias Bash.AST.Formatter
 
-  @doc """
-  Convert to Bash string with formatting context.
-  """
+  # Convert to Bash string with formatting context.
+  @doc false
   def to_bash(
         %__MODULE__{until: until, condition: condition, body: body, redirects: redirects},
         %Formatter{} = fmt

@@ -124,19 +124,18 @@ defmodule Bash.Builtin.History do
     format_history(history, count: count)
   end
 
-  @doc """
-  Formats command history for display with line numbers.
-
-  This is a utility function that formats history entries
-  in the standard bash history format.
-
-  ## Examples
-
-      history = Session.get_command_history(session_pid)
-      formatted = History.format_history(history)
-      # Returns: "  1  echo hello\\n  2  pwd\\n"
-
-  """
+  # Formats command history for display with line numbers.
+  #
+  # This is a utility function that formats history entries
+  # in the standard bash history format.
+  #
+  # ## Examples
+  #
+  # history = Session.get_command_history(session_pid)
+  # formatted = History.format_history(history)
+  # # Returns: "  1  echo hello\\n  2  pwd\\n"
+  #
+  @doc false
   def format_history(command_results, opts \\ []) do
     count = Keyword.get(opts, :count, :all)
     start_offset = Keyword.get(opts, :offset, 1)

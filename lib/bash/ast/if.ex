@@ -54,9 +54,8 @@ defmodule Bash.AST.If do
     executed_branch: nil
   ]
 
-  @doc """
-  Get exit code from the executed branch.
-  """
+  # Get exit code from the executed branch.
+  @doc false
   @spec get_exit_code(t()) :: 0..255 | nil
   def get_exit_code(%__MODULE__{} = if_node) do
     case if_node.executed_branch do
@@ -67,9 +66,8 @@ defmodule Bash.AST.If do
     end
   end
 
-  @doc """
-  Get which branch was executed.
-  """
+  # Get which branch was executed.
+  @doc false
   @spec executed_branch(t()) :: :then | :elif | :else | nil
   def executed_branch(%__MODULE__{executed_branch: branch}), do: branch
 
@@ -210,9 +208,8 @@ defmodule Bash.AST.If do
 
   alias Bash.AST.Formatter
 
-  @doc """
-  Convert to Bash string with formatting context.
-  """
+  # Convert to Bash string with formatting context.
+  @doc false
   def to_bash(
         %__MODULE__{condition: condition, body: body, elif_clauses: elifs, else_body: else_body},
         %Formatter{} = fmt

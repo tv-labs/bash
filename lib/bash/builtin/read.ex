@@ -31,36 +31,35 @@ defmodule Bash.Builtin.Read do
 
   @default_ifs " \t\n"
 
-  @doc """
-  Execute the read builtin.
-
-  ## Arguments
-
-    * `args` - Command arguments including flags and variable names
-    * `stdin` - Input string to read from (nil means no input available)
-    * `session_state` - Current session state with variables
-
-  ## Returns
-
-    * `{:ok, result, state_updates}` - Success with variable updates
-    * `{:ok, result}` - Success with no state changes (e.g., EOF)
-    * `{:error, result}` - Error occurred
-
-  ## Examples
-
-      # Read into REPLY (default)
-      iex> Read.execute([], "hello world", %{variables: %{}})
-      {:ok, %CommandResult{exit_code: 0}, %{var_updates: %{"REPLY" => %Variable{value: "hello world"}}}}
-
-      # Read into named variable
-      iex> Read.execute(["myvar"], "hello", %{variables: %{}})
-      {:ok, %CommandResult{exit_code: 0}, %{var_updates: %{"myvar" => %Variable{value: "hello"}}}}
-
-      # Read into multiple variables
-      iex> Read.execute(["a", "b"], "one two three", %{variables: %{}})
-      {:ok, %CommandResult{exit_code: 0}, %{var_updates: %{"a" => %Variable{value: "one"}, "b" => %Variable{value: "two three"}}}}
-
-  """
+  # Execute the read builtin.
+  #
+  # ## Arguments
+  #
+  # * `args` - Command arguments including flags and variable names
+  # * `stdin` - Input string to read from (nil means no input available)
+  # * `session_state` - Current session state with variables
+  #
+  # ## Returns
+  #
+  # * `{:ok, result, state_updates}` - Success with variable updates
+  # * `{:ok, result}` - Success with no state changes (e.g., EOF)
+  # * `{:error, result}` - Error occurred
+  #
+  # ## Examples
+  #
+  # # Read into REPLY (default)
+  # iex> Read.execute([], "hello world", %{variables: %{}})
+  # {:ok, %CommandResult{exit_code: 0}, %{var_updates: %{"REPLY" => %Variable{value: "hello world"}}}}
+  #
+  # # Read into named variable
+  # iex> Read.execute(["myvar"], "hello", %{variables: %{}})
+  # {:ok, %CommandResult{exit_code: 0}, %{var_updates: %{"myvar" => %Variable{value: "hello"}}}}
+  #
+  # # Read into multiple variables
+  # iex> Read.execute(["a", "b"], "one two three", %{variables: %{}})
+  # {:ok, %CommandResult{exit_code: 0}, %{var_updates: %{"a" => %Variable{value: "one"}, "b" => %Variable{value: "two three"}}}}
+  #
+  @doc false
   defbash execute(args, state) do
     case parse_args(args) do
       {:ok, opts, var_names} ->

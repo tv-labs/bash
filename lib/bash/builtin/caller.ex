@@ -25,9 +25,8 @@ defmodule Bash.Builtin.Caller do
   """
   use Bash.Builtin
 
-  @doc """
-  Execute the caller builtin.
-  """
+  # Execute the caller builtin.
+  @doc false
   defbash execute(args, state) do
     case args do
       [] ->
