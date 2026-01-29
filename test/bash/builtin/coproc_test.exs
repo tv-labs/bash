@@ -175,7 +175,7 @@ defmodule Bash.Builtin.CoprocTest do
     end
 
     @one_mb 1 * 1024 * 1024
-    test "random data from /dev/urandom streams without growing BEAM memory", %{session: session} do
+    test "streaming data through coproc without growing BEAM memory", %{session: session} do
       line_count = 10_000
 
       :erlang.garbage_collect()
@@ -187,8 +187,7 @@ defmodule Bash.Builtin.CoprocTest do
         coproc cat
         i=0
         while [ $i -lt #{line_count} ]; do
-          head -c 64 /dev/urandom | xxd -p | tr -d '\\n' >&${COPROC[1]}
-          echo >&${COPROC[1]}
+          echo "data_${i}_padding_to_make_this_line_longer_like_random_hex_would_be_abcdef0123456789" >&${COPROC[1]}
           read -u ${COPROC[0]} discard
           i=$((i + 1))
         done

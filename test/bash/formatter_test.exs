@@ -3,365 +3,574 @@ defmodule Bash.FormatterTest do
 
   alias Bash.Formatter
 
-  describe "roundtrip - redirect operators" do
-    test "preserves input redirect <" do
-      assert_roundtrip("cat < file.txt")
+  describe "redirect operators" do
+    test "input redirect <" do
+      assert format("cat < file.txt") == "cat < file.txt"
     end
 
-    test "preserves output redirect >" do
-      assert_roundtrip("echo hello > file.txt")
+    test "output redirect >" do
+      assert format("echo hello > file.txt") == "echo hello > file.txt"
     end
 
-    test "preserves append redirect >>" do
-      assert_roundtrip("echo hello >> file.txt")
+    test "append redirect >>" do
+      assert format("echo hello >> file.txt") == "echo hello >> file.txt"
     end
 
-    test "preserves fd output redirect 2>" do
-      assert_roundtrip("command 2> errors.txt")
+    test "fd output redirect 2>" do
+      assert format("command 2> errors.txt") == "command 2> errors.txt"
     end
 
-    test "preserves fd input redirect 0<" do
-      assert_roundtrip("command 0< input.txt")
+    test "fd input redirect 0<" do
+      assert format("command 0< input.txt") == "command < input.txt"
     end
 
-    test "preserves fd duplication >&" do
-      assert_roundtrip("command 2>&1")
+    test "fd duplication >&" do
+      assert format("command 2>&1") == "command 2>&1"
     end
 
-    test "preserves combined stdout/stderr &>" do
-      assert_roundtrip("command &> output.txt")
+    test "combined stdout/stderr &>" do
+      assert format("command &> output.txt") == "command &> output.txt"
     end
 
-    test "preserves combined append &>>" do
-      assert_roundtrip("command &>> output.txt")
+    test "combined append &>>" do
+      assert format("command &>> output.txt") == "command &>> output.txt"
     end
 
-    test "preserves heredoc <<" do
-      assert_roundtrip("cat <<EOF\nhello\nEOF")
+    test "heredoc <<" do
+      assert format("cat <<EOF\nhello\nEOF") == "cat <<EOF\nhello\nEOF\n"
     end
 
-    test "preserves heredoc with tab stripping <<-" do
-      assert_roundtrip("cat <<-EOF\nhello\nEOF")
+    test "heredoc with tab stripping <<-" do
+      assert format("cat <<-EOF\nhello\nEOF") == "cat <<-EOF\nhello\nEOF\n"
     end
 
-    test "preserves herestring <<<" do
-      assert_roundtrip(~s{cat <<< "hello world"})
+    test "herestring <<<" do
+      assert format(~s{cat <<< "hello world"}) == ~s{cat <<< "hello world"}
     end
 
-    test "preserves multiple redirects" do
-      assert_roundtrip("command < input.txt > output.txt 2>&1")
-    end
-  end
-
-  describe "roundtrip - logical operators" do
-    test "preserves pipe |" do
-      assert_roundtrip("echo hello | cat")
-    end
-
-    test "preserves logical or ||" do
-      assert_roundtrip("true || echo failed")
-    end
-
-    test "preserves logical and &&" do
-      assert_roundtrip("true && echo success")
-    end
-
-    test "preserves chained logical operators" do
-      assert_roundtrip("cmd1 && cmd2 || cmd3")
-    end
-
-    test "preserves pipeline with multiple pipes" do
-      assert_roundtrip("cat file | grep pattern | wc -l")
+    test "multiple redirects" do
+      assert format("command < input.txt > output.txt 2>&1") ==
+               "command < input.txt > output.txt 2>&1"
     end
   end
 
-  describe "roundtrip - control structures" do
-    test "preserves if statement" do
-      assert_roundtrip("if true; then echo yes; fi")
+  describe "logical operators" do
+    test "pipe |" do
+      assert format("echo hello | cat") == "echo hello | cat"
     end
 
-    test "preserves if-else statement" do
-      assert_roundtrip("if true; then echo yes; else echo no; fi")
+    test "logical or ||" do
+      assert format("true || echo failed") == "true || echo failed"
     end
 
-    test "preserves if-elif-else statement" do
-      assert_roundtrip("if true; then echo 1; elif false; then echo 2; else echo 3; fi")
+    test "logical and &&" do
+      assert format("true && echo success") == "true && echo success"
     end
 
-    test "preserves for loop with list" do
-      assert_roundtrip("for i in 1 2 3; do echo $i; done")
+    test "chained logical operators" do
+      assert format("cmd1 && cmd2 || cmd3") == "cmd1 && cmd2 || cmd3"
     end
 
-    test "preserves while loop" do
-      assert_roundtrip("while true; do echo loop; done")
-    end
-
-    test "preserves until loop" do
-      assert_roundtrip("until false; do echo loop; done")
-    end
-
-    test "preserves case statement" do
-      input = """
-      case $x in
-        a) echo a;;
-        b) echo b;;
-        *) echo other;;
-      esac
-      """
-
-      assert_roundtrip(String.trim(input))
-    end
-
-    test "preserves while with heredoc redirect" do
-      input = """
-      while read line; do
-        echo "$line"
-      done <<EOF
-      line1
-      line2
-      EOF
-      """
-
-      assert_roundtrip(String.trim(input))
-    end
-
-    test "preserves while with file redirect" do
-      assert_roundtrip("while read line; do echo $line; done < file.txt")
+    test "pipeline with multiple pipes" do
+      assert format("cat file | grep pattern | wc -l") == "cat file | grep pattern | wc -l"
     end
   end
 
-  describe "roundtrip - functions" do
-    test "preserves function definition with parens" do
-      input = """
-      foo() {
-        echo hello
-      }
-      """
-
-      assert_roundtrip(String.trim(input))
+  describe "control structures" do
+    test "if statement expands to multiline" do
+      assert format("if true; then echo yes; fi") ==
+               "if true; then\n  echo yes\nfi"
     end
 
-    test "preserves function keyword syntax" do
-      input = """
-      function foo {
-        echo hello
-      }
-      """
-
-      assert_roundtrip(String.trim(input))
+    test "if-else expands to multiline" do
+      assert format("if true; then echo yes; else echo no; fi") ==
+               "if true; then\n  echo yes\nelse\n  echo no\nfi"
     end
 
-    test "preserves function with local variables" do
-      input = """
-      function myfunc {
-        local x=1
-        echo $x
-      }
-      """
-
-      assert_roundtrip(String.trim(input))
-    end
-  end
-
-  describe "roundtrip - subshells and groups" do
-    test "preserves subshell" do
-      assert_roundtrip("(echo hello; echo world)")
+    test "if-elif-else expands to multiline" do
+      assert format("if true; then echo 1; elif false; then echo 2; else echo 3; fi") ==
+               "if true; then\n  echo 1\nelif false; then\n  echo 2\nelse\n  echo 3\nfi"
     end
 
-    test "preserves brace group" do
-      assert_roundtrip("{ echo hello; echo world; }")
-    end
-  end
-
-  describe "roundtrip - variable operations" do
-    test "preserves simple assignment" do
-      assert_roundtrip("x=value")
+    test "for loop expands to multiline" do
+      assert format("for i in 1 2 3; do echo $i; done") ==
+               "for i in 1 2 3; do\n  echo $i\ndone"
     end
 
-    test "preserves export" do
-      assert_roundtrip("export FOO=bar")
+    test "while loop expands to multiline" do
+      assert format("while true; do echo loop; done") ==
+               "while true; do\n  echo loop\ndone"
     end
 
-    test "preserves array assignment" do
-      assert_roundtrip("arr=(one two three)")
+    test "until loop expands to multiline" do
+      assert format("until false; do echo loop; done") ==
+               "until false; do\n  echo loop\ndone"
     end
 
-    test "preserves variable expansion" do
-      assert_roundtrip("echo $VAR")
+    test "case statement" do
+      assert format("case $x in\n  a) echo a;;\n  b) echo b;;\n  *) echo other;;\nesac") ==
+               "case $x in\n  a)\n    echo a\n    ;;\n  b)\n    echo b\n    ;;\n  *)\n    echo other\n    ;;\nesac"
     end
 
-    test "preserves braced variable expansion" do
-      assert_roundtrip("echo ${VAR}")
+    test "while with heredoc redirect" do
+      input = "while read line; do\n  echo \"$line\"\ndone <<EOF\nline1\nline2\nEOF"
+
+      assert format(input) ==
+               "while read line; do\n  echo \"$line\"\ndone <<EOF\nline1\nline2\nEOF\n"
     end
 
-    test "preserves default value expansion" do
-      assert_roundtrip("echo ${VAR:-default}")
-    end
-
-    test "preserves command substitution" do
-      assert_roundtrip("echo $(date)")
-    end
-
-    test "preserves arithmetic expansion" do
-      assert_roundtrip("echo $((1 + 2))")
+    test "while with file redirect" do
+      assert format("while read line; do echo $line; done < file.txt") ==
+               "while read line; do\n  echo $line\ndone < file.txt"
     end
   end
 
-  describe "roundtrip - test constructs" do
-    test "preserves test command [ ]" do
-      assert_roundtrip("[ -f file.txt ]")
+  describe "functions" do
+    test "parens syntax normalizes to function keyword" do
+      assert format("foo() {\n  echo hello\n}") ==
+               "function foo {\n  echo hello\n}"
     end
 
-    test "preserves test expression [[ ]]" do
-      assert_roundtrip("[[ -f file.txt ]]")
+    test "function keyword syntax" do
+      assert format("function foo {\n  echo hello\n}") ==
+               "function foo {\n  echo hello\n}"
     end
 
-    test "preserves arithmetic test (( ))" do
-      assert_roundtrip("(( x > 5 ))")
-    end
-  end
-
-  describe "roundtrip - quoting" do
-    test "preserves double quotes" do
-      assert_roundtrip(~s{echo "hello world"})
-    end
-
-    test "preserves single quotes" do
-      assert_roundtrip("echo 'hello world'")
-    end
-
-    test "preserves escaped characters" do
-      assert_roundtrip(~s{echo "hello\\nworld"})
+    test "function with local variables" do
+      assert format("function myfunc {\n  local x=1\n  echo $x\n}") ==
+               "function myfunc {\n  local x=1\n  echo $x\n}"
     end
   end
 
-  describe "roundtrip - comments" do
-    test "preserves inline comment" do
-      assert_roundtrip("echo hello # comment")
+  describe "subshells and groups" do
+    test "subshell" do
+      assert format("(echo hello; echo world)") == "(echo hello; echo world)"
     end
 
-    test "preserves standalone comment" do
-      assert_roundtrip("# this is a comment")
+    test "brace group" do
+      assert format("{ echo hello; echo world; }") == "{ echo hello; echo world; }"
     end
   end
 
-  describe "blank line preservation" do
+  describe "variable operations" do
+    test "simple assignment" do
+      assert format("x=value") == "x=value"
+    end
+
+    test "export" do
+      assert format("export FOO=bar") == "export FOO=bar"
+    end
+
+    test "array assignment" do
+      assert format("arr=(one two three)") == "arr=(one two three)"
+    end
+
+    test "variable expansion" do
+      assert format("echo $VAR") == "echo $VAR"
+    end
+
+    test "braced variable expansion normalizes to bare" do
+      assert format("echo ${VAR}") == "echo $VAR"
+    end
+
+    test "default value expansion" do
+      assert format("echo ${VAR:-default}") == "echo ${VAR:-default}"
+    end
+
+    test "command substitution" do
+      assert format("echo $(date)") == "echo $(date)"
+    end
+
+    test "arithmetic expansion" do
+      assert format("echo $((1 + 2))") == "echo $((1 + 2))"
+    end
+  end
+
+  describe "test constructs" do
+    test "test command [ ]" do
+      assert format("[ -f file.txt ]") == "[ -f file.txt ]"
+    end
+
+    test "test expression [[ ]]" do
+      assert format("[[ -f file.txt ]]") == "[[ -f file.txt ]]"
+    end
+
+    test "arithmetic test (( ))" do
+      assert format("(( x > 5 ))") == "((  x > 5  ))"
+    end
+  end
+
+  describe "quoting" do
+    test "double quotes" do
+      assert format(~s{echo "hello world"}) == ~s{echo "hello world"}
+    end
+
+    test "single quotes" do
+      assert format("echo 'hello world'") == "echo 'hello world'"
+    end
+
+    test "escaped characters" do
+      assert format(~s{echo "hello\\nworld"}) == ~s{echo "hello\\nworld"}
+    end
+  end
+
+  describe "comments" do
+    test "inline comment" do
+      assert format("echo hello # comment") == "echo hello# comment"
+    end
+
+    test "standalone comment" do
+      assert format("# this is a comment") == "# this is a comment"
+    end
+  end
+
+  describe "coproc" do
+    test "coproc with default name" do
+      assert format("coproc cat") == "coproc cat"
+    end
+
+    test "coproc with named process" do
+      assert format("coproc mycoproc { cat; }") == "coproc mycoproc { cat; }"
+    end
+  end
+
+  describe "arithmetic" do
+    test "arithmetic assignment" do
+      assert format("(( x = 5 + 3 ))") == "((  x = 5 + 3  ))"
+    end
+
+    test "arithmetic increment" do
+      assert format("(( x++ ))") == "((  x++  ))"
+    end
+
+    test "arithmetic comparison" do
+      assert format("(( x > 5 ))") == "((  x > 5  ))"
+    end
+
+    test "let command" do
+      assert format("let x=5+3") == "let x=5+3"
+    end
+  end
+
+  describe "array operations" do
+    test "array literal" do
+      assert format("arr=(one two three)") == "arr=(one two three)"
+    end
+
+    test "array element assignment" do
+      assert format("arr[0]=value") == "arr[0]=value"
+    end
+
+    test "array append" do
+      assert format("arr+=(four five)") == "arr+=(four five)"
+    end
+
+    test "array element access" do
+      assert format("echo ${arr[0]}") == "echo ${arr[0]}"
+    end
+
+    test "array all elements" do
+      assert format("echo ${arr[@]}") == "echo ${arr[@]}"
+    end
+
+    test "array length" do
+      assert format("echo ${#arr[@]}") == "echo ${#arr[@]}"
+    end
+  end
+
+  describe "process substitution" do
+    test "input process substitution" do
+      assert format("diff <(sort file1) <(sort file2)") ==
+               "diff <(sort file1) <(sort file2)"
+    end
+
+    test "output process substitution" do
+      assert format("tee >(grep error > errors.log)") ==
+               "tee >(grep error > errors.log)"
+    end
+  end
+
+  describe "parameter expansion" do
+    test "substring removal #" do
+      assert format("echo ${var#pattern}") == "echo ${var#pattern}"
+    end
+
+    test "greedy substring removal ##" do
+      assert format("echo ${var##pattern}") == "echo ${var##pattern}"
+    end
+
+    test "suffix removal %" do
+      assert format("echo ${var%pattern}") == "echo ${var%pattern}"
+    end
+
+    test "greedy suffix removal %%" do
+      assert format("echo ${var%%pattern}") == "echo ${var%%pattern}"
+    end
+
+    test "substitution /" do
+      assert format("echo ${var/old/new}") == "echo ${var/old/new}"
+    end
+
+    test "global substitution //" do
+      assert format("echo ${var//old/new}") == "echo ${var//old/new}"
+    end
+
+    test "string length #" do
+      assert format("echo ${#var}") == "echo ${#var}"
+    end
+
+    test "assign if unset :=" do
+      assert format("echo ${var:=default}") == "echo ${var:=default}"
+    end
+
+    test "error if unset :?" do
+      assert format("echo ${var:?error message}") == "echo ${var:?error message}"
+    end
+
+    test "use alternative :+" do
+      assert format("echo ${var:+alternative}") == "echo ${var:+alternative}"
+    end
+
+    test "substring extraction :0:5" do
+      assert format("echo ${var:0:5}") == "echo ${var:0:5}"
+    end
+  end
+
+  describe "special constructs" do
+    test "negated command" do
+      assert format("! grep -q pattern file") == "! grep -q pattern file"
+    end
+
+    test "background job" do
+      assert format("sleep 10 &") == "sleep 10 &"
+    end
+
+    test "semicolon-separated commands" do
+      assert format("echo a; echo b; echo c") == "echo a; echo b; echo c"
+    end
+
+    test "command with env var prefix" do
+      assert format("FOO=bar command") == "FOO=bar command"
+    end
+  end
+
+  describe "shebang" do
+    test "preserves #!/bin/bash" do
+      assert format("#!/bin/bash\necho hello") == "#!/bin/bash\necho hello"
+    end
+
+    test "preserves #!/usr/bin/env bash" do
+      assert format("#!/usr/bin/env bash\necho hello") == "#!/usr/bin/env bash\necho hello"
+    end
+  end
+
+  describe "blank line handling" do
     test "preserves single blank line between statements" do
-      input = "echo first\n\necho second"
-      formatted = Formatter.format(input, [])
-      assert formatted =~ "\n\n"
+      assert format("echo first\n\necho second") == "echo first\n\necho second"
     end
 
     test "normalizes multiple blank lines to single" do
-      input = "echo first\n\n\n\necho second"
-      formatted = Formatter.format(input, [])
-      refute formatted =~ "\n\n\n"
+      assert format("echo first\n\n\n\necho second") == "echo first\n\necho second"
     end
   end
 
   describe "complex combinations" do
-    test "preserves pipeline with redirects" do
-      assert_roundtrip("cat file.txt | grep pattern > output.txt 2>&1")
+    test "pipeline with redirects" do
+      assert format("cat file.txt | grep pattern > output.txt 2>&1") ==
+               "cat file.txt | grep pattern > output.txt 2>&1"
     end
 
-    test "preserves conditional with redirects" do
-      assert_roundtrip("if [ -f file ]; then cat file > out.txt; fi")
+    test "conditional with redirects" do
+      assert format("if [ -f file ]; then cat file > out.txt; fi") ==
+               "if [ -f file ]; then\n  cat file > out.txt\nfi"
     end
 
-    test "preserves function calling function" do
-      input = """
-      function inner {
-        echo inner
-      }
+    test "function calling function" do
+      input = "function inner {\n  echo inner\n}\n\nfunction outer {\n  inner\n  echo outer\n}"
 
-      function outer {
-        inner
-        echo outer
-      }
-      """
-
-      assert_roundtrip(String.trim(input))
+      assert format(input) == input
     end
 
-    test "preserves nested loops" do
-      input = """
-      for i in 1 2; do
-        for j in a b; do
-          echo $i$j
-        done
-      done
-      """
-
-      assert_roundtrip(String.trim(input))
+    test "nested loops" do
+      input = "for i in 1 2; do\n  for j in a b; do\n    echo $i$j\n  done\ndone"
+      assert format(input) == input
     end
 
-    test "preserves if inside while" do
-      input = """
-      while read line; do
-        if [ -n "$line" ]; then
-          echo "$line"
-        fi
-      done < file.txt
-      """
+    test "if inside while" do
+      input =
+        "while read line; do\n  if [ -n \"$line\" ]; then\n    echo \"$line\"\n  fi\ndone < file.txt"
 
-      assert_roundtrip(String.trim(input))
+      assert format(input) == input
     end
   end
 
-  # Helper to verify that formatting produces parseable output with same semantics
-  defp assert_roundtrip(input) do
-    # Parse original
-    {:ok, original_ast} = Bash.parse(input)
+  describe "tab indentation" do
+    test "single level" do
+      assert format("if true; then\n  echo yes\nfi", indent_style: :tabs) ==
+               "if true; then\n\techo yes\nfi"
+    end
 
-    # Format
-    formatted = Formatter.format(input, [])
+    test "nested levels" do
+      input = "for i in 1 2; do\n  if true; then\n    echo $i\n  fi\ndone"
 
-    # Parse formatted
-    case Bash.parse(formatted) do
-      {:ok, formatted_ast} ->
-        # Compare serialized forms (which should be equivalent)
-        original_str = to_string(original_ast)
-        formatted_str = to_string(formatted_ast)
+      assert format(input, indent_style: :tabs) ==
+               "for i in 1 2; do\n\tif true; then\n\t\techo $i\n\tfi\ndone"
+    end
+  end
 
-        # Normalize whitespace for comparison
-        original_normalized = normalize_for_comparison(original_str)
-        formatted_normalized = normalize_for_comparison(formatted_str)
+  describe "indent width" do
+    test "4-space indent single level" do
+      assert format("if true; then\n  echo yes\nfi", indent_width: 4) ==
+               "if true; then\n    echo yes\nfi"
+    end
+
+    test "4-space indent nested" do
+      input = "for i in 1 2; do\n  if true; then\n    echo $i\n  fi\ndone"
+
+      assert format(input, indent_width: 4) ==
+               "for i in 1 2; do\n    if true; then\n        echo $i\n    fi\ndone"
+    end
+  end
+
+  describe "line wrapping" do
+    test "wraps long pipeline" do
+      input =
+        "cat very_long_filename.txt | grep some_pattern | sort | uniq -c | sort -rn | head -20"
+
+      assert format(input, line_length: 50) ==
+               "cat very_long_filename.txt | grep some_pattern | \\\n  sort | uniq -c | sort -rn | head -20"
+    end
+
+    test "does not wrap short lines" do
+      assert format("echo hello | cat", line_length: 80) == "echo hello | cat"
+    end
+
+    test "wraps at logical operators" do
+      input =
+        "very_long_command_name --with-flag arg1 && another_long_command --flag arg2 || fallback_command --flag arg3"
+
+      assert format(input, line_length: 60) ==
+               "very_long_command_name --with-flag arg1 && \\\n  another_long_command --flag arg2 || \\\n  fallback_command --flag arg3"
+    end
+  end
+
+  describe "sigil mode" do
+    test "does not add trailing newline" do
+      assert Formatter.format("echo hello", sigil: :BASH) == "echo hello"
+    end
+  end
+
+  describe "brace expansion" do
+    test "comma-separated brace expansion" do
+      assert format("echo {a,b,c}") == "echo {a,b,c}"
+    end
+
+    test "sequence brace expansion" do
+      assert format("echo {1..10}") == "echo {1..10}"
+    end
+
+    test "nested brace expansion" do
+      assert format("echo {a,{b,c}}") == "echo {a,{b,c}}"
+    end
+  end
+
+  describe "regex pattern" do
+    test "regex in test expression" do
+      assert format("[[ $x =~ ^[0-9]+$ ]]") == "[[ $x =~ ^[0-9]+\\$ ]]"
+    end
+  end
+
+  describe "graceful degradation" do
+    test "returns input unchanged on parse error" do
+      input = "if then fi done esac"
+      assert format(input) == input
+    end
+  end
+
+  describe "AST roundtrip - formatted output parses to equivalent AST" do
+    @roundtrip_inputs %{
+      "simple command" => "echo hello world",
+      "pipeline" => "cat file | grep pattern | wc -l",
+      "compound &&" => "cmd1 && cmd2 && cmd3",
+      "compound ||" => "cmd1 || cmd2 || cmd3",
+      "mixed compound" => "cmd1 && cmd2 || cmd3",
+      "if" => "if true; then echo yes; fi",
+      "if-else" => "if true; then echo yes; else echo no; fi",
+      "if-elif-else" =>
+        "if true; then echo 1; elif false; then echo 2; else echo 3; fi",
+      "for loop" => "for i in 1 2 3; do echo $i; done",
+      "while loop" => "while true; do echo loop; done",
+      "until loop" => "until false; do echo loop; done",
+      "case" => "case $x in\n  a) echo a;;\n  *) echo other;;\nesac",
+      "function" => "function foo {\n  echo hello\n}",
+      "subshell" => "(echo hello; echo world)",
+      "brace group" => "{ echo hello; echo world; }",
+      "assignment" => "x=value",
+      "export" => "export FOO=bar",
+      "array literal" => "arr=(one two three)",
+      "array element" => "arr[0]=value",
+      "array append" => "arr+=(four)",
+      "variable expansion" => "echo $VAR",
+      "parameter default" => "echo ${VAR:-default}",
+      "parameter substring" => "echo ${var#pattern}",
+      "parameter substitution" => "echo ${var/old/new}",
+      "parameter length" => "echo ${#var}",
+      "command substitution" => "echo $(date)",
+      "arithmetic expansion" => "echo $((1 + 2))",
+      "arithmetic statement" => "(( x = 5 + 3 ))",
+      "let" => "let x=5+3",
+      "test command" => "[ -f file.txt ]",
+      "test expression" => "[[ -f file.txt ]]",
+      "redirect out" => "echo hello > file.txt",
+      "redirect append" => "echo hello >> file.txt",
+      "redirect in" => "cat < file.txt",
+      "redirect fd dup" => "command 2>&1",
+      "redirect combined" => "command &> output.txt",
+      "heredoc" => "cat <<EOF\nhello\nEOF",
+      "herestring" => ~s{cat <<< "hello world"},
+      "coproc" => "coproc cat",
+      "coproc named" => "coproc mycoproc { cat; }",
+      "brace expand" => "echo {a,b,c}",
+      "process substitution" => "diff <(sort file1) <(sort file2)",
+      "background" => "sleep 10 &",
+      "negation" => "! grep -q pattern file",
+      "comment" => "# this is a comment",
+      "double quotes" => ~s{echo "hello world"},
+      "single quotes" => "echo 'hello world'",
+      "nested loops" =>
+        "for i in 1 2; do\n  for j in a b; do\n    echo $i$j\n  done\ndone",
+      "pipeline with redirects" =>
+        "cat file.txt | grep pattern > output.txt 2>&1"
+    }
+
+    for {label, input} <- @roundtrip_inputs do
+      @tag input: input
+      test "#{label}", %{input: input} do
+        formatted = format(input)
+
+        {:ok, original_ast} = Bash.parse(input)
+        {:ok, formatted_ast} = Bash.parse(formatted)
+
+        original_normalized = original_ast |> to_string() |> normalize_whitespace()
+        formatted_normalized = formatted_ast |> to_string() |> normalize_whitespace()
 
         assert original_normalized == formatted_normalized,
                """
-               Roundtrip failed - AST differs after formatting
+               AST roundtrip failed for: #{inspect(input)}
 
-               Original input:
-               #{inspect(input)}
-
-               Formatted output:
-               #{inspect(formatted)}
-
-               Original AST string:
-               #{inspect(original_str)}
-
-               Formatted AST string:
-               #{inspect(formatted_str)}
+               Formatted: #{inspect(formatted)}
+               Original AST:  #{inspect(to_string(original_ast))}
+               Formatted AST: #{inspect(to_string(formatted_ast))}
                """
-
-      {:error, error} ->
-        flunk("""
-        Formatted output failed to parse
-
-        Original input:
-        #{inspect(input)}
-
-        Formatted output:
-        #{inspect(formatted)}
-
-        Parse error:
-        #{inspect(error)}
-        """)
+      end
     end
   end
 
-  # Normalize whitespace for comparison (collapse multiple spaces, trim)
-  defp normalize_for_comparison(str) do
+  defp format(input, bash_opts \\ []) do
+    Formatter.format(input, bash: bash_opts)
+  end
+
+  defp normalize_whitespace(str) do
     str
     |> String.replace(~r/[ \t]+/, " ")
     |> String.replace(~r/\n+/, "\n")

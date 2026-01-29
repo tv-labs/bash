@@ -27,7 +27,6 @@ defmodule Bash.Formatter do
 
   - Preserves shebang lines exactly as-is
   - Normalizes indentation based on configuration
-  - Normalizes whitespace around operators
   - Wraps long lines after operators (`|`, `&&`, `||`) with backslash continuation
   - Never breaks inside strings, heredocs, arrays, or comments
   - Preserves existing backslash continuations
@@ -41,6 +40,7 @@ defmodule Bash.Formatter do
 
   @default_indent_style :spaces
   @default_indent_width 2
+  @default_ast_indent "  "
   @default_line_length 80
 
   @impl Mix.Tasks.Format
@@ -57,7 +57,6 @@ defmodule Bash.Formatter do
         format_script(script, config)
 
       {:error, _syntax_error} ->
-        # Graceful degradation: return unchanged on parse errors
         contents
     end
   end
@@ -69,7 +68,6 @@ defmodule Bash.Formatter do
       indent_style: Keyword.get(bash_opts, :indent_style, @default_indent_style),
       indent_width: Keyword.get(bash_opts, :indent_width, @default_indent_width),
       line_length: Keyword.get(bash_opts, :line_length, @default_line_length),
-      # Pass through sigil info if present (for future use)
       sigil: Keyword.get(opts, :sigil),
       modifiers: Keyword.get(opts, :modifiers, []),
       extension: Keyword.get(opts, :extension)
@@ -79,8 +77,8 @@ defmodule Bash.Formatter do
   defp format_script(%Script{} = script, config) do
     formatted = format_with_config(script, config)
 
-    # For sigils, don't add trailing newline
     if config.sigil do
+      # For sigils, don't add trailing newline
       String.trim_trailing(formatted, "\n")
     else
       formatted
@@ -92,7 +90,7 @@ defmodule Bash.Formatter do
 
     formatted_body =
       statements
-      |> format_statements(config, indent_str, 0)
+      |> format_statements(indent_str, 0)
       |> apply_configured_indent(config)
       |> apply_line_wrapping(config)
 
@@ -112,8 +110,6 @@ defmodule Bash.Formatter do
 
   # Replace the default 2-space indentation from AST.Formatter with configured indent
   # The AST's to_string uses "  " (2 spaces) as default indent
-  @default_ast_indent "  "
-
   defp apply_configured_indent(text, %{indent_style: :spaces, indent_width: 2}) do
     # Already using the default, no change needed
     text
@@ -133,14 +129,10 @@ defmodule Bash.Formatter do
 
   # Replace the leading indentation on a single line
   defp replace_line_indent(line, default_indent, new_indent) do
-    # Count how many default indents are at the start
     {indent_count, rest} = count_leading_indents(line, default_indent, 0)
-
-    # Rebuild with new indentation
     String.duplicate(new_indent, indent_count) <> rest
   end
 
-  # Count leading indents and return {count, remaining_string}
   defp count_leading_indents(line, indent, count) do
     indent_len = String.length(indent)
 
@@ -153,92 +145,21 @@ defmodule Bash.Formatter do
   end
 
   # Format a list of statements with proper separators
-  defp format_statements(statements, config, indent_str, level) do
+  defp format_statements(statements, indent_str, level) do
     indent = String.duplicate(indent_str, level)
 
     statements
     |> Enum.map(fn
       {:separator, ";"} -> {:sep, "; "}
       {:separator, sep} -> {:sep, sep}
-      node -> {:node, format_node(node, config, indent_str, level)}
+      node -> {:node, to_string(node)}
     end)
     |> Enum.map_join("", fn
       {:sep, sep} -> sep
       {:node, content} -> "#{indent}#{content}"
     end)
-    |> normalize_separators()
-  end
-
-  # Normalize consecutive separators and ensure proper newlines
-  defp normalize_separators(text) do
-    text
     |> String.replace(~r/[ \t]+\n/, "\n")
     |> String.replace(~r/\n{3,}/, "\n\n")
-  end
-
-  # Format individual AST nodes
-  defp format_node(node, config, indent_str, level) do
-    node
-    |> to_string()
-    |> normalize_whitespace(config)
-    |> indent_nested_content(indent_str, level)
-  end
-
-  # Normalize whitespace around operators
-  defp normalize_whitespace(text, _config) do
-    # Use placeholders for multi-char operators to prevent single-char matching
-    # The regex captures surrounding whitespace to avoid double-spacing
-    # Order matters: longer operators must be protected first
-    text
-    # Protect process substitution <(...) and >(...) - must come first!
-    |> String.replace(~r/<\(/, "\x00PROCSUB_IN\x00")
-    |> String.replace(~r/>\(/, "\x00PROCSUB_OUT\x00")
-    # Protect multi-char operators with placeholders (consume surrounding whitespace)
-    |> String.replace(~r/\s*\|\|\s*/, "\x00OR\x00")
-    |> String.replace(~r/\s*&&\s*/, "\x00AND\x00")
-    # Heredoc/herestring operators - preserve exactly (no added spaces after)
-    # These must come before single-char < matching
-    |> String.replace(~r/\s*<<</, "\x00TLESS\x00")
-    |> String.replace(~r/\s*<<-/, "\x00DLESSDASH\x00")
-    |> String.replace(~r/\s*<</, "\x00DLESS\x00")
-    # Combined stdout/stderr redirects &> and &>> (must come before >>)
-    |> String.replace(~r/\s*&>>\s*/, "\x00AMPAPPEND\x00")
-    |> String.replace(~r/\s*&>\s*/, "\x00AMPGREAT\x00")
-    |> String.replace(~r/\s*>>\s*/, "\x00DGREAT\x00")
-    # FD duplication redirects (2>&1, >&2, etc.) - use placeholders
-    |> String.replace(~r/\s*([0-9]*)>&([0-9-]+)/, "\x00GREATAND\\1_\\2\x00")
-    |> String.replace(~r/\s*([0-9]*)<&([0-9-]+)/, "\x00LESSAND\\1_\\2\x00")
-    # Normalize single-char operators (now safe since multi-char are placeholders)
-    |> String.replace(~r/\s*\|\s*/, " | ")
-    |> String.replace(~r/\s*([0-9]*)>\s*/, " \\1> ")
-    |> String.replace(~r/\s*([0-9]*)<\s*/, " \\1< ")
-    # Restore multi-char operators with proper spacing
-    |> String.replace("\x00OR\x00", " || ")
-    |> String.replace("\x00AND\x00", " && ")
-    |> String.replace("\x00TLESS\x00", " <<<")
-    |> String.replace("\x00DLESSDASH\x00", " <<-")
-    |> String.replace("\x00DLESS\x00", " <<")
-    |> String.replace("\x00AMPAPPEND\x00", " &>> ")
-    |> String.replace("\x00AMPGREAT\x00", " &> ")
-    |> String.replace("\x00DGREAT\x00", " >> ")
-    # Restore FD duplication redirects
-    |> String.replace(~r/\x00GREATAND([0-9]*)_([0-9-]+)\x00/, " \\1>&\\2")
-    |> String.replace(~r/\x00LESSAND([0-9]*)_([0-9-]+)\x00/, " \\1<&\\2")
-    # Restore process substitution
-    |> String.replace("\x00PROCSUB_IN\x00", "<(")
-    |> String.replace("\x00PROCSUB_OUT\x00", ">(")
-    # Clean up multiple spaces between words (but not indentation at line start)
-    |> String.replace(~r/([^\s]) {2,}/, "\\1 ")
-    # Clean up spaces at start of line
-    |> String.replace(~r/^ /, "")
-    |> String.trim()
-  end
-
-  # Indent nested content (for compound statements)
-  defp indent_nested_content(text, _indent_str, _level) do
-    # For now, preserve the existing indentation from to_string
-    # TODO: Re-indent nested content based on config
-    text
   end
 
   # Apply line wrapping for lines exceeding max length
@@ -393,7 +314,6 @@ defmodule Bash.Formatter do
     Enum.reverse(points)
   end
 
-  # Find the best wrap point that keeps first part under max_length
   defp find_best_wrap_point(wrap_points, max_length) do
     wrap_points
     |> Enum.filter(fn {pos, _op} -> pos <= max_length end)

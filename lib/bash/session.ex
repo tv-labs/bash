@@ -1686,11 +1686,23 @@ defmodule Bash.Session do
   def handle_info({:continue_after_wait, executed_script, script_updates, from}, state) do
     current_state = apply_state_updates(state, script_updates)
 
-    # Set up sinks backed by the persistent collector for continuation output
+    # Set up sinks and callbacks for continuation output
+    # start_background_job_fn and signal_jobs_fn must be set so background jobs
+    # started during continuation are executed immediately (not deferred)
+    start_bg_job_fn = fn foreground_ast, current_session_state ->
+      start_background_job_sync(foreground_ast, current_session_state, state)
+    end
+
+    signal_jobs_fn = fn signal, targets, current_session_state ->
+      send_signals_sync(signal, targets, current_session_state, state)
+    end
+
     continuation_state = %{
       current_state
       | stdout_sink: Sink.collector(state.output_collector),
-        stderr_sink: Sink.collector(state.output_collector)
+        stderr_sink: Sink.collector(state.output_collector),
+        start_background_job_fn: start_bg_job_fn,
+        signal_jobs_fn: signal_jobs_fn
     }
 
     case Script.continue_execution(executed_script, continuation_state) do
@@ -2521,11 +2533,21 @@ defmodule Bash.Session do
 
     if Enum.empty?(job_pids) do
       # No jobs to wait for - continue executing remaining statements
-      # Set up sinks for continuation output
+      # Set up sinks and callbacks for continuation output
+      start_bg_job_fn = fn foreground_ast, current_session_state ->
+        start_background_job_sync(foreground_ast, current_session_state, state)
+      end
+
+      signal_jobs_fn = fn signal, targets, current_session_state ->
+        send_signals_sync(signal, targets, current_session_state, state)
+      end
+
       continuation_state = %{
         updated_state
         | stdout_sink: Sink.collector(updated_state.output_collector),
-          stderr_sink: Sink.collector(updated_state.output_collector)
+          stderr_sink: Sink.collector(updated_state.output_collector),
+          start_background_job_fn: start_bg_job_fn,
+          signal_jobs_fn: signal_jobs_fn
       }
 
       case Script.continue_execution(executed_script, continuation_state) do

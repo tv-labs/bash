@@ -66,39 +66,27 @@ defmodule Bash.AST.Formatter do
   def serialize_body(statements, %__MODULE__{} = fmt) when is_list(statements) do
     indent_str = current_indent(fmt)
 
-    # Convert to tagged tuples
-    tagged =
+    formatted =
       statements
-      |> Enum.map(fn
-        {:separator, sep} -> {:sep, sep}
-        stmt -> {:stmt, "#{indent_str}#{to_bash(stmt, fmt)}"}
-      end)
       |> Enum.reduce([], fn
-        {:sep, _sep}, [] -> []
-        {:sep, sep}, acc -> [{:sep, sep} | acc]
-        {:stmt, content}, acc -> [{:stmt, content} | acc]
+        {:seperator, _sep}, [] -> []
+        {:seperator, sep}, acc -> [{:seperator, sep} | acc]
+        content, acc -> ["#{indent_str}#{to_bash(content, fmt)}" | acc]
       end)
       |> Enum.reverse()
 
-    # Join with awareness of what follows each statement
-    tagged
+    formatted
     |> Enum.with_index()
     |> Enum.map_join("", fn
-      {{:sep, sep}, _idx} ->
+      {{:seperator, sep}, _idx} ->
         sep
 
-      {{:stmt, content}, idx} ->
-        # Check if next item is a separator
-        next = Enum.at(tagged, idx + 1)
+      {content, idx} ->
+        next = Enum.at(formatted, idx + 1)
 
         case next do
-          {:sep, _} ->
-            # Separator follows - it provides the newline
-            content
-
-          _ ->
-            # No separator follows - add newline
-            content <> "\n"
+          {:seperator, _} -> content
+          _ -> content <> "\n"
         end
     end)
     |> String.trim_trailing("\n")
