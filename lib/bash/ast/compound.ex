@@ -47,12 +47,10 @@ defmodule Bash.AST.Compound do
   """
 
   alias Bash.AST
-  alias Bash.Variable
   alias Bash.AST.Helpers
-  alias Bash.Variable
-  alias Bash.Executor
-  alias Bash.Variable
   alias Bash.CommandResult
+  alias Bash.Executor
+  alias Bash.Sink
   alias Bash.Variable
 
   @type kind :: :subshell | :group | :operand | :sequential
@@ -133,7 +131,7 @@ defmodule Bash.AST.Compound do
   # Executes in an isolated copy of session state - env/cwd changes don't affect parent
   # Note: We DON'T spawn a child GenServer to avoid nested GenServer.call deadlock.
   # Instead, we execute directly with a copy of state and discard the updates.
-  def execute(%__MODULE__{kind: :subshell, statements: statements}, _stdin, session_state) do
+  def execute(%__MODULE__{kind: :subshell, statements: statements, redirects: redirects}, _stdin, session_state) do
     # Create an isolated copy of session state for subshell execution
     # Per bash behavior: inherit env_vars, working_dir, functions, options
     # Do NOT inherit: aliases, hash table
@@ -143,29 +141,56 @@ defmodule Bash.AST.Compound do
         hash: %{}
     }
 
-    # Execute the body and get result, but discard the state updates (isolation)
-    case Helpers.execute_body(statements, subshell_state, %{}) do
-      {:ok, result, _discarded_env_updates} ->
-        # Return result WITHOUT env_updates (subshell isolation)
-        {:ok, result}
+    # Apply output redirects to sinks
+    {redirect_session, redirect_cleanup, redirect_error} =
+      AST.Command.setup_output_redirect_sinks(redirects, subshell_state)
 
-      {:exec, _result} = exec ->
-        exec
+    if redirect_error do
+      Sink.write_stderr(session_state, redirect_error)
+      {:error, %CommandResult{exit_code: 1, error: :redirect_error}}
+    else
+      try do
+        # Execute the body and get result, but discard the state updates (isolation)
+        case Helpers.execute_body(statements, redirect_session, %{}) do
+          {:ok, result, _discarded_env_updates} ->
+            {:ok, result}
 
-      {:error, result} ->
-        {:error, result}
+          {:exec, _result} = exec ->
+            exec
+
+          {:error, result} ->
+            {:error, result}
+        end
+      after
+        redirect_cleanup.()
+      end
     end
   end
 
   # Command group: { commands; }
   # Executes in current session - env/cwd changes persist
-  def execute(%__MODULE__{kind: :group, statements: statements}, stdin, session_state) do
+  def execute(%__MODULE__{kind: :group, statements: statements, redirects: redirects}, stdin, session_state) do
     # If we have piped stdin, set up a StringIO device for the read builtin
     {stdin_session, stdin_cleanup} = setup_stdin_device(stdin, session_state)
 
     try do
-      # Execute statements in current session, accumulating env updates
-      Helpers.execute_body(statements, stdin_session, %{})
+      # Apply output redirects to sinks (e.g., { cmd; } > /dev/null 2>&1)
+      {redirect_session, redirect_cleanup, redirect_error} =
+        AST.Command.setup_output_redirect_sinks(redirects, stdin_session)
+
+      if redirect_error do
+        Sink.write_stderr(session_state, redirect_error)
+        {:error, %CommandResult{exit_code: 1, error: :redirect_error}}
+      else
+        try do
+          # Apply input redirects
+          _effective_stdin = AST.Command.process_input_redirects(redirects, redirect_session, nil)
+
+          Helpers.execute_body(statements, redirect_session, %{})
+        after
+          redirect_cleanup.()
+        end
+      end
     after
       stdin_cleanup.()
     end

@@ -38,11 +38,14 @@ defmodule Bash.Pipe do
   the same process will deadlock since FIFO open blocks until both ends
   are connected).
   """
-  @spec create(Path.t()) :: {:ok, t()}
+  @spec create(Path.t()) :: {:ok, t()} | {:error, term()}
   def create(dir \\ System.tmp_dir!()) do
     path = Path.join(dir, "bash_pipe_#{:erlang.unique_integer([:positive])}")
-    {_, 0} = System.cmd("mkfifo", [path])
-    {:ok, %__MODULE__{path: path}}
+
+    case System.cmd("mkfifo", [path], stderr_to_stdout: true) do
+      {_, 0} -> {:ok, %__MODULE__{path: path}}
+      {output, code} -> {:error, "mkfifo failed (exit #{code}): #{String.trim(output)}"}
+    end
   end
 
   @doc """

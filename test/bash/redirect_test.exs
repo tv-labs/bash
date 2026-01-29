@@ -605,6 +605,66 @@ defmodule Bash.RedirectTest do
     end
   end
 
+  describe "brace fd syntax" do
+    @describetag :tmp_dir
+    setup :start_session
+
+    test "exec {fd}>&1 allocates fd and dups stdout", %{session: session, tmp_dir: tmp_dir} do
+      file = Path.join(tmp_dir, "brace_fd.txt")
+
+      result =
+        run_script(session, """
+        exec {myfd}> #{file}
+        echo hello >&$myfd
+        exec {myfd}>&-
+        cat #{file}
+        """)
+
+      assert get_stdout(result) =~ "hello"
+    end
+
+    test "exec {fd}>&- closes the fd stored in variable", %{session: session, tmp_dir: tmp_dir} do
+      file = Path.join(tmp_dir, "brace_close.txt")
+
+      result =
+        run_script(session, """
+        exec {myfd}> #{file}
+        echo before >&$myfd
+        exec {myfd}>&-
+        cat #{file}
+        """)
+
+      assert get_stdout(result) =~ "before"
+    end
+
+    test "brace fd allocates fd >= 10", %{session: session} do
+      result =
+        run_script(session, """
+        exec {myfd}>&1
+        echo $myfd
+        exec {myfd}>&-
+        """)
+
+      fd_str = String.trim(get_stdout(result))
+      {fd, ""} = Integer.parse(fd_str)
+      assert fd >= 10
+    end
+
+    test "multiple brace fd allocations get different fds", %{session: session} do
+      result =
+        run_script(session, """
+        exec {fd1}>&1
+        exec {fd2}>&1
+        echo $fd1 $fd2
+        exec {fd1}>&-
+        exec {fd2}>&-
+        """)
+
+      [fd1_str, fd2_str] = String.trim(get_stdout(result)) |> String.split()
+      assert fd1_str != fd2_str
+    end
+  end
+
   # Helper to run script and allow error exit codes
   defp run_script_allow_error(session, script) do
     {:ok, ast} = Bash.Parser.parse(String.trim(script))

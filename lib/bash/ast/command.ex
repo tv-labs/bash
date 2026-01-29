@@ -163,57 +163,153 @@ defmodule Bash.AST.Command do
   defp apply_exec_fd_redirects(redirects, session_state) do
     result =
       Enum.reduce_while(redirects, {:ok, session_state}, fn redirect, {:ok, state} ->
-        case redirect do
-          %AST.Redirect{direction: dir, fd: fd, target: {:file, file_word}}
-          when fd >= 3 and dir in [:output, :append, :input] ->
-            path = resolve_redirect_path(file_word, state)
+        case resolve_brace_fd(redirect, state) do
+          {:ok, redirect, state} ->
+            apply_single_exec_redirect(redirect, state)
 
-            modes =
-              case dir do
-                :output -> [:write]
-                :append -> [:write, :append]
-                :input -> [:read]
-              end
-
-            case Bash.Session.open_fd(state, fd, path, modes) do
-              {:ok, new_state} -> {:cont, {:ok, new_state}}
-              {:error, reason} -> {:halt, {:error, path, reason}}
-            end
-
-          %AST.Redirect{direction: :close, fd: fd} ->
-            {:cont, {:ok, Bash.Session.close_fd(state, fd)}}
-
-          %AST.Redirect{direction: :duplicate, fd: from_fd, target: {:fd, to_fd}}
-          when from_fd >= 3 and to_fd in [0, 1, 2] ->
-            new_fds = Map.put(state.file_descriptors, from_fd, {:dup, to_fd})
-            {:cont, {:ok, %{state | file_descriptors: new_fds}}}
-
-          %AST.Redirect{direction: :duplicate, fd: from_fd, target: {:fd, to_fd}}
-          when from_fd >= 3 and to_fd >= 3 ->
-            case Map.get(state.file_descriptors, to_fd) do
-              nil ->
-                Sink.write_stderr(state, "bash: #{to_fd}: Bad file descriptor\n")
-                {:halt, {:error, "Bad file descriptor", :ebadf}}
-
-              entry ->
-                new_fds = Map.put(state.file_descriptors, from_fd, entry)
-                {:cont, {:ok, %{state | file_descriptors: new_fds}}}
-            end
-
-          _ ->
-            {:cont, {:ok, state}}
+          {:error, msg} ->
+            Sink.write_stderr(state, msg)
+            {:halt, {:error, "Bad file descriptor", :ebadf}}
         end
       end)
 
     case result do
       {:ok, new_state} ->
-        {:ok, %CommandResult{command: "exec", exit_code: 0},
-         %{file_descriptors: new_state.file_descriptors}}
+        updates = %{file_descriptors: new_state.file_descriptors}
+
+        # Include variable updates if brace fd allocation stored new variables
+        updates =
+          if new_state.variables != session_state.variables do
+            # Compute only the changed variables
+            changed =
+              Map.filter(new_state.variables, fn {k, v} ->
+                Map.get(session_state.variables, k) != v
+              end)
+
+            Map.put(updates, :var_updates, changed)
+          else
+            updates
+          end
+
+        {:ok, %CommandResult{command: "exec", exit_code: 0}, updates}
 
       {:error, path, reason} ->
         message = :file.format_error(reason) |> to_string() |> String.capitalize()
         Sink.write_stderr(session_state, "bash: #{path}: #{message}\n")
         {:error, %CommandResult{command: "exec", exit_code: 1, error: reason}}
+    end
+  end
+
+  # Resolve brace fd ({VAR}) to a concrete fd number.
+  # For close: reads the variable to get the fd number.
+  # For open/dup: allocates a new fd >= 10 and stores it in the variable.
+  defp resolve_brace_fd(%AST.Redirect{fd: {:var, var_name}, direction: :close} = redirect, state) do
+    case resolve_brace_var(state, var_name) do
+      nil ->
+        {:error, "bash: #{var_name}: ambiguous redirect\n"}
+
+      val ->
+        case Integer.parse(to_string(val)) do
+          {fd, ""} -> {:ok, %{redirect | fd: fd}, state}
+          _ -> {:error, "bash: #{var_name}: ambiguous redirect\n"}
+        end
+    end
+  end
+
+  defp resolve_brace_fd(%AST.Redirect{fd: {:var, var_name}} = redirect, state) do
+    fd = next_available_fd(state.file_descriptors, 10)
+    state = set_brace_var(state, var_name, to_string(fd))
+    {:ok, %{redirect | fd: fd}, state}
+  end
+
+  defp resolve_brace_fd(redirect, state), do: {:ok, redirect, state}
+
+  # Resolve a brace fd variable name, which may include array subscript: "VAR" or "VAR[idx]"
+  defp resolve_brace_var(state, var_name) do
+    case Regex.run(~r/\A([A-Za-z_]\w*)\[([^\]]+)\]\z/, var_name) do
+      [_, array_name, index_str] ->
+        case Map.get(state.variables, array_name) do
+          nil ->
+            nil
+
+          var ->
+            key =
+              case Integer.parse(index_str) do
+                {n, ""} -> n
+                _ -> index_str
+              end
+
+            Variable.get(var, key)
+        end
+
+      nil ->
+        case Map.get(state.variables, var_name) do
+          nil -> nil
+          var -> Variable.get(var, nil)
+        end
+    end
+  end
+
+  defp set_brace_var(state, var_name, value) do
+    case Regex.run(~r/\A([A-Za-z_]\w*)\[([^\]]+)\]\z/, var_name) do
+      [_, array_name, index] ->
+        var = Map.get(state.variables, array_name, Variable.new_indexed_array())
+        var = Variable.set(var, index, value)
+        %{state | variables: Map.put(state.variables, array_name, var)}
+
+      nil ->
+        %{state | variables: Map.put(state.variables, var_name, Variable.new(value))}
+    end
+  end
+
+  defp next_available_fd(file_descriptors, min_fd) do
+    if Map.has_key?(file_descriptors, min_fd) do
+      next_available_fd(file_descriptors, min_fd + 1)
+    else
+      min_fd
+    end
+  end
+
+  defp apply_single_exec_redirect(redirect, state) do
+    case redirect do
+      %AST.Redirect{direction: dir, fd: fd, target: {:file, file_word}}
+      when fd >= 3 and dir in [:output, :append, :input] ->
+        path = resolve_redirect_path(file_word, state)
+
+        modes =
+          case dir do
+            :output -> [:write]
+            :append -> [:write, :append]
+            :input -> [:read]
+          end
+
+        case Bash.Session.open_fd(state, fd, path, modes) do
+          {:ok, new_state} -> {:cont, {:ok, new_state}}
+          {:error, reason} -> {:halt, {:error, path, reason}}
+        end
+
+      %AST.Redirect{direction: :close, fd: fd} ->
+        {:cont, {:ok, Bash.Session.close_fd(state, fd)}}
+
+      %AST.Redirect{direction: :duplicate, fd: from_fd, target: {:fd, to_fd}}
+      when from_fd >= 3 and to_fd in [0, 1, 2] ->
+        new_fds = Map.put(state.file_descriptors, from_fd, {:dup, to_fd})
+        {:cont, {:ok, %{state | file_descriptors: new_fds}}}
+
+      %AST.Redirect{direction: :duplicate, fd: from_fd, target: {:fd, to_fd}}
+      when from_fd >= 3 and to_fd >= 3 ->
+        case Map.get(state.file_descriptors, to_fd) do
+          nil ->
+            Sink.write_stderr(state, "bash: #{to_fd}: Bad file descriptor\n")
+            {:halt, {:error, "Bad file descriptor", :ebadf}}
+
+          entry ->
+            new_fds = Map.put(state.file_descriptors, from_fd, entry)
+            {:cont, {:ok, %{state | file_descriptors: new_fds}}}
+        end
+
+      _ ->
+        {:cont, {:ok, state}}
     end
   end
 
@@ -300,14 +396,17 @@ defmodule Bash.AST.Command do
 
   defp merge_env_updates(state_updates, _env_updates), do: state_updates
 
-  defp process_input_redirects(redirects, _session_state, default_stdin)
-       when redirects in [nil, []], do: default_stdin
+  @doc false
+  def process_input_redirects(redirects, _session_state, default_stdin)
+      when redirects in [nil, []], do: default_stdin
 
-  defp process_input_redirects(redirects, session_state, default_stdin) do
+  def process_input_redirects(redirects, session_state, default_stdin) do
     redirects
-    |> Enum.filter(
-      &match?(%AST.Redirect{direction: dir} when dir in [:input, :heredoc, :herestring], &1)
-    )
+    |> Enum.filter(fn
+      %AST.Redirect{direction: dir} when dir in [:input, :heredoc, :herestring] -> true
+      %AST.Redirect{direction: :duplicate, fd: 0} -> true
+      _ -> false
+    end)
     |> List.last()
     |> read_input_redirect(session_state, default_stdin)
   end
@@ -315,15 +414,18 @@ defmodule Bash.AST.Command do
   # Hierarchical sink setup: creates file sinks for output redirects BEFORE execution.
   # This allows output to flow directly to files without post-processing.
   # Returns {modified_session_state, cleanup_fn, error} where cleanup_fn closes file handles.
-  defp setup_output_redirect_sinks(redirects, session_state)
-       when redirects in [nil, []] do
+  @doc false
+  def setup_output_redirect_sinks(redirects, session_state)
+      when redirects in [nil, []] do
     {session_state, fn -> :ok end, nil}
   end
 
-  defp setup_output_redirect_sinks(redirects, session_state) do
+  def setup_output_redirect_sinks(redirects, session_state) do
     # Filter to output redirects only (file outputs and FD duplications)
+    # Exclude input duplications (<&N) which have fd: 0
     output_redirects =
       Enum.filter(redirects, fn
+        %AST.Redirect{direction: :duplicate, fd: 0} -> false
         %AST.Redirect{direction: dir} when dir in [:output, :append, :duplicate] -> true
         _ -> false
       end)
@@ -591,6 +693,45 @@ defmodule Bash.AST.Command do
          _default
        ) do
     Helpers.word_to_string(word, session_state) <> "\n"
+  end
+
+  # Input fd duplication: <&N — read from file descriptor N
+  defp read_input_redirect(
+         %AST.Redirect{direction: :duplicate, fd: 0, target: target},
+         session_state,
+         default_stdin
+       ) do
+    target_fd =
+      case target do
+        {:fd, n} -> n
+        {:file, word} ->
+          case Integer.parse(Helpers.word_to_string(word, session_state)) do
+            {n, ""} -> n
+            _ -> nil
+          end
+        _ -> nil
+      end
+
+    if target_fd do
+      case Map.get(session_state.file_descriptors, target_fd) do
+        {:coproc, pid, :read} ->
+          case Bash.Builtin.Coproc.read_output(pid, session_state.call_timeout) do
+            {:ok, data} -> data
+            _ -> default_stdin
+          end
+
+        device when is_pid(device) ->
+          case IO.binread(device, :all) do
+            data when is_binary(data) -> data
+            _ -> default_stdin
+          end
+
+        _ ->
+          default_stdin
+      end
+    else
+      default_stdin
+    end
   end
 
   defp noclobber_enabled?(session_state) do

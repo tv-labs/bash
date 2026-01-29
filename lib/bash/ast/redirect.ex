@@ -69,7 +69,7 @@ defmodule Bash.AST.Redirect do
   @type t :: %__MODULE__{
           meta: AST.Meta.t(),
           direction: direction(),
-          fd: integer() | :both,
+          fd: integer() | :both | {:var, String.t()},
           target: target()
         }
 

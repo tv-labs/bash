@@ -100,19 +100,23 @@ defmodule Bash.Function do
     inherited_traps = build_inherited_traps(session_state)
 
     # Build call stack frame from caller metadata
+    # Per bash semantics, caller reports the *calling* context:
+    # line number of the call site, name of the calling function (or "main"),
+    # and the source file.
     caller_line = Keyword.get(opts, :caller_line, 0)
     source_file = Map.get(session_state.special_vars, "0", "bash")
     current_stack = Map.get(session_state, :call_stack, [])
 
     frame = %{
       line_number: caller_line,
-      function_name: func_def.name,
+      function_name: Map.get(session_state, :current_function_name, "main"),
       source_file: source_file
     }
 
     func_state = %{
       session_state
       | in_function: true,
+        current_function_name: func_def.name,
         positional_params: [args | current_params],
         traps: inherited_traps,
         call_stack: [frame | current_stack]

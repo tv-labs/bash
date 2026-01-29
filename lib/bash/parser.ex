@@ -944,7 +944,7 @@ defmodule Bash.Parser do
   @reserved_as_arg ~w[done fi esac then do elif else in rbrace]a
 
   # Redirect operator tokens
-  @redirect_tokens ~w[less greater dgreater lessand greaterand lessgreat andgreat anddgreat dless dlessdash tless io_number]a
+  @redirect_tokens ~w[less greater dgreater lessand greaterand lessgreat andgreat anddgreat dless dlessdash tless io_number brace_fd]a
 
   # Check if a token is a redirect operator
   defguardp is_redirect_token(token) when elem(token, 0) in @redirect_tokens
@@ -2544,6 +2544,9 @@ defmodule Bash.Parser do
 
   defp classify_redirect_token({:io_number, fd, line, col}),
     do: {:fd_redirect, nil, fd, line, col}
+
+  defp classify_redirect_token({:brace_fd, var_name, line, col}),
+    do: {:fd_redirect, nil, {:var, var_name}, line, col}
 
   defp parse_classified_redirect(state, classification) do
     state = advance(state)

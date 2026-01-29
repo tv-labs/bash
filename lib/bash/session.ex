@@ -96,6 +96,7 @@ defmodule Bash.Session do
     command_history: [],
     in_function: false,
     in_loop: false,
+    current_function_name: "main",
     call_stack: [],
     # Runtime snapshot at session start (ms) for `times` builtin
     start_runtime_ms: 0,

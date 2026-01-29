@@ -11,7 +11,7 @@ defmodule Bash.Builtin.CallerTest do
         """)
 
       stdout = get_stdout(result)
-      assert stdout =~ ~r/2 f bash/
+      assert stdout =~ ~r/2 main bash/
     end
 
     test "caller with no args inside a function returns line filename", %{session: session} do
@@ -50,8 +50,8 @@ defmodule Bash.Builtin.CallerTest do
 
       stdout = get_stdout(result)
       lines = String.split(stdout, "\n", trim: true)
-      assert Enum.at(lines, 0) =~ ~r/2 inner bash/
-      assert Enum.at(lines, 1) =~ ~r/3 outer bash/
+      assert Enum.at(lines, 0) =~ ~r/2 outer bash/
+      assert Enum.at(lines, 1) =~ ~r/3 main bash/
     end
 
     test "caller with negative number returns exit code 2", %{session: session} do

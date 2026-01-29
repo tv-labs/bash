@@ -41,6 +41,7 @@ defmodule Bash.Tokenizer do
   - `{:tless, fd, line, col}` - <<< (herestring)
   - `{:andgreat, line, col}` - &>
   - `{:anddgreat, line, col}` - &>>
+  - `{:brace_fd, varname, line, col}` - {VAR} before redirect operator
 
   ### Reserved words (context-dependent)
   - `{:if, line, col}`
@@ -632,6 +633,27 @@ defmodule Bash.Tokenizer do
 
       _ ->
         read_word(state)
+    end
+  end
+
+  # Try to read a brace fd specifier: {IDENTIFIER} followed by a redirect operator (< or >).
+  # This is bash 4.1+ syntax for dynamic fd allocation.
+  # Example: exec {myfd}>&1 — allocates a new fd, stores number in myfd, dups to stdout
+  # Example: exec {myfd}>&- — closes the fd stored in myfd
+  # Returns {:ok, token, state} or :not_brace_fd
+  defp try_read_brace_fd(%{input: input, pos: pos, line: line, column: col} = state) do
+    # We're positioned at '{'. Check if what follows is IDENTIFIER}< or IDENTIFIER}>
+    rest = binary_part(input, pos + 1, byte_size(input) - pos - 1)
+
+    case Regex.run(~r/\A([A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]+\])?)\}(?=[<>])/, rest) do
+      [full_match, var_name] ->
+        # Advance past {IDENTIFIER}
+        advance_count = 1 + byte_size(full_match)
+        new_state = advance(state, advance_count)
+        {:ok, {:brace_fd, var_name, line, col}, new_state}
+
+      _ ->
+        :not_brace_fd
     end
   end
 
@@ -1238,6 +1260,14 @@ defmodule Bash.Tokenizer do
     start_line = state.line
     start_col = state.column
 
+    # Check for brace fd specifier first: {IDENTIFIER} followed by < or >
+    case try_read_brace_fd(state) do
+      {:ok, token, new_state} -> {:ok, token, new_state}
+      :not_brace_fd -> read_lbrace_or_brace_expansion_inner(state, start_line, start_col)
+    end
+  end
+
+  defp read_lbrace_or_brace_expansion_inner(state, start_line, start_col) do
     # Look ahead to see if this is brace expansion
     case peek_brace_expansion(state.input, state.pos + 1) do
       {:brace_expansion, end_pos, content} ->
