@@ -49,16 +49,16 @@ defmodule Bash.BackgroundTest do
       result = run_script(session, "sleep 0.1 &")
 
       assert result.exit_code == 0
-      assert session_stdout(session) =~ ~r/\[1\]/
+      assert session_stderr(session) =~ ~r/\[1\]/
     end
 
     test "multiple background jobs get sequential numbers", %{session: session} do
       run_script(session, "sleep 0.1 &")
-      output1 = session_stdout(session)
+      output1 = session_stderr(session)
       flush_session_output(session)
 
       run_script(session, "sleep 0.1 &")
-      output2 = session_stdout(session)
+      output2 = session_stderr(session)
 
       assert output1 =~ "[1]"
       assert output2 =~ "[2]"
@@ -113,8 +113,8 @@ defmodule Bash.BackgroundTest do
       # Run in our session and verify it returns immediately
       result = run_script(session, "echo foo &")
       assert result.exit_code == 0
-      # Job number like bash
-      assert session_stdout(session) =~ "[1]"
+      # Job number like bash (notification goes to stderr)
+      assert session_stderr(session) =~ "[1]"
     end
 
     test "jobs output format similar to bash", %{session: session} do
@@ -174,18 +174,18 @@ defmodule Bash.BackgroundTest do
     test "multiple background jobs like bash", %{session: session} do
       # In bash, multiple & creates multiple jobs with sequential numbers
       run_script(session, "sleep 0.5 &")
-      output1 = session_stdout(session)
+      output1 = session_stderr(session)
       flush_session_output(session)
 
       run_script(session, "sleep 0.5 &")
-      output2 = session_stdout(session)
+      output2 = session_stderr(session)
       flush_session_output(session)
 
       run_script(session, "sleep 0.5 &")
-      output3 = session_stdout(session)
+      output3 = session_stderr(session)
       flush_session_output(session)
 
-      # Each should get a sequential job number
+      # Each should get a sequential job number (notification goes to stderr)
       assert output1 =~ "[1]"
       assert output2 =~ "[2]"
       assert output3 =~ "[3]"
@@ -219,7 +219,7 @@ defmodule Bash.BackgroundTest do
 
       # Should return immediately with job number
       assert result.exit_code == 0
-      assert session_stdout(session) =~ "[1]"
+      assert session_stderr(session) =~ "[1]"
 
       # Wait for it to complete and check the job ran both commands
       Process.sleep(100)

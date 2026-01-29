@@ -286,140 +286,17 @@ defmodule Bash.Sink do
   @spec write(map(), :stdout | :stderr, binary()) :: :ok | :no_sink
   def write(session_state, :stdout, data), do: write_stdout(session_state, data)
   def write(session_state, :stderr, data), do: write_stderr(session_state, data)
-end
 
-# Keep these modules for backwards compatibility during transition
-# They will be removed once all code uses the new sink API
+  @doc """
+  Creates a sink that writes to a `Bash.Pipe`.
 
-defmodule Bash.Sink.Passthrough do
-  @moduledoc false
-  # Deprecated: Use Sink.passthrough/1 instead
-
-  @spec new((Bash.Sink.chunk() -> any())) :: Bash.Sink.t()
-  def new(callback), do: Bash.Sink.passthrough(callback)
-end
-
-defmodule Bash.Sink.File do
-  @moduledoc false
-  # Deprecated: Use Sink.file/2 instead
-
-  @spec new(Path.t(), keyword()) :: {Bash.Sink.t(), (-> :ok | {:error, term()})}
-  def new(path, opts \\ []), do: Bash.Sink.file(path, opts)
-end
-
-defmodule Bash.Sink.Null do
-  @moduledoc false
-  # Deprecated: Use Sink.null/0 instead
-
-  @spec new() :: Bash.Sink.t()
-  def new, do: Bash.Sink.null()
-end
-
-defmodule Bash.Sink.Accumulator do
-  @moduledoc false
-  # Deprecated: Use OutputCollector instead
-  # Kept for backwards compatibility during transition
-
-  @spec new() :: {Bash.Sink.t(), (-> binary())}
-  def new do
-    ref = make_ref()
-    Process.put({__MODULE__, ref}, [])
-
-    sink = fn
-      {:stdout, data} when is_binary(data) ->
-        chunks = Process.get({__MODULE__, ref})
-        Process.put({__MODULE__, ref}, [data | chunks])
-        :ok
-
-      {:stderr, data} when is_binary(data) ->
-        chunks = Process.get({__MODULE__, ref})
-        Process.put({__MODULE__, ref}, [data | chunks])
-        :ok
-
-      _ ->
-        :ok
+  Strips the stream tag and writes raw data to the pipe's write end.
+  """
+  @spec pipe(Bash.Pipe.t()) :: t()
+  def pipe(%Bash.Pipe{} = p) do
+    fn {_stream, data} when is_binary(data) ->
+      Bash.Pipe.write(p, data)
+      :ok
     end
-
-    get_result = fn ->
-      chunks = Process.get({__MODULE__, ref})
-      Process.delete({__MODULE__, ref})
-      chunks |> Enum.reverse() |> :erlang.iolist_to_binary()
-    end
-
-    {sink, get_result}
-  end
-
-  @spec new_separated() :: {Bash.Sink.t(), (-> {binary(), binary()})}
-  def new_separated do
-    ref = make_ref()
-    Process.put({__MODULE__, ref, :stdout}, [])
-    Process.put({__MODULE__, ref, :stderr}, [])
-
-    sink = fn
-      {:stdout, data} when is_binary(data) ->
-        chunks = Process.get({__MODULE__, ref, :stdout})
-        Process.put({__MODULE__, ref, :stdout}, [data | chunks])
-        :ok
-
-      {:stderr, data} when is_binary(data) ->
-        chunks = Process.get({__MODULE__, ref, :stderr})
-        Process.put({__MODULE__, ref, :stderr}, [data | chunks])
-        :ok
-
-      _ ->
-        :ok
-    end
-
-    get_result = fn ->
-      stdout = Process.get({__MODULE__, ref, :stdout})
-      stderr = Process.get({__MODULE__, ref, :stderr})
-      Process.delete({__MODULE__, ref, :stdout})
-      Process.delete({__MODULE__, ref, :stderr})
-
-      {
-        stdout |> Enum.reverse() |> :erlang.iolist_to_binary(),
-        stderr |> Enum.reverse() |> :erlang.iolist_to_binary()
-      }
-    end
-
-    {sink, get_result}
-  end
-end
-
-defmodule Bash.Sink.List do
-  @moduledoc false
-  # Deprecated: Use OutputCollector instead
-  # Kept for backwards compatibility during transition
-
-  @spec new() :: {Bash.Sink.t(), (-> [{:stdout | :stderr, [binary()]}])}
-  def new do
-    ref = make_ref()
-    Process.put({__MODULE__, ref}, [])
-
-    sink = fn
-      {stream, data} when stream in [:stdout, :stderr] and is_binary(data) ->
-        chunks = Process.get({__MODULE__, ref})
-        Process.put({__MODULE__, ref}, [{stream, data} | chunks])
-        :ok
-
-      _ ->
-        :ok
-    end
-
-    get_result = fn ->
-      chunks = Process.get({__MODULE__, ref})
-      Process.delete({__MODULE__, ref})
-
-      chunks
-      |> Enum.reverse()
-      |> Enum.chunk_by(fn {stream, _} -> stream end)
-      |> Enum.map(fn group ->
-        {stream, _} = hd(group)
-        data = Enum.map(group, fn {_, d} -> d end)
-        {stream, data}
-      end)
-    end
-
-    {sink, get_result}
   end
 end

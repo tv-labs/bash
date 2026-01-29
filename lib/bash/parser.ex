@@ -606,6 +606,10 @@ defmodule Bash.Parser do
 
     # Parse command name (if any)
     case current_token(state) do
+      {:word, [{:literal, "coproc"}], _, _} ->
+        state = advance(state)
+        parse_coproc(state, line, col)
+
       {:word, [{:literal, name_str}], _, _} ->
         state = advance(state)
 
@@ -2600,5 +2604,44 @@ defmodule Bash.Parser do
       {:error, _, _, _} = err ->
         err
     end
+  end
+
+  defp parse_coproc(state, line, col) do
+    case current_token(state) do
+      {:word, [{:literal, name}], _, _} ->
+        next_state = advance(state)
+
+        case current_token(next_state) do
+          {starter, _, _} when starter in @compound_command_starters ->
+            with {:ok, body, final_state} <- parse_command(next_state) do
+              {:ok, %AST.Coproc{meta: AST.meta(line, col), name: name, body: body}, final_state}
+            end
+
+          _ ->
+            parse_coproc_simple(state, line, col)
+        end
+
+      {starter, _, _} when starter in @compound_command_starters ->
+        with {:ok, body, final_state} <- parse_command(state) do
+          {:ok, %AST.Coproc{meta: AST.meta(line, col), body: body}, final_state}
+        end
+
+      _ ->
+        parse_coproc_simple(state, line, col)
+    end
+  end
+
+  defp parse_coproc_simple(state, line, col) do
+    name = build_word([{:literal, "coproc"}], line, col)
+    {args, redirects, state} = parse_command_args(state, [], [])
+
+    cmd = %AST.Command{
+      meta: AST.meta(line, col),
+      name: name,
+      args: args,
+      redirects: redirects
+    }
+
+    {:ok, cmd, state}
   end
 end

@@ -21,7 +21,6 @@ defmodule Bash.CommandPort do
   """
 
   alias Bash.CommandResult
-  alias Bash.Sink
 
   @doc """
   Executes a command with optional stdin input.
@@ -74,27 +73,12 @@ defmodule Bash.CommandPort do
       stderr: :redirect_to_stdout
     ]
 
-    # If no sink provided, use list accumulator
-    sink =
-      if sink_opt do
-        sink_opt
-      else
-        {sink, _get_output} = Sink.List.new()
-        sink
-      end
+    sink = sink_opt || fn _chunk -> :ok end
 
     case ExCmd.Process.start_link(cmd_parts, exec_opts) do
       {:ok, process} ->
         # Write stdin if provided, then close stdin
-        if stdin do
-          case ExCmd.Process.write(process, stdin) do
-            :ok -> ExCmd.Process.close_stdin(process)
-            {:error, reason} -> {:error, reason}
-          end
-        else
-          # Close stdin when no input provided
-          ExCmd.Process.close_stdin(process)
-        end
+        write_stdin(process, stdin)
 
         # Stream output to sink (does not accumulate in memory)
         stream_to_sink(process, sink)
@@ -182,5 +166,29 @@ defmodule Bash.CommandPort do
       {k, v} when is_atom(k) -> {Atom.to_string(k), to_string(v)}
       {k, v} -> {to_string(k), to_string(v)}
     end)
+  end
+
+  defp write_stdin(process, nil) do
+    ExCmd.Process.close_stdin(process)
+  end
+
+  defp write_stdin(process, data) when is_binary(data) do
+    case ExCmd.Process.write(process, data) do
+      :ok -> ExCmd.Process.close_stdin(process)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp write_stdin(process, %Bash.Pipe{} = pipe) do
+    case Bash.Pipe.read_line(pipe) do
+      {:ok, data} ->
+        case ExCmd.Process.write(process, data) do
+          :ok -> write_stdin(process, pipe)
+          {:error, _} -> ExCmd.Process.close_stdin(process)
+        end
+
+      :eof ->
+        ExCmd.Process.close_stdin(process)
+    end
   end
 end

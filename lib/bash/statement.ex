@@ -22,5 +22,5 @@ defmodule Bash.Statement do
           | AST.Case.t()
           | Function.t()
           | AST.Compound.t()
-          | AST.List.t()
+          | AST.Coproc.t()
 end

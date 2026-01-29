@@ -70,6 +70,7 @@ defmodule Bash.Executor do
              AST.Case,
              AST.Command,
              AST.Compound,
+             AST.Coproc,
              AST.ForLoop,
              Function,
              AST.If,

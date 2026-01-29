@@ -324,15 +324,19 @@ defmodule Bash.Builtin.Read do
       nil ->
         {:error, "#{fd}: Bad file descriptor"}
 
+      {:coproc, coproc_pid, :read} ->
+        case Bash.Builtin.Coproc.read_output(coproc_pid, session_state.call_timeout) do
+          {:ok, data} -> {:ok, data}
+          :eof -> {:ok, nil}
+          {:error, _} -> {:error, "#{fd}: Bad file descriptor"}
+        end
+
       device when is_pid(device) ->
         case IO.binread(device, :line) do
           :eof -> {:ok, nil}
           {:error, _} -> {:error, "#{fd}: Bad file descriptor"}
           line -> {:ok, line}
         end
-
-      content ->
-        {:ok, content}
     end
   end
 

@@ -23,11 +23,26 @@ defmodule Bash.Builtin.Times do
 
   defbash execute(_args, state) do
     shell_user_ms = get_shell_user_time(state)
+    children_ms = get_children_time(state)
 
     shell_line = "#{format_time(shell_user_ms)} #{format_time(0)}"
-    child_line = "#{format_time(0)} #{format_time(0)}"
+    child_line = "#{format_time(children_ms)} #{format_time(0)}"
     puts("#{shell_line}\n#{child_line}")
     :ok
+  end
+
+  defp get_children_time(state) do
+    state
+    |> Map.get(:completed_jobs, [])
+    |> Enum.reduce(0, fn job, acc ->
+      case {job.started_at, job.completed_at} do
+        {%DateTime{} = started, %DateTime{} = completed} ->
+          acc + DateTime.diff(completed, started, :millisecond)
+
+        _ ->
+          acc
+      end
+    end)
   end
 
   defp get_shell_user_time(state) do

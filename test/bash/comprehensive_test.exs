@@ -303,10 +303,10 @@ defmodule Bash.ComprehensiveTest do
         ref_lines
         |> Enum.with_index(1)
         |> Enum.reject(fn {line, _} -> MapSet.member?(act_set, line) end)
-        |> Enum.take(10)
+        |> Enum.take(20)
 
       if length(missing) > 0 do
-        IO.puts("\nFirst 10 missing lines:")
+        IO.puts("\nFirst 20 missing lines:")
 
         Enum.each(missing, fn {line, idx} ->
           IO.puts("  #{idx}: #{String.slice(line, 0, 60)}...")

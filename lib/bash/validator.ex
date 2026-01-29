@@ -136,7 +136,7 @@ defmodule Bash.Validator do
   end
 
   defp check_statement(%AST.Case{cases: cases}, source) do
-    Enum.flat_map(cases, fn {_patterns, case_body} ->
+    Enum.flat_map(cases, fn {_patterns, case_body, _terminator} ->
       find_errors(case_body, source, [])
     end)
   end

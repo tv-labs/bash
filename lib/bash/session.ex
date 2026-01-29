@@ -109,6 +109,9 @@ defmodule Bash.Session do
     # StringIO device for streaming stdin (used by while loops with redirects)
     # When set, read builtin uses IO.binread(device, :line) for line-by-line reading
     stdin_device: nil,
+    # Timeout for GenServer calls to child processes (coproc, jobs, etc.)
+    # Propagated from Session.execute opts. Defaults to :infinity.
+    call_timeout: :infinity,
     # Special variables (updated after each command)
     special_vars: %{
       "?" => 0,
@@ -121,7 +124,8 @@ defmodule Bash.Session do
     positional_params: [[]],
     # Callback for starting background jobs synchronously (used by Script executor)
     start_background_job_fn: nil,
-    signal_jobs_fn: nil
+    signal_jobs_fn: nil,
+    pipe_stdin: nil
   ]
 
   @type t :: %__MODULE__{
@@ -150,7 +154,8 @@ defmodule Bash.Session do
           ],
           dir_stack: [String.t()],
           traps: %{String.t() => String.t() | :ignore},
-          file_descriptors: %{non_neg_integer() => String.t()},
+          file_descriptors: %{non_neg_integer() => pid() | {:coproc, pid(), :read | :write}},
+          call_timeout: timeout(),
           stdin_device: pid() | nil,
           jobs: %{pos_integer() => pid()},
           next_job_number: pos_integer(),
@@ -355,7 +360,7 @@ defmodule Bash.Session do
 
   """
   def execute(session, ast, opts \\ []) do
-    GenServer.call(session, {:execute, ast, opts})
+    GenServer.call(session, {:execute, ast, opts}, :infinity)
   end
 
   @doc """
@@ -545,20 +550,16 @@ defmodule Bash.Session do
     {:error, "#{fd}: Bad file descriptor"}
   end
 
-  def read(%__MODULE__{file_descriptors: fds}, {:fd, fd}, mode) do
+  def read(%__MODULE__{file_descriptors: fds} = session, {:fd, fd}, mode) do
     case Map.get(fds, fd) do
       nil ->
         {:error, "#{fd}: Bad file descriptor"}
 
+      {:coproc, coproc_pid, :read} ->
+        Bash.Builtin.Coproc.read_output(coproc_pid, session.call_timeout)
+
       device when is_pid(device) ->
         do_read(device, mode)
-
-      content when is_binary(content) ->
-        # Legacy string content - wrap in StringIO for reading
-        {:ok, string_io} = StringIO.open(content)
-        result = do_read(string_io, mode)
-        StringIO.close(string_io)
-        result
     end
   end
 
@@ -636,8 +637,11 @@ defmodule Bash.Session do
 
   def write(%__MODULE__{file_descriptors: fds} = session, {:fd, fd}, data) do
     case Map.get(fds, fd) do
-      # Bad fd - silently ignore like bash
       nil ->
+        session
+
+      {:coproc, coproc_pid, :write} ->
+        Bash.Builtin.Coproc.write_input(coproc_pid, data, session.call_timeout)
         session
 
       device when is_pid(device) ->
@@ -892,12 +896,19 @@ defmodule Bash.Session do
       nil ->
         session
 
-      device when is_pid(device) ->
-        File.close(device)
+      {:coproc, coproc_pid, :read} ->
+        Bash.Builtin.Coproc.close_read(coproc_pid, session.call_timeout)
         %{session | file_descriptors: Map.delete(fds, fd)}
 
-      _content ->
-        # Legacy string content
+      {:coproc, coproc_pid, :write} ->
+        Bash.Builtin.Coproc.close_write(coproc_pid, session.call_timeout)
+        %{session | file_descriptors: Map.delete(fds, fd)}
+
+      {:dup, _target_fd} ->
+        %{session | file_descriptors: Map.delete(fds, fd)}
+
+      device when is_pid(device) ->
+        File.close(device)
         %{session | file_descriptors: Map.delete(fds, fd)}
     end
   end
@@ -1008,7 +1019,8 @@ defmodule Bash.Session do
       command_history: [],
       start_runtime_ms: start_runtime_ms,
       special_vars: special_vars,
-      positional_params: positional_params
+      positional_params: positional_params,
+      call_timeout: opts[:call_timeout] || :infinity
     }
 
     # Load any API modules provided at creation
@@ -1670,15 +1682,92 @@ defmodule Bash.Session do
     end
   end
 
+  def handle_info({:continue_after_wait, executed_script, script_updates, from}, state) do
+    current_state = apply_state_updates(state, script_updates)
+
+    # Set up sinks backed by the persistent collector for continuation output
+    continuation_state = %{
+      current_state
+      | stdout_sink: Sink.collector(state.output_collector),
+        stderr_sink: Sink.collector(state.output_collector)
+    }
+
+    case Script.continue_execution(executed_script, continuation_state) do
+      {:ok, final_script, continuation_updates} ->
+        new_state =
+          current_state
+          |> apply_state_updates(continuation_updates)
+          |> append_to_history(final_script)
+          |> update_exit_status(final_script)
+
+        GenServer.reply(from, {:ok, final_script})
+        {:noreply, new_state}
+
+      {:wait_for_jobs, job_specs, continued_script, continuation_updates} ->
+        merged_updates = Map.merge(script_updates, continuation_updates)
+
+        handle_wait_for_jobs_with_script(
+          job_specs,
+          continued_script,
+          merged_updates,
+          from,
+          current_state
+        )
+
+      {terminal, final_script, continuation_updates}
+      when terminal in [:exit, :error] ->
+        new_state =
+          current_state
+          |> apply_state_updates(continuation_updates)
+          |> append_to_history(final_script)
+          |> update_exit_status(final_script)
+
+        GenServer.reply(from, {terminal, final_script})
+        {:noreply, new_state}
+
+      _ ->
+        # Fallback: no remaining statements, reply with what we have
+        new_state =
+          current_state
+          |> append_to_history(executed_script)
+          |> update_exit_status(executed_script)
+
+        GenServer.reply(from, {:ok, executed_script})
+        {:noreply, new_state}
+    end
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl GenServer
   def terminate(_reason, state) do
+    close_all_file_descriptors(state)
+
     if state.job_supervisor do
       DynamicSupervisor.stop(state.job_supervisor, :shutdown)
     end
 
     :ok
+  end
+
+  defp close_all_file_descriptors(state) do
+    Enum.each(state.file_descriptors, fn
+      {_fd, {:coproc, coproc_pid, direction}} ->
+        try do
+          case direction do
+            :read -> Bash.Builtin.Coproc.close_read(coproc_pid, 5_000)
+            :write -> Bash.Builtin.Coproc.close_write(coproc_pid, 5_000)
+          end
+        catch
+          :exit, _ -> :ok
+        end
+
+      {_fd, {:dup, _}} ->
+        :ok
+
+      {_fd, device} when is_pid(device) ->
+        File.close(device)
+    end)
   end
 
   defp via(registry, id), do: {:via, Registry, {registry, id}}
@@ -1866,8 +1955,8 @@ defmodule Bash.Session do
         # For display, show the original command (not "bash -c ...")
         display_cmd = build_command_string(foreground_ast)
 
-        # Write job notification to stdout sink
-        if new_state.stdout_sink, do: new_state.stdout_sink.({:stdout, "[#{job_number}]\n"})
+        # Write job notification to stderr (matches bash behavior)
+        if new_state.stderr_sink, do: new_state.stderr_sink.({:stderr, "[#{job_number}]\n"})
 
         result = %CommandResult{
           command: display_cmd,
@@ -1909,7 +1998,13 @@ defmodule Bash.Session do
           {cmd, cmd_args, build_command_string(foreground_ast)}
       end
 
-    job_number = original_state.next_job_number
+    # Use the session state seen by the script (which has accumulated updates from
+    # prior background jobs in the same script) for job numbering
+    job_number =
+      case Map.get(current_session_state, :next_job_number) do
+        n when is_integer(n) and n > 0 -> n
+        _ -> original_state.next_job_number
+      end
 
     # Create sinks that write to the session's PERSISTENT collector, not the temp one
     persistent_stdout_sink = Sink.collector(original_state.output_collector)
@@ -1939,9 +2034,9 @@ defmodule Bash.Session do
             {:error, _} -> ""
           end
 
-        # Write job notification
-        if current_session_state.stdout_sink do
-          current_session_state.stdout_sink.({:stdout, "[#{job_number}]\n"})
+        # Write job notification to stderr (matches bash behavior)
+        if current_session_state.stderr_sink do
+          current_session_state.stderr_sink.({:stderr, "[#{job_number}]\n"})
         end
 
         # Update session state with job info and $!
@@ -1953,10 +2048,20 @@ defmodule Bash.Session do
         }
 
         # Return the OS PID string and a map of updates to apply to Session GenServer
+        # Use current_session_state for jobs/current_job since it reflects accumulated
+        # script updates (multiple bg jobs in one script need to see each other)
+        current_jobs =
+          case Map.get(current_session_state, :jobs) do
+            m when is_map(m) and map_size(m) > 0 -> m
+            _ -> original_state.jobs
+          end
+
+        current_job_num = Map.get(current_session_state, :current_job)
+
         state_updates = %{
-          jobs: Map.put(original_state.jobs, job_number, job_pid),
+          jobs: Map.put(current_jobs, job_number, job_pid),
           next_job_number: job_number + 1,
-          previous_job: original_state.current_job,
+          previous_job: current_job_num,
           current_job: job_number
         }
 
@@ -2371,31 +2476,74 @@ defmodule Bash.Session do
 
   # Handle wait for jobs with Script continuation
   defp handle_wait_for_jobs_with_script(job_specs, executed_script, script_updates, from, state) do
+    # Apply script_updates first so we can see jobs started during script execution
+    updated_state = apply_state_updates(state, script_updates)
+
     # Resolve job specs to PIDs (nil means wait for all)
+    # Filter to only alive processes — jobs may have completed during script execution
     job_pids =
       if job_specs == nil do
-        Map.values(state.jobs)
+        Map.values(updated_state.jobs)
       else
         job_specs
         |> Enum.map(fn
-          :current -> Map.get(state.jobs, state.current_job)
-          :previous -> Map.get(state.jobs, state.previous_job)
-          num when is_integer(num) -> Map.get(state.jobs, num)
+          :current -> Map.get(updated_state.jobs, updated_state.current_job)
+          :previous -> Map.get(updated_state.jobs, updated_state.previous_job)
+          num when is_integer(num) -> Map.get(updated_state.jobs, num)
           _ -> nil
         end)
         |> Enum.reject(&is_nil/1)
       end
+      |> Enum.filter(&Process.alive?/1)
 
     if Enum.empty?(job_pids) do
-      new_state =
-        state
-        |> apply_state_updates(script_updates)
-        |> append_to_history(executed_script)
-        |> update_exit_status(executed_script)
+      # No jobs to wait for - continue executing remaining statements
+      # Set up sinks for continuation output
+      continuation_state = %{
+        updated_state
+        | stdout_sink: Sink.collector(updated_state.output_collector),
+          stderr_sink: Sink.collector(updated_state.output_collector)
+      }
 
-      {:reply, {:ok, executed_script}, new_state}
+      case Script.continue_execution(executed_script, continuation_state) do
+        {:ok, final_script, continuation_updates} ->
+          new_state =
+            updated_state
+            |> apply_state_updates(continuation_updates)
+            |> append_to_history(final_script)
+            |> update_exit_status(final_script)
+
+          {:reply, {:ok, final_script}, new_state}
+
+        {:wait_for_jobs, job_specs, continued_script, continuation_updates} ->
+          handle_wait_for_jobs_with_script(
+            job_specs,
+            continued_script,
+            continuation_updates,
+            from,
+            updated_state
+          )
+
+        {terminal, final_script, continuation_updates}
+        when terminal in [:exit, :error] ->
+          new_state =
+            updated_state
+            |> apply_state_updates(continuation_updates)
+            |> append_to_history(final_script)
+            |> update_exit_status(final_script)
+
+          {:reply, {terminal, final_script}, new_state}
+
+        _ ->
+          new_state =
+            updated_state
+            |> append_to_history(executed_script)
+            |> update_exit_status(executed_script)
+
+          {:reply, {:ok, executed_script}, new_state}
+      end
     else
-      caller = from
+      session_pid = self()
 
       spawn(fn ->
         exit_codes =
@@ -2412,12 +2560,11 @@ defmodule Bash.Session do
           end)
 
         last_code = List.last(exit_codes) || 0
-        # Update script's exit_code with the job's exit code
         updated_script = %{executed_script | exit_code: last_code}
-        GenServer.reply(caller, {:ok, updated_script})
+        send(session_pid, {:continue_after_wait, updated_script, script_updates, from})
       end)
 
-      {:noreply, apply_state_updates(state, script_updates)}
+      {:noreply, updated_state}
     end
   end
 
@@ -2543,6 +2690,7 @@ defmodule Bash.Session do
     |> maybe_delete_history_entry(updates)
     |> maybe_update_jobs(updates)
     |> maybe_update_file_descriptors(updates)
+    |> maybe_update_traps(updates)
   end
 
   defp maybe_update_jobs(state, %{
@@ -2560,6 +2708,12 @@ defmodule Bash.Session do
   end
 
   defp maybe_update_jobs(state, _), do: state
+
+  defp maybe_update_traps(state, %{traps: traps}) when is_map(traps) do
+    %{state | traps: Map.merge(state.traps, traps)}
+  end
+
+  defp maybe_update_traps(state, _), do: state
 
   defp maybe_update_file_descriptors(state, %{file_descriptors: fds}) do
     %{state | file_descriptors: fds}

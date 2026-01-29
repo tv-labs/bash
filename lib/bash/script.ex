@@ -496,9 +496,9 @@ defmodule Bash.Script do
               )
 
             signal_fn when is_function(signal_fn, 3) ->
-              # Send signals immediately
+              # Send signals immediately, using updated_session which includes accumulated state
               exit_code =
-                case signal_fn.(signal, targets, session_state) do
+                case signal_fn.(signal, targets, updated_session) do
                   {:ok, code} -> code
                   {:error, code, _msg} -> code
                 end
@@ -552,7 +552,8 @@ defmodule Bash.Script do
               case start_bg_fn.(foreground_ast, bg_session_state) do
                 {:ok, _os_pid_str, updated_session_state, job_state_updates} ->
                   # Merge job state updates into the accumulated updates
-                  merged_updates = Map.merge(updates, job_state_updates)
+                  # Deep-merge jobs map so multiple bg jobs are all tracked
+                  merged_updates = merge_state_updates(updates, job_state_updates)
                   # Mark statement as executed so continuation doesn't re-run it
                   executed_stmt = mark_executed(stmt, 0)
                   # Continue with updated session_state that has $! set
@@ -707,6 +708,13 @@ defmodule Bash.Script do
         Map.get(stmt_updates, :special_vars_updates, %{})
       )
 
+    # Merge jobs by combining the inner maps (multiple bg jobs in one script)
+    jobs =
+      Map.merge(
+        Map.get(acc, :jobs, %{}),
+        Map.get(stmt_updates, :jobs, %{})
+      )
+
     # For other keys, the later value wins (like clear_history, working_dir, etc.)
     merged = Map.merge(acc, stmt_updates)
 
@@ -739,10 +747,19 @@ defmodule Bash.Script do
         Map.delete(merged, :options)
       end
 
-    if map_size(special_vars_updates) > 0 do
-      Map.put(merged, :special_vars_updates, special_vars_updates)
+    merged =
+      if map_size(special_vars_updates) > 0 do
+        Map.put(merged, :special_vars_updates, special_vars_updates)
+      else
+        Map.delete(merged, :special_vars_updates)
+      end
+
+    # Always preserve :jobs when either source had it — an empty jobs map
+    # is a valid update (e.g., disown -a clears all jobs)
+    if Map.has_key?(acc, :jobs) or Map.has_key?(stmt_updates, :jobs) do
+      Map.put(merged, :jobs, jobs)
     else
-      Map.delete(merged, :special_vars_updates)
+      merged
     end
   end
 
@@ -824,7 +841,7 @@ defmodule Bash.Script do
         Map.get(session_state, :dir_stack, [])
       end
 
-    # Update file_descriptors if present (from exec builtin)
+    # Update file_descriptors if present (from exec builtin or coproc)
     file_descriptors_update = Map.get(updates, :file_descriptors, nil)
 
     new_file_descriptors =
@@ -832,6 +849,34 @@ defmodule Bash.Script do
         file_descriptors_update
       else
         Map.get(session_state, :file_descriptors, %{})
+      end
+
+    # Update jobs if present (from background job start)
+    jobs_update = Map.get(updates, :jobs, nil)
+
+    new_jobs =
+      if jobs_update do
+        jobs_update
+      else
+        Map.get(session_state, :jobs, %{})
+      end
+
+    next_job_number_update = Map.get(updates, :next_job_number, nil)
+
+    new_next_job_number =
+      if next_job_number_update do
+        next_job_number_update
+      else
+        Map.get(session_state, :next_job_number, 1)
+      end
+
+    current_job_update = Map.get(updates, :current_job, nil)
+
+    new_current_job =
+      if current_job_update do
+        current_job_update
+      else
+        Map.get(session_state, :current_job, nil)
       end
 
     session_state
@@ -852,6 +897,13 @@ defmodule Bash.Script do
       new_file_descriptors,
       Map.get(session_state, :file_descriptors, %{})
     )
+    |> maybe_update(:jobs, new_jobs, Map.get(session_state, :jobs, %{}))
+    |> maybe_update(
+      :next_job_number,
+      new_next_job_number,
+      Map.get(session_state, :next_job_number, 1)
+    )
+    |> maybe_update(:current_job, new_current_job, Map.get(session_state, :current_job, nil))
   end
 
   defp maybe_update(state, key, new_value, old_value) do

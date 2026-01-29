@@ -7,7 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## unreleased
 
-- Support file descriptors 3+
+- Support file descriptors 3+.
+- Full support for coprocs.
+- `wait` command now properly waits.
+- Add `Bash.AST.Walkable` protocol and `Macro`-style AST traversal functions.
+
+  **`Bash.AST.prewalk/2`** — top-down transformation. Visit each node before
+  its children. Return `nil` to remove a node from its parent list.
+
+  ```elixir
+  import Bash.AST
+
+  # Remove all `rm` commands from a parsed script
+  safe_script = Bash.AST.prewalk(script, fn
+    node when is_command(node, "rm") -> nil
+    node -> node
+  end)
+  ```
+
+  **`Bash.AST.postwalk/2`** — bottom-up transformation. Visit each node after
+  its children have been processed.
+
+  ```elixir
+  # Rename all commands by appending a suffix
+  result = Bash.AST.postwalk(script, fn
+    cmd when is_command(cmd) ->
+      %{cmd | name: %Bash.AST.Word{parts: [{:literal, name <> "_v2"}]}}
+    node -> node
+  end)
+  ```
+
+  **`Bash.AST.reduce/3`** — fold over all nodes without modifying the tree.
+
+  ```elixir
+  # Collect all command names in a script
+  names = Bash.AST.reduce(script, [], fn
+    node when is_command(node) -> [command_name(node) | acc]
+    _, acc -> acc
+  end)
+  ```
+
+  **`Bash.AST.walk_tree/4`** — full traversal with accumulator and separate
+  `pre`/`post` callbacks for maximum control.
+
+  ```elixir
+  # Count total AST nodes
+  {_script, count} =
+    Bash.AST.walk_tree(script, 0,
+      fn node, acc -> {node, acc + 1} end,
+      fn node, acc -> {node, acc} end
+    )
+  ```
+
+- Add guard macros for concise AST pattern matching: `command_name/1`,
+  `is_command/1/2`, `assignment_name/1`, and `is_assignment/1/2`.
+
+  These work in `when` clauses, making walker callbacks much more readable:
+
+  ```elixir
+  import Bash.AST
+
+  # Remove dangerous commands using a guard
+  Bash.AST.prewalk(script, fn
+    node when is_command(node, "rm") -> nil
+    node when is_command(node, "sudo") -> nil
+    node -> node
+  end)
+
+  # Collect command names using a guard
+  Bash.AST.reduce(script, [], fn
+    node, acc when is_command(node) -> [command_name(node) | acc]
+    _, acc -> acc
+  end)
+
+  # Filter assignments by name
+  Bash.AST.prewalk(script, fn
+    node when is_assignment(node, "SECRET") -> nil
+    node -> node
+  end)
+  ```
 
 ## [0.1.0] - 2026-01-28
 

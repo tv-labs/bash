@@ -33,6 +33,7 @@ defmodule Bash.AST.Command do
   alias Bash.AST
   alias Bash.AST.Helpers
   alias Bash.Builtin
+  alias Bash.Builtin.Coproc
   alias Bash.CommandPort
   alias Bash.CommandResult
   alias Bash.Function
@@ -102,7 +103,8 @@ defmodule Bash.AST.Command do
 
     command_name = Helpers.word_to_string(name, session_state)
     {expanded_args, env_updates} = Helpers.expand_word_list(args, session_state)
-    effective_stdin = process_input_redirects(redirects, session_state, stdin)
+    default_stdin = stdin || Map.get(session_state, :pipe_stdin)
+    effective_stdin = process_input_redirects(redirects, session_state, default_stdin)
 
     # Apply prefix env assignments (e.g., "IFS=: read -a parts")
     # These are temporary and only affect this command's execution
@@ -180,6 +182,23 @@ defmodule Bash.AST.Command do
 
           %AST.Redirect{direction: :close, fd: fd} ->
             {:cont, {:ok, Bash.Session.close_fd(state, fd)}}
+
+          %AST.Redirect{direction: :duplicate, fd: from_fd, target: {:fd, to_fd}}
+          when from_fd >= 3 and to_fd in [0, 1, 2] ->
+            new_fds = Map.put(state.file_descriptors, from_fd, {:dup, to_fd})
+            {:cont, {:ok, %{state | file_descriptors: new_fds}}}
+
+          %AST.Redirect{direction: :duplicate, fd: from_fd, target: {:fd, to_fd}}
+          when from_fd >= 3 and to_fd >= 3 ->
+            case Map.get(state.file_descriptors, to_fd) do
+              nil ->
+                Sink.write_stderr(state, "bash: #{to_fd}: Bad file descriptor\n")
+                {:halt, {:error, "Bad file descriptor", :ebadf}}
+
+              entry ->
+                new_fds = Map.put(state.file_descriptors, from_fd, entry)
+                {:cont, {:ok, %{state | file_descriptors: new_fds}}}
+            end
 
           _ ->
             {:cont, {:ok, state}}
@@ -393,7 +412,7 @@ defmodule Bash.AST.Command do
          session_state,
          _noclobber
        ) do
-    target_str = resolve_redirect_path(file_word, session_state)
+    target_str = Helpers.word_to_string(file_word, session_state)
 
     case Integer.parse(target_str) do
       {to_fd, ""} when to_fd >= 0 ->
@@ -477,6 +496,41 @@ defmodule Bash.AST.Command do
         case Map.get(session_state.file_descriptors, to_fd) do
           nil ->
             {:error, "bash: #{to_fd}: Bad file descriptor\n", state}
+
+          {:dup, 1} ->
+            new_state =
+              case from_fd do
+                1 -> state
+                2 -> %{state | stderr_sink: retag_sink(state.stdout_sink, :stderr, :stdout)}
+                _ -> state
+              end
+
+            {:ok, new_state}
+
+          {:dup, 2} ->
+            new_state =
+              case from_fd do
+                1 -> %{state | stdout_sink: retag_sink(state.stderr_sink, :stdout, :stderr)}
+                2 -> state
+                _ -> state
+              end
+
+            {:ok, new_state}
+
+          {:coproc, coproc_pid, :write} ->
+            fd_sink = fn {_stream, data} when is_binary(data) ->
+              Coproc.write_input(coproc_pid, data, session_state.call_timeout)
+              :ok
+            end
+
+            new_state =
+              case from_fd do
+                1 -> %{state | stdout_sink: fd_sink}
+                2 -> %{state | stderr_sink: fd_sink}
+                _ -> state
+              end
+
+            {:ok, new_state}
 
           device when is_pid(device) ->
             fd_sink = fn {_stream, data} when is_binary(data) ->

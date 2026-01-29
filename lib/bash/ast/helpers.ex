@@ -97,6 +97,9 @@ defmodule Bash.AST.Helpers do
               {:halt,
                {{:background, foreground_ast, bg_session_state},
                 {acc_env, acc_var, acc_working_dir}}}
+
+            {:exec, _result} = exec ->
+              {:halt, {exec, {acc_env, acc_var, acc_working_dir}}}
           end
         end
       )
@@ -111,24 +114,8 @@ defmodule Bash.AST.Helpers do
 
         {:ok, result, state_updates}
 
-      {:error, result} ->
-        {:error, result}
-
-      {:exit, result} ->
-        # Propagate exit signal upward
-        {:exit, result}
-
-      {:break, result, levels} ->
-        # Propagate break signal upward
-        {:break, result, levels}
-
-      {:continue, result, levels} ->
-        # Propagate continue signal upward
-        {:continue, result, levels}
-
-      {:background, foreground_ast, bg_session_state} ->
-        # Propagate background signal upward to Session level
-        {:background, foreground_ast, bg_session_state}
+      other_signal ->
+        other_signal
     end
   end
 
@@ -396,6 +383,60 @@ defmodule Bash.AST.Helpers do
          session_state
        ) do
     expand_array_element(session_state, var_name, idx_expr)
+  end
+
+  # ${arr[N]:-default} - Use default if element is unset or null
+  defp expand_variable(
+         %AST.Variable{
+           name: var_name,
+           subscript: {:index, idx_expr},
+           expansion: {:default, default_value}
+         },
+         session_state
+       ) do
+    value = expand_array_element(session_state, var_name, idx_expr)
+
+    if value == nil or value == "" do
+      expand_word_or_string(default_value, session_state)
+    else
+      value
+    end
+  end
+
+  # ${arr[N]:+alternate} - Use alternate if element is set and not null
+  defp expand_variable(
+         %AST.Variable{
+           name: var_name,
+           subscript: {:index, idx_expr},
+           expansion: {:alternate, alt_value}
+         },
+         session_state
+       ) do
+    value = expand_array_element(session_state, var_name, idx_expr)
+
+    if value != nil and value != "" do
+      expand_word_or_string(alt_value, session_state)
+    else
+      ""
+    end
+  end
+
+  # ${arr[N]:=default} - Assign default if element is unset or null
+  defp expand_variable(
+         %AST.Variable{
+           name: var_name,
+           subscript: {:index, idx_expr},
+           expansion: {:assign_default, default_value}
+         },
+         session_state
+       ) do
+    value = expand_array_element(session_state, var_name, idx_expr)
+
+    if value == nil or value == "" do
+      expand_word_or_string(default_value, session_state)
+    else
+      value
+    end
   end
 
   # ${!arr[@]} or ${!arr[*]} - list array indices/keys

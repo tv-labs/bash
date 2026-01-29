@@ -149,6 +149,9 @@ defmodule Bash.AST.Compound do
         # Return result WITHOUT env_updates (subshell isolation)
         {:ok, result}
 
+      {:exec, _result} = exec ->
+        exec
+
       {:error, result} ->
         {:error, result}
     end
@@ -432,11 +435,15 @@ defmodule Bash.AST.Compound do
   # Returns {modified_session_state, cleanup_fn}
   defp setup_stdin_device(stdin, session_state)
        when is_binary(stdin) and stdin != "" do
-    # Convert piped stdin to a StringIO device for line-by-line reading
     {:ok, device} = StringIO.open(stdin)
     new_session = Map.put(session_state, :stdin_device, device)
     cleanup_fn = fn -> StringIO.close(device) end
     {new_session, cleanup_fn}
+  end
+
+  defp setup_stdin_device(%Bash.Pipe{} = pipe, session_state) do
+    new_session = Map.put(session_state, :pipe_stdin, pipe)
+    {new_session, fn -> :ok end}
   end
 
   defp setup_stdin_device(_stdin, session_state) do

@@ -2401,6 +2401,31 @@ defmodule Bash.Tokenizer do
   defp parse_braced_with_operators(content) do
     # Try to find operator patterns
     cond do
+      # ${VAR[sub]:-default}, ${VAR[sub]:=default}, ${VAR[sub]:?error}, ${VAR[sub]:+alternate}
+      match =
+          Regex.run(
+            ~r/^([A-Za-z_][A-Za-z0-9_]*)\[([^\]]+)\](:-|:=|:\?|:\+)(.*)$/s,
+            content
+          ) ->
+        [_, var_name, subscript, op, word] = match
+
+        sub =
+          case subscript do
+            "@" -> :all_values
+            "*" -> :all_star
+            idx -> {:index, idx}
+          end
+
+        op_atom =
+          case op do
+            ":-" -> :default
+            ":=" -> :assign_default
+            ":?" -> :error
+            ":+" -> :alternate
+          end
+
+        {:variable_braced, var_name, [{op_atom, word}, subscript: sub]}
+
       # ${VAR:-default}, ${VAR:=default}, ${VAR:?error}, ${VAR:+alternate}
       match = Regex.run(~r/^([A-Za-z_][A-Za-z0-9_]*|[?$!#@*0-9])(:-|:=|:\?|:\+)(.*)$/s, content) ->
         [_, var_name, op, word] = match

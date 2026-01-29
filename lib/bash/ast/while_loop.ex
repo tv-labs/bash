@@ -65,7 +65,7 @@ defmodule Bash.AST.WhileLoop do
   def iteration_count(%__MODULE__{iteration_count: count}), do: count
 
   # Execute while/until loop
-  @max_loop_iterations 10_000
+  @max_loop_iterations 1_000_000
 
   # Execute a WhileLoop (handles both while and until via the :until flag)
   def execute(
