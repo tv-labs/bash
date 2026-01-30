@@ -125,7 +125,7 @@ defmodule Bash.Builtin.Cd do
         # Update state
         update_state(
           working_dir: new_pwd,
-          env_updates: %{
+          variables: %{
             "PWD" => new_pwd,
             "OLDPWD" => old_pwd
           }

@@ -58,9 +58,9 @@ defmodule Bash.AST.Case do
     )
   end
 
-  defp execute_case_clauses([], _match_value, _session_state, env_updates) do
+  defp execute_case_clauses([], _match_value, _session_state, variables) do
     # No matching clause found - return success with exit code 0
-    {:ok, %CommandResult{exit_code: 0}, %{env_updates: env_updates}}
+    {:ok, %CommandResult{exit_code: 0}, %{variables: variables}}
   end
 
   # Handle 3-tuple format with terminator
@@ -68,40 +68,40 @@ defmodule Bash.AST.Case do
          [{patterns, body, terminator} | rest],
          match_value,
          session_state,
-         env_updates
+         variables
        ) do
     if Enum.any?(patterns, &Helpers.pattern_matches?(&1, match_value, session_state)) do
-      execute_matched_clause(body, terminator, rest, match_value, session_state, env_updates)
+      execute_matched_clause(body, terminator, rest, match_value, session_state, variables)
     else
       # Pattern doesn't match - try next clause
-      execute_case_clauses(rest, match_value, session_state, env_updates)
+      execute_case_clauses(rest, match_value, session_state, variables)
     end
   end
 
   # Handle legacy 2-tuple format (for backwards compatibility)
-  defp execute_case_clauses([{patterns, body} | rest], match_value, session_state, env_updates) do
+  defp execute_case_clauses([{patterns, body} | rest], match_value, session_state, variables) do
     execute_case_clauses(
       [{patterns, body, :break} | rest],
       match_value,
       session_state,
-      env_updates
+      variables
     )
   end
 
   # Execute a matched clause and handle terminator behavior
-  defp execute_matched_clause(body, terminator, rest, match_value, session_state, env_updates) do
-    case Helpers.execute_body(body, session_state, env_updates) do
-      {:ok, result, %{env_updates: new_env}} ->
+  defp execute_matched_clause(body, terminator, rest, match_value, session_state, variables) do
+    case Helpers.execute_body(body, session_state, variables) do
+      {:ok, result, updates} ->
+        new_env = Map.get(updates, :variables, variables)
+
         case terminator do
           :break ->
-            # ;; - stop processing, return result
-            {:ok, result, %{env_updates: new_env}}
+            {:ok, result, %{variables: new_env}}
 
           :fallthrough ->
-            # ;& - fall through to next clause without testing pattern
             case rest do
               [] ->
-                {:ok, result, %{env_updates: new_env}}
+                {:ok, result, %{variables: new_env}}
 
               [{_patterns, next_body, next_terminator} | next_rest] ->
                 execute_matched_clause(
@@ -125,10 +125,9 @@ defmodule Bash.AST.Case do
             end
 
           :continue_matching ->
-            # ;;& - continue testing remaining patterns
             case rest do
               [] ->
-                {:ok, result, %{env_updates: new_env}}
+                {:ok, result, %{variables: new_env}}
 
               _ ->
                 execute_case_clauses(rest, match_value, session_state, new_env)

@@ -84,8 +84,8 @@ defmodule Bash.MixProject do
         ],
         "Elixir Interop": [
           Bash.Interop,
-          Bash.Interop.Context,
-          Bash.Interop.Result
+          Bash.Interop.Result,
+          Bash.Context
         ],
         Parsing: [
           Bash.Parser,
@@ -94,6 +94,7 @@ defmodule Bash.MixProject do
           Bash.Tokenizer
         ],
         "AST Nodes": [
+          Bash.Statement,
           Bash.AST,
           Bash.AST.Arithmetic,
           Bash.AST.ArrayAssignment,
@@ -105,6 +106,7 @@ defmodule Bash.MixProject do
           Bash.AST.Compound,
           Bash.AST.Coproc,
           Bash.AST.ForLoop,
+          Bash.AST.Function,
           Bash.AST.If,
           Bash.AST.Meta,
           Bash.AST.Pipeline,
@@ -124,17 +126,12 @@ defmodule Bash.MixProject do
           Bash.Execution,
           Bash.ExecutionResult,
           Bash.Executor,
-          Bash.Function,
           Bash.OrphanSupervisor,
-          Bash.ProcessSubst,
-          Bash.SessionSupervisor,
-          Bash.Statement,
-          Bash.Variable
-        ],
-        "I/O & Output": [
           Bash.Output,
+          Bash.Pipe,
+          Bash.ProcessSubst,
           Bash.Sink,
-          Bash.Pipe
+          Bash.Variable
         ],
         "Job Control": [
           Bash.Job,

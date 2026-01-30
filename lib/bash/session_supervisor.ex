@@ -1,10 +1,9 @@
 defmodule Bash.SessionSupervisor do
-  @moduledoc """
-  DynamicSupervisor for managing Bash execution sessions.
-
-  This supervisor manages the lifecycle of session processes, allowing
-  for dynamic creation and termination of sessions as needed.
-  """
+  @moduledoc false
+  # DynamicSupervisor for managing Bash execution sessions.
+  #
+  # This supervisor manages the lifecycle of session processes, allowing
+  # for dynamic creation and termination of sessions as needed.
 
   use DynamicSupervisor
 

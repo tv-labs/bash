@@ -247,10 +247,10 @@ defmodule Bash.Builtin.Unset do
       if Enum.empty?(var_deletes) and map_size(array_updates) == 0 do
         updates
       else
-        deleted_vars = Map.new(var_deletes, fn name -> {name, :deleted} end)
+        deleted_vars = Map.new(var_deletes, fn name -> {name, nil} end)
         new_variables = Map.merge(array_updates, deleted_vars)
 
-        Map.put(updates, :var_updates, new_variables)
+        Map.put(updates, :variables, new_variables)
       end
 
     # For functions, we track which ones to delete
@@ -259,7 +259,7 @@ defmodule Bash.Builtin.Unset do
         updates
       else
         deleted_functions =
-          Map.new(func_deletes, fn name -> {name, :deleted} end)
+          Map.new(func_deletes, fn name -> {name, nil} end)
 
         Map.put(updates, :function_updates, deleted_functions)
       end

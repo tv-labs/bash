@@ -51,8 +51,6 @@ defmodule Bash.AST.Compound do
   alias Bash.CommandResult
   alias Bash.Executor
   alias Bash.Sink
-  alias Bash.Variable
-
   @type kind :: :subshell | :group | :operand | :sequential
 
   @type t :: %__MODULE__{
@@ -121,7 +119,7 @@ defmodule Bash.AST.Compound do
       _ ->
         # Execute compound command with && and || operators normally
         # statements is: [cmd1, {:operator, :and}, cmd2, {:operator, :or}, cmd3, ...]
-        execute_compound_operand(statements, session_state, %{}, %{})
+        execute_compound_operand(statements, session_state, %{})
     end
   end
 
@@ -223,14 +221,12 @@ defmodule Bash.AST.Compound do
   # - && (and): execute next only if previous succeeded (exit_code == 0)
   # - || (or): execute next only if previous failed (exit_code != 0)
   # Output goes directly to sinks during execution
-  # Tracks env_updates (strings), var_updates (Variable structs), and working_dir separately
-  defp execute_compound_operand(statements, session_state, env_updates, var_updates) do
-    execute_compound_operand(statements, session_state, env_updates, var_updates, nil)
+  defp execute_compound_operand(statements, session_state, var_updates) do
+    execute_compound_operand(statements, session_state, var_updates, nil)
   end
 
-  defp execute_compound_operand([], _session_state, env_updates, var_updates, working_dir) do
-    # No statements left - return success with empty result
-    updates = %{env_updates: env_updates, var_updates: var_updates}
+  defp execute_compound_operand([], _session_state, var_updates, working_dir) do
+    updates = %{variables: var_updates}
     updates = if working_dir, do: Map.put(updates, :working_dir, working_dir), else: updates
 
     {:ok,
@@ -241,28 +237,23 @@ defmodule Bash.AST.Compound do
      }, updates}
   end
 
-  defp execute_compound_operand([statement], session_state, env_updates, var_updates, working_dir) do
-    # Last statement - execute and return result
-    updated_session =
-      apply_updates_to_session(session_state, env_updates, var_updates, working_dir)
+  defp execute_compound_operand([statement], session_state, var_updates, working_dir) do
+    updated_session = apply_updates_to_session(session_state, var_updates, working_dir)
 
     case Executor.execute(statement, updated_session, nil) do
       {:ok, result, updates} ->
-        env_from_stmt = Map.get(updates, :env_updates, %{})
-        var_from_stmt = Map.get(updates, :var_updates, %{})
+        var_from_stmt = Map.get(updates, :variables, %{})
         wd_from_stmt = Map.get(updates, :working_dir)
-        merged_env = Map.merge(env_updates, env_from_stmt)
         merged_var = Map.merge(var_updates, var_from_stmt)
         final_wd = wd_from_stmt || working_dir
-        build_result({:ok, result}, merged_env, merged_var, final_wd)
+        build_result({:ok, result}, merged_var, final_wd)
 
       {:ok, result} ->
-        build_result({:ok, result}, env_updates, var_updates, working_dir)
+        build_result({:ok, result}, var_updates, working_dir)
 
       {:error, result} ->
         {:error, result}
 
-      # Propagate loop control flow
       {:break, _result, _levels} = break ->
         break
 
@@ -277,20 +268,15 @@ defmodule Bash.AST.Compound do
   defp execute_compound_operand(
          [statement, {:operator, operator} | rest],
          session_state,
-         env_updates,
          var_updates,
          working_dir
        ) do
-    # Execute statement, then decide based on operator whether to continue
-    updated_session =
-      apply_updates_to_session(session_state, env_updates, var_updates, working_dir)
+    updated_session = apply_updates_to_session(session_state, var_updates, working_dir)
 
     case Executor.execute(statement, updated_session, nil) do
       {:ok, result, updates} ->
-        env_from_stmt = Map.get(updates, :env_updates, %{})
-        var_from_stmt = Map.get(updates, :var_updates, %{})
+        var_from_stmt = Map.get(updates, :variables, %{})
         wd_from_stmt = Map.get(updates, :working_dir)
-        merged_env = Map.merge(env_updates, env_from_stmt)
         merged_var = Map.merge(var_updates, var_from_stmt)
         merged_wd = wd_from_stmt || working_dir
 
@@ -299,7 +285,6 @@ defmodule Bash.AST.Compound do
           operator,
           rest,
           session_state,
-          merged_env,
           merged_var,
           merged_wd,
           result
@@ -311,17 +296,14 @@ defmodule Bash.AST.Compound do
           operator,
           rest,
           session_state,
-          env_updates,
           var_updates,
           working_dir,
           result
         )
 
       {:error, result, updates} ->
-        env_from_stmt = Map.get(updates, :env_updates, %{})
-        var_from_stmt = Map.get(updates, :var_updates, %{})
+        var_from_stmt = Map.get(updates, :variables, %{})
         wd_from_stmt = Map.get(updates, :working_dir)
-        merged_env = Map.merge(env_updates, env_from_stmt)
         merged_var = Map.merge(var_updates, var_from_stmt)
         merged_wd = wd_from_stmt || working_dir
 
@@ -330,26 +312,22 @@ defmodule Bash.AST.Compound do
           operator,
           rest,
           session_state,
-          merged_env,
           merged_var,
           merged_wd,
           result
         )
 
       {:error, result} ->
-        # Error results are treated as failed (exit_code != 0)
         decide_continue(
           result.exit_code || 1,
           operator,
           rest,
           session_state,
-          env_updates,
           var_updates,
           working_dir,
           result
         )
 
-      # Propagate loop control flow - don't continue with compound
       {:break, _result, _levels} = break ->
         break
 
@@ -361,59 +339,43 @@ defmodule Bash.AST.Compound do
     end
   end
 
-  # Build final result with all accumulated updates
-  defp build_result({status, result}, env_updates, var_updates, working_dir) do
-    updates = %{env_updates: env_updates, var_updates: var_updates}
+  defp build_result({status, result}, var_updates, working_dir) do
+    updates = %{variables: var_updates}
     updates = if working_dir, do: Map.put(updates, :working_dir, working_dir), else: updates
     {status, result, updates}
   end
 
-  # Apply env_updates, var_updates, and working_dir to session state
-  defp apply_updates_to_session(session_state, env_updates, var_updates, working_dir) do
-    # env_updates: string values that need Variable.new()
-    # var_updates: already Variable structs (preserved for arrays like BASH_REMATCH)
-    env_vars = Map.new(env_updates, fn {k, v} -> {k, Variable.new(v)} end)
-
+  defp apply_updates_to_session(session_state, var_updates, working_dir) do
     new_variables =
       session_state.variables
-      |> Map.merge(env_vars)
       |> Map.merge(var_updates)
-      |> Map.reject(fn {_k, v} -> v == :deleted end)
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
     session = %{session_state | variables: new_variables}
     if working_dir, do: %{session | working_dir: working_dir}, else: session
   end
 
-  # Decide whether to continue based on exit code and operator
-  # Implements short-circuit evaluation for && and ||
-  # - && continues on success (exit_code == 0)
-  # - || continues on failure (exit_code != 0)
   defp decide_continue(
          exit_code,
          operator,
          rest,
          session_state,
-         env_updates,
          var_updates,
          working_dir,
          last_result
        ) do
     cond do
-      # Should execute next command?
       should_execute?(exit_code, operator) ->
-        execute_compound_operand(rest, session_state, env_updates, var_updates, working_dir)
+        execute_compound_operand(rest, session_state, var_updates, working_dir)
 
-      # No more statements - return current result
       rest == [] ->
-        build_result({:ok, last_result}, env_updates, var_updates, working_dir)
+        build_result({:ok, last_result}, var_updates, working_dir)
 
-      # Skip command and check next operator
       true ->
         skip_and_continue(
           exit_code,
           rest,
           session_state,
-          env_updates,
           var_updates,
           working_dir,
           last_result
@@ -421,16 +383,13 @@ defmodule Bash.AST.Compound do
     end
   end
 
-  # Determine if we should execute the next command based on exit code and operator
   defp should_execute?(exit_code, :and), do: exit_code == 0
   defp should_execute?(exit_code, :or), do: exit_code != 0
 
-  # Skip the current command and continue with the next operator if present
   defp skip_and_continue(
          exit_code,
          rest,
          session_state,
-         env_updates,
          var_updates,
          working_dir,
          last_result
@@ -442,15 +401,13 @@ defmodule Bash.AST.Compound do
           next_op,
           remaining,
           session_state,
-          env_updates,
           var_updates,
           working_dir,
           last_result
         )
 
       nil ->
-        # No more operators - return current result
-        build_result({:ok, last_result}, env_updates, var_updates, working_dir)
+        build_result({:ok, last_result}, var_updates, working_dir)
     end
   end
 

@@ -141,10 +141,6 @@ defmodule Bash.ComprehensiveTest do
     end
   end
 
-  # =============================================================================
-  # Parameterized Builtin Tests
-  # =============================================================================
-
   defmodule TestElixirAPI do
     @moduledoc false
     use Bash.Interop, namespace: "elixir_test"

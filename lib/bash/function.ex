@@ -1,4 +1,4 @@
-defmodule Bash.Function do
+defmodule Bash.AST.Function do
   @moduledoc """
   Function definition.
 
@@ -21,7 +21,6 @@ defmodule Bash.Function do
   alias Bash.Builtin.Trap
   alias Bash.Executor
   alias Bash.CommandResult
-  alias Bash.Variable
   alias Bash.Statement
 
   @type t :: %__MODULE__{
@@ -265,8 +264,7 @@ defmodule Bash.Function do
   defp apply_state_updates(state, updates) do
     state
     |> maybe_update_working_dir(updates)
-    |> maybe_update_env_vars(updates)
-    |> maybe_update_var_updates(updates)
+    |> maybe_update_variables(updates)
     |> maybe_update_functions(updates)
     |> maybe_update_positional_params(updates)
   end
@@ -277,34 +275,22 @@ defmodule Bash.Function do
 
   defp maybe_update_working_dir(state, _), do: state
 
-  defp maybe_update_env_vars(state, %{env_updates: env_updates}) do
-    new_variables =
-      Map.merge(
-        state.variables,
-        Map.new(env_updates, fn {k, v} -> {k, Variable.new(v)} end)
-      )
-
-    %{state | variables: new_variables}
-  end
-
-  defp maybe_update_env_vars(state, _), do: state
-
-  defp maybe_update_var_updates(state, %{var_updates: var_updates}) do
+  defp maybe_update_variables(state, %{variables: variables}) do
     new_variables =
       state.variables
-      |> Map.merge(var_updates)
-      |> Map.reject(fn {_k, v} -> v == :deleted end)
+      |> Map.merge(variables)
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
     %{state | variables: new_variables}
   end
 
-  defp maybe_update_var_updates(state, _), do: state
+  defp maybe_update_variables(state, _), do: state
 
   defp maybe_update_functions(state, %{function_updates: function_updates}) do
     new_functions =
       state.functions
       |> Map.merge(function_updates)
-      |> Map.reject(fn {_k, v} -> v == :deleted end)
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
     %{state | functions: new_functions}
   end

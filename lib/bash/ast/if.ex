@@ -28,7 +28,6 @@ defmodule Bash.AST.If do
   alias Bash.CommandResult
   alias Bash.Executor
   alias Bash.Statement
-  alias Bash.Variable
 
   @type t :: %__MODULE__{
           meta: AST.Meta.t(),
@@ -109,12 +108,8 @@ defmodule Bash.AST.If do
     # Execute the condition
     case Executor.execute(condition, session_state, nil) do
       {:ok, result, updates} ->
-        new_variables =
-          Map.merge(
-            session_state.variables,
-            Map.new(Map.get(updates, :env_updates, %{}), fn {k, v} -> {k, Variable.new(v)} end)
-          )
-
+        var_updates = Map.get(updates, :variables, %{})
+        new_variables = Map.merge(session_state.variables, var_updates)
         session_state = %{session_state | variables: new_variables}
 
         execute_if_branch(
@@ -123,7 +118,7 @@ defmodule Bash.AST.If do
           elif_clauses,
           else_body,
           session_state,
-          Map.get(updates, :env_updates, %{})
+          var_updates
         )
 
       {:ok, result} ->
@@ -166,7 +161,7 @@ defmodule Bash.AST.If do
           Helpers.execute_body(else_body, session_state, env_updates)
         else
           # No else clause - return success with no output
-          {:ok, %CommandResult{exit_code: 0}, %{env_updates: env_updates}}
+          {:ok, %CommandResult{exit_code: 0}, %{variables: env_updates}}
         end
     end
   end
@@ -177,20 +172,14 @@ defmodule Bash.AST.If do
   defp try_elif_clauses([{condition, body} | rest], session_state, env_updates) do
     case Executor.execute(condition, session_state, nil) do
       {:ok, result, updates} ->
-        merged_env = Map.merge(env_updates, Map.get(updates, :env_updates, %{}))
-
-        new_variables =
-          Map.merge(
-            session_state.variables,
-            Map.new(merged_env, fn {k, v} -> {k, Variable.new(v)} end)
-          )
-
+        merged_vars = Map.merge(env_updates, Map.get(updates, :variables, %{}))
+        new_variables = Map.merge(session_state.variables, merged_vars)
         session_state = %{session_state | variables: new_variables}
 
         if result.exit_code == 0 do
-          {:executed, Helpers.execute_body(body, session_state, merged_env)}
+          {:executed, Helpers.execute_body(body, session_state, merged_vars)}
         else
-          try_elif_clauses(rest, session_state, merged_env)
+          try_elif_clauses(rest, session_state, merged_vars)
         end
 
       {:ok, result} ->

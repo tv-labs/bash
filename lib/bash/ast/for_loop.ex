@@ -101,8 +101,16 @@ defmodule Bash.AST.ForLoop do
           execute_c_style_for(init, condition, update, executable_body, loop_session, %{}, 0)
 
         # Only return variables that actually changed from baseline
+        # Ensure all values are strings (some may be Variable structs from body execution)
+        string_env =
+          Map.new(env_updates, fn
+            {k, %Variable{} = v} -> {k, Variable.get(v, nil) || ""}
+            {k, v} when is_binary(v) -> {k, v}
+            {k, v} -> {k, to_string(v)}
+          end)
+
         changed_env =
-          Map.filter(env_updates, fn {k, v} -> Map.get(baseline_env, k) != to_string(v) end)
+          Map.filter(string_env, fn {k, v} -> Map.get(baseline_env, k) != v end)
 
         exit_code = for_loop_exit_code(result)
         {{result, changed_env, iter_count}, %{iteration_count: iter_count, exit_code: exit_code}}
@@ -115,16 +123,26 @@ defmodule Bash.AST.ForLoop do
     executed_ast = %{
       ast
       | exit_code: exit_code,
-        state_updates: %{env_updates: final_env_updates},
+        state_updates: %{
+          variables: Map.new(final_env_updates, fn {k, v} -> {k, Variable.new(v)} end)
+        },
         iteration_count: iteration_count,
         meta: AST.Meta.mark_evaluated(ast.meta, started_at, completed_at)
     }
 
     case final_result do
-      {:exit, result} -> {:exit, %{executed_ast | exit_code: result.exit_code}}
-      {:break, result, levels} -> {:break, result, levels}
-      {:continue, result, levels} -> {:continue, result, levels}
-      _ -> {:ok, executed_ast, %{env_updates: final_env_updates}}
+      {:exit, result} ->
+        {:exit, %{executed_ast | exit_code: result.exit_code}}
+
+      {:break, result, levels} ->
+        {:break, result, levels}
+
+      {:continue, result, levels} ->
+        {:continue, result, levels}
+
+      _ ->
+        {:ok, executed_ast,
+         %{variables: Map.new(final_env_updates, fn {k, v} -> {k, Variable.new(v)} end)}}
     end
   end
 
@@ -165,16 +183,26 @@ defmodule Bash.AST.ForLoop do
     executed_ast = %{
       ast
       | exit_code: exit_code,
-        state_updates: %{env_updates: final_env_updates},
+        state_updates: %{
+          variables: Map.new(final_env_updates, fn {k, v} -> {k, Variable.new(v)} end)
+        },
         iteration_count: iteration_count,
         meta: AST.Meta.mark_evaluated(ast.meta, started_at, completed_at)
     }
 
     case final_result do
-      {:exit, result} -> {:exit, %{executed_ast | exit_code: result.exit_code}}
-      {:break, result, levels} -> {:break, result, levels}
-      {:continue, result, levels} -> {:continue, result, levels}
-      _ -> {:ok, executed_ast, %{env_updates: final_env_updates}}
+      {:exit, result} ->
+        {:exit, %{executed_ast | exit_code: result.exit_code}}
+
+      {:break, result, levels} ->
+        {:break, result, levels}
+
+      {:continue, result, levels} ->
+        {:continue, result, levels}
+
+      _ ->
+        {:ok, executed_ast,
+         %{variables: Map.new(final_env_updates, fn {k, v} -> {k, Variable.new(v)} end)}}
     end
   end
 
@@ -301,16 +329,16 @@ defmodule Bash.AST.ForLoop do
 
     case Executor.execute(stmt, stmt_session, nil) do
       {:ok, _result, updates} ->
-        env_updates = Map.get(updates, :env_updates, %{})
-        var_updates = Map.get(updates, :var_updates, %{})
-
-        # Merge var_updates (Variable structs) directly into session variables
-        # so arrays and other complex types are preserved across statements
+        var_updates = Map.get(updates, :variables, %{})
         new_session = %{session_state | variables: Map.merge(stmt_new_variables, var_updates)}
 
-        # Also accumulate string env_updates for the env_acc
-        var_as_env = Map.new(var_updates, fn {k, v} -> {k, Variable.get(v, nil) || ""} end)
-        new_env = env_acc |> Map.merge(env_updates) |> Map.merge(var_as_env)
+        var_as_env =
+          Map.new(var_updates, fn {k, v} ->
+            val = Variable.get(v, nil)
+            {k, if(is_binary(val), do: val, else: "")}
+          end)
+
+        new_env = Map.merge(env_acc, var_as_env)
         execute_loop_body(rest, new_session, new_env)
 
       {:ok, _result} ->

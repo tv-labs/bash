@@ -215,7 +215,7 @@ defimpl Bash.AST.Walkable, for: Bash.AST.Coproc do
   def update_children(node, [body]), do: %{node | body: body}
 end
 
-defimpl Bash.AST.Walkable, for: Bash.Function do
+defimpl Bash.AST.Walkable, for: Bash.AST.Function do
   alias Bash.AST.Walkable.Helpers
 
   def children(%{body: body}) when is_list(body), do: Helpers.extract_structs(body)

@@ -63,8 +63,8 @@ defmodule Bash.Builtin.PushdTest do
       assert {:ok, %CommandResult{exit_code: 0}, updates} =
                Pushd.execute([tmp_dir], nil, session_state)
 
-      assert updates.env_updates["PWD"] == tmp_dir
-      assert updates.env_updates["OLDPWD"] == "/"
+      assert updates.variables["PWD"].value == tmp_dir
+      assert updates.variables["OLDPWD"].value == "/"
     end
 
     test "returns error for non-existent directory" do

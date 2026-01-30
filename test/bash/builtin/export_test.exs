@@ -3,7 +3,7 @@ defmodule Bash.Builtin.ExportTest do
 
   alias Bash.Builtin.Export
   alias Bash.Variable
-  alias Bash.Function
+  alias Bash.AST.Function
   alias Bash.CommandResult
 
   describe "export without options" do
@@ -12,7 +12,7 @@ defmodule Bash.Builtin.ExportTest do
       {:ok, result, updates} = Export.execute(["FOO=bar"], nil, state)
 
       assert result.exit_code == 0
-      assert %{var_updates: %{"FOO" => var}} = updates
+      assert %{variables: %{"FOO" => var}} = updates
       assert var.value == "bar"
       assert var.attributes.export == true
     end
@@ -22,7 +22,7 @@ defmodule Bash.Builtin.ExportTest do
       {:ok, result, updates} = Export.execute(["FOO=bar", "BAZ=qux"], nil, state)
 
       assert result.exit_code == 0
-      assert %{var_updates: var_updates} = updates
+      assert %{variables: var_updates} = updates
       assert Map.has_key?(var_updates, "FOO")
       assert Map.has_key?(var_updates, "BAZ")
       assert var_updates["FOO"].value == "bar"
@@ -39,7 +39,7 @@ defmodule Bash.Builtin.ExportTest do
       {:ok, result, updates} = Export.execute(["FOO"], nil, state)
 
       assert result.exit_code == 0
-      assert %{var_updates: %{"FOO" => var}} = updates
+      assert %{variables: %{"FOO" => var}} = updates
       assert var.value == "existing_value"
       assert var.attributes.export == true
     end
@@ -54,7 +54,7 @@ defmodule Bash.Builtin.ExportTest do
       {:ok, result, updates} = Export.execute(["FOO=new_value"], nil, state)
 
       assert result.exit_code == 0
-      assert %{var_updates: %{"FOO" => var}} = updates
+      assert %{variables: %{"FOO" => var}} = updates
       assert var.value == "new_value"
       assert var.attributes.export == true
     end
@@ -189,7 +189,7 @@ defmodule Bash.Builtin.ExportTest do
       {:ok, result, updates} = Export.execute(["-n", "FOO"], nil, state)
 
       assert result.exit_code == 0
-      assert %{var_updates: %{"FOO" => updated_var}} = updates
+      assert %{variables: %{"FOO" => updated_var}} = updates
       assert updated_var.value == "value"
       assert updated_var.attributes.export == false
     end
@@ -209,7 +209,7 @@ defmodule Bash.Builtin.ExportTest do
       {:ok, result, updates} = Export.execute(["-n", "FOO", "BAR"], nil, state)
 
       assert result.exit_code == 0
-      assert %{var_updates: var_updates} = updates
+      assert %{variables: var_updates} = updates
       assert var_updates["FOO"].attributes.export == false
       assert var_updates["BAR"].attributes.export == false
     end
@@ -219,7 +219,7 @@ defmodule Bash.Builtin.ExportTest do
       {:ok, result, updates} = Export.execute(["-n", "NEWVAR"], nil, state)
 
       assert result.exit_code == 0
-      assert %{var_updates: %{"NEWVAR" => var}} = updates
+      assert %{variables: %{"NEWVAR" => var}} = updates
       assert var.value == ""
       assert var.attributes.export == false
     end
@@ -270,7 +270,7 @@ defmodule Bash.Builtin.ExportTest do
 
       # -f should be treated as a variable name, not an option
       assert result.exit_code == 0
-      assert %{var_updates: %{"-f" => var}} = updates
+      assert %{variables: %{"-f" => var}} = updates
       assert var.attributes.export == true
     end
   end
@@ -295,7 +295,7 @@ defmodule Bash.Builtin.ExportTest do
       {:ok, result, updates} = Export.execute(["FOO="], nil, state)
 
       assert result.exit_code == 0
-      assert %{var_updates: %{"FOO" => var}} = updates
+      assert %{variables: %{"FOO" => var}} = updates
       assert var.value == ""
       assert var.attributes.export == true
     end
@@ -305,7 +305,7 @@ defmodule Bash.Builtin.ExportTest do
       {:ok, result, updates} = Export.execute(["FOO=a=b=c"], nil, state)
 
       assert result.exit_code == 0
-      assert %{var_updates: %{"FOO" => var}} = updates
+      assert %{variables: %{"FOO" => var}} = updates
       assert var.value == "a=b=c"
     end
 

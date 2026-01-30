@@ -404,7 +404,11 @@ defmodule Bash do
     |> Enum.any?(&(&1 == delimiter))
   end
 
-  @doc "Format a file"
+  @doc """
+  Format a file
+
+  For options, see format/2
+  """
   @spec format_file(Path.t(), Keyword.t()) :: :ok
   def format_file(file, opts \\ []) do
     with {:ok, content} <- File.read(file) do
@@ -412,7 +416,31 @@ defmodule Bash do
     end
   end
 
-  @spec format_file(String.t(), Keyword.t()) :: String.t()
+  @doc """
+  Format a bash script string.
+
+  Returns the formatted script as a string. If parsing fails, the original
+  content is returned unchanged.
+
+  See `Bash.Formatter` for more details.
+
+  ## Options
+
+    * `:indent_style` - Either `:spaces` or `:tabs`. Defaults to `:spaces`.
+    * `:indent_width` - Number of spaces per indent level (when using spaces).
+      Defaults to `2`.
+    * `:line_length` - Maximum line length. Defaults to `80`.
+
+  ## Examples
+
+      Bash.format("if [ -f foo ];then\\necho bar\\nfi")
+      #=> "if [ -f foo ]; then\\n  echo bar\\nfi\\n"
+
+      Bash.format("if true;then\\necho ok\\nfi", bash: [indent_style: :tabs])
+      #=> "if true; then\\n\\techo ok\\nfi\\n"
+
+  """
+  @spec format(String.t(), Keyword.t()) :: String.t()
   def format(content, opts \\ []) do
     Bash.Formatter.format(content, opts)
   end
@@ -613,7 +641,7 @@ defmodule Bash do
       end
 
   """
-  defdelegate puts(message), to: Bash.Interop.IO
+  def puts(message), do: Bash.Context.write(to_string(message))
 
   @doc """
   Write to stdout or stderr within a `defbash` function.
@@ -629,7 +657,8 @@ defmodule Bash do
       end
 
   """
-  defdelegate puts(stream, message), to: Bash.Interop.IO
+  def puts(:stdout, message), do: Bash.Context.write(to_string(message))
+  def puts(:stderr, message), do: Bash.Context.write_stderr(to_string(message))
 
   @doc """
   Get stdin as a lazy stream within a `defbash` function.
@@ -650,7 +679,28 @@ defmodule Bash do
       end
 
   """
-  defdelegate stream(source), to: Bash.Interop.IO
+  defdelegate stream(source), to: Bash.Context
+
+  @doc """
+  Stream an enumerable to stdout or stderr within a `defbash` function.
+
+  This function is only valid inside `defbash` function bodies.
+
+  ## Examples
+
+      defbash generate(_args, _state) do
+        stream = Stream.map(1..5, &"\#{&1}\\n")
+        Bash.stream(:stdout, stream)
+        :ok
+      end
+
+      defbash errors(_args, _state) do
+        Bash.stream(:stderr, ["warning 1\\n", "warning 2\\n"])
+        :ok
+      end
+
+  """
+  defdelegate stream(target, enumerable), to: Bash.Context
 
   @doc """
   Get the current session state within a `defbash` function.
@@ -668,24 +718,23 @@ defmodule Bash do
       end
 
   """
-  defdelegate get_state(), to: Bash.Interop.IO
+  defdelegate get_state(), to: Bash.Context
 
   @doc """
-  Update the session state within a `defbash` function.
+  Accumulate state update deltas within a `defbash` function.
+
+  Accepts a map or keyword list of update keys. Updates are accumulated
+  as deltas and applied after execution completes.
 
   This function is only valid inside `defbash` function bodies.
-  The updated state will be returned after the function completes.
 
   ## Examples
 
-      defbash set_var(args, _state) do
-        [name, value] = args
-        state = Bash.get_state()
-        new_state = put_in(state, [:variables, name], Bash.Variable.new(value))
-        Bash.put_state(new_state)
+      defbash set_var([name, value], _state) do
+        Bash.update_state(%{variables: %{name => Bash.Variable.new(value)}})
         :ok
       end
 
   """
-  defdelegate put_state(new_state), to: Bash.Interop.IO
+  defdelegate update_state(updates), to: Bash.Context
 end

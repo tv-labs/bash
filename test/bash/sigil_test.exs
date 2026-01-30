@@ -155,9 +155,63 @@ defmodule Bash.SigilTest do
       assert ~BASH"false; echo not_printed"eS == ""
     end
 
-    test "combined modifiers work" do
-      # errexit + stdout
+    test "e modifier stops at first failure" do
+      result = ~BASH"""
+      echo before
+      false
+      echo after
+      """eS
+
+      assert result == "before\n"
+    end
+
+    test "e modifier allows successful scripts to complete" do
       assert ~BASH"true; echo hello"eS == "hello\n"
+    end
+
+    test "v modifier enables verbose mode (echoes commands to stderr)" do
+      stderr = ~BASH"echo hello"vE
+      assert stderr =~ "echo hello"
+    end
+
+    test "v modifier still produces normal stdout" do
+      assert ~BASH"echo hello"vS == "hello\n"
+    end
+
+    test "p modifier enables pipefail" do
+      # Without pipefail: pipeline exit code is the last command's
+      assert ~BASH"false | true; echo $?"S == "0\n"
+      # With pipefail: pipeline fails if any command fails
+      assert ~BASH"false | true; echo $?"pS == "1\n"
+    end
+
+    test "p modifier with errexit stops on pipeline failure" do
+      result = ~BASH"""
+      false | true
+      echo should_not_reach
+      """epS
+
+      refute result =~ "should_not_reach"
+    end
+
+    test "u modifier enables nounset (exits on undefined variables)" do
+      # Without nounset: undefined variable expands to empty string
+      assert ~BASH"echo prefix_${undefined_var_xyz}_suffix"S == "prefix__suffix\n"
+      # With nounset: undefined variable causes exit (no output produced)
+      assert ~BASH"echo $undefined_var_xyz"uS == ""
+    end
+
+    test "u modifier allows defined variables" do
+      assert ~BASH"x=hello; echo $x"uS == "hello\n"
+    end
+
+    test "combined e and u modifiers" do
+      result = ~BASH"x=5; echo $x"euS
+      assert result == "5\n"
+    end
+
+    test "combined e, p, and u modifiers" do
+      assert ~BASH"echo ok"epuS == "ok\n"
     end
 
     test "unknown modifier raises ArgumentError" do

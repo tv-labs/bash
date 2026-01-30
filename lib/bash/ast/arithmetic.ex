@@ -153,7 +153,8 @@ defmodule Bash.AST.Arithmetic do
         }
 
         if map_size(env_updates) > 0 do
-          {:ok, command_result, %{env_updates: env_updates}}
+          var_updates = Map.new(env_updates, fn {k, v} -> {k, Bash.Variable.new(v)} end)
+          {:ok, command_result, %{variables: var_updates}}
         else
           {:ok, command_result}
         end

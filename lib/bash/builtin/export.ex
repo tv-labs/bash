@@ -18,7 +18,7 @@ defmodule Bash.Builtin.Export do
   use Bash.Builtin
 
   alias Bash.Variable
-  alias Bash.Function
+  alias Bash.AST.Function
 
   defbash execute(args, state) do
     case parse_args(args) do
@@ -194,7 +194,7 @@ defmodule Bash.Builtin.Export do
       end)
 
     if map_size(var_updates) > 0 do
-      update_state(var_updates: var_updates)
+      update_state(variables: var_updates)
     end
 
     :ok
@@ -249,7 +249,7 @@ defmodule Bash.Builtin.Export do
       end)
 
     if map_size(var_updates) > 0 do
-      update_state(var_updates: var_updates)
+      update_state(variables: var_updates)
     end
 
     :ok

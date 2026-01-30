@@ -172,7 +172,7 @@ defmodule Bash.Builtin.Ulimit do
       end)
       |> Enum.join("\n")
 
-    Bash.Builtin.Context.write(lines <> "\n")
+    Bash.Context.write(lines <> "\n")
     :ok
   end
 
@@ -180,13 +180,13 @@ defmodule Bash.Builtin.Ulimit do
   defp show_limit(flag, session_state, flags) do
     case Map.get(@resources, flag) do
       nil ->
-        Bash.Builtin.Context.error("ulimit: -#{flag}: invalid option")
+        Bash.Context.error("ulimit: -#{flag}: invalid option")
         {:ok, 1}
 
       {resource_atom, _name, _unit} ->
         limits = get_limits(session_state)
         value = get_limit_value(resource_atom, limits, flags)
-        Bash.Builtin.Context.write("#{value}\n")
+        Bash.Context.write("#{value}\n")
         :ok
     end
   end
@@ -195,7 +195,7 @@ defmodule Bash.Builtin.Ulimit do
   defp set_limit(flag, value_str, session_state, flags) do
     case Map.get(@resources, flag) do
       nil ->
-        Bash.Builtin.Context.error("ulimit: -#{flag}: invalid option")
+        Bash.Context.error("ulimit: -#{flag}: invalid option")
         {:ok, 1}
 
       {resource_atom, _name, _unit} ->
@@ -214,11 +214,11 @@ defmodule Bash.Builtin.Ulimit do
                   Map.put(limits, resource_atom, Map.put(existing, limit_type, value))
               end
 
-            Bash.Builtin.Context.update_state(ulimits: new_limits)
+            Bash.Context.update_state(ulimits: new_limits)
             :ok
 
           {:error, msg} ->
-            Bash.Builtin.Context.error("ulimit: #{msg}")
+            Bash.Context.error("ulimit: #{msg}")
             {:ok, 1}
         end
     end

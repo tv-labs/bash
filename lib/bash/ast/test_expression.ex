@@ -470,12 +470,12 @@ defmodule Bash.AST.TestExpression do
     if String.contains?(left, pattern) do
       # Match found - BASH_REMATCH[0] = matched portion
       bash_rematch = Variable.new_indexed_array(%{0 => pattern})
-      state_updates = %{var_updates: %{"BASH_REMATCH" => bash_rematch}}
+      state_updates = %{variables: %{"BASH_REMATCH" => bash_rematch}}
       {:ok, true, rest, state_updates}
     else
       # No match - unset BASH_REMATCH
       bash_rematch = Variable.new_indexed_array(%{})
-      state_updates = %{var_updates: %{"BASH_REMATCH" => bash_rematch}}
+      state_updates = %{variables: %{"BASH_REMATCH" => bash_rematch}}
       {:ok, false, rest, state_updates}
     end
   end
@@ -487,13 +487,13 @@ defmodule Bash.AST.TestExpression do
           nil ->
             # No match - unset BASH_REMATCH (empty array)
             bash_rematch = Variable.new_indexed_array(%{})
-            state_updates = %{var_updates: %{"BASH_REMATCH" => bash_rematch}}
+            state_updates = %{variables: %{"BASH_REMATCH" => bash_rematch}}
             {:ok, false, rest, state_updates}
 
           captures ->
             # Match found - populate BASH_REMATCH with captures
             bash_rematch = captures_to_bash_rematch(captures)
-            state_updates = %{var_updates: %{"BASH_REMATCH" => bash_rematch}}
+            state_updates = %{variables: %{"BASH_REMATCH" => bash_rematch}}
             {:ok, true, rest, state_updates}
         end
 

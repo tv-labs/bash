@@ -46,7 +46,7 @@ defmodule Bash.ArrayAssignmentTest do
       {:ok, result, state_updates} = run_command("arr=(a b c)")
 
       assert result.exit_code == 0
-      assert %{"arr" => var} = state_updates.var_updates
+      assert %{"arr" => var} = state_updates.variables
       assert Variable.get(var, 0) == "a"
       assert Variable.get(var, 1) == "b"
       assert Variable.get(var, 2) == "c"
@@ -57,7 +57,7 @@ defmodule Bash.ArrayAssignmentTest do
       {:ok, result, state_updates} = run_command("arr=()")
 
       assert result.exit_code == 0
-      assert %{"arr" => var} = state_updates.var_updates
+      assert %{"arr" => var} = state_updates.variables
       assert var.attributes.array_type == :indexed
       assert map_size(var.value) == 0
     end
@@ -66,7 +66,7 @@ defmodule Bash.ArrayAssignmentTest do
       {:ok, result, state_updates} = run_command(~s{arr=("hello world" "foo bar")})
 
       assert result.exit_code == 0
-      assert %{"arr" => var} = state_updates.var_updates
+      assert %{"arr" => var} = state_updates.variables
       assert Variable.get(var, 0) == "hello world"
       assert Variable.get(var, 1) == "foo bar"
     end
@@ -76,7 +76,7 @@ defmodule Bash.ArrayAssignmentTest do
       {:ok, result, state_updates} = run_command(~s{arr=($x $y)}, state)
 
       assert result.exit_code == 0
-      assert %{"arr" => var} = state_updates.var_updates
+      assert %{"arr" => var} = state_updates.variables
       assert Variable.get(var, 0) == "value1"
       assert Variable.get(var, 1) == "value2"
     end
@@ -86,7 +86,7 @@ defmodule Bash.ArrayAssignmentTest do
       {:ok, result, state_updates} = run_command("arr=(a b c)", state)
 
       assert result.exit_code == 0
-      assert %{"arr" => var} = state_updates.var_updates
+      assert %{"arr" => var} = state_updates.variables
       assert Variable.get(var, 0) == "a"
       assert Variable.get(var, 1) == "b"
       assert Variable.get(var, 2) == "c"
@@ -98,7 +98,7 @@ defmodule Bash.ArrayAssignmentTest do
       {:ok, result, state_updates} = run_command("arr[2]=value")
 
       assert result.exit_code == 0
-      assert %{"arr" => var} = state_updates.var_updates
+      assert %{"arr" => var} = state_updates.variables
       assert Variable.get(var, 2) == "value"
       assert var.attributes.array_type == :indexed
     end
@@ -112,7 +112,7 @@ defmodule Bash.ArrayAssignmentTest do
       {:ok, result, state_updates} = run_command("arr[1]=updated", state)
 
       assert result.exit_code == 0
-      assert %{"arr" => var} = state_updates.var_updates
+      assert %{"arr" => var} = state_updates.variables
       assert Variable.get(var, 0) == "a"
       assert Variable.get(var, 1) == "updated"
       assert Variable.get(var, 2) == "c"
@@ -123,7 +123,7 @@ defmodule Bash.ArrayAssignmentTest do
       {:ok, result, state_updates} = run_command("arr[i+1]=value", state)
 
       assert result.exit_code == 0
-      assert %{"arr" => var} = state_updates.var_updates
+      assert %{"arr" => var} = state_updates.variables
       assert Variable.get(var, 3) == "value"
     end
 
@@ -132,7 +132,7 @@ defmodule Bash.ArrayAssignmentTest do
       {:ok, result, state_updates} = run_command(~s{arr[0]=$val}, state)
 
       assert result.exit_code == 0
-      assert %{"arr" => var} = state_updates.var_updates
+      assert %{"arr" => var} = state_updates.variables
       assert Variable.get(var, 0) == "hello"
     end
 
@@ -140,7 +140,7 @@ defmodule Bash.ArrayAssignmentTest do
       {:ok, result, state_updates} = run_command("arr[10]=value")
 
       assert result.exit_code == 0
-      assert %{"arr" => var} = state_updates.var_updates
+      assert %{"arr" => var} = state_updates.variables
       assert Variable.get(var, 10) == "value"
       # Indices 0-9 should be empty strings
       assert Variable.get(var, 0) == ""
@@ -158,7 +158,7 @@ defmodule Bash.ArrayAssignmentTest do
       {:ok, result, state_updates} = run_command("arr[-1]=last", state)
 
       assert result.exit_code == 0
-      assert %{"arr" => var} = state_updates.var_updates
+      assert %{"arr" => var} = state_updates.variables
       # Verify the update happened (exact behavior may depend on implementation)
       assert is_map(var.value)
     end
@@ -220,7 +220,7 @@ defmodule Bash.ArrayAssignmentTest do
       {:ok, result, state_updates} = ArrayAssignment.execute(assignment, "", session_state())
 
       assert result.exit_code == 0
-      assert %{"test_arr" => var} = state_updates.var_updates
+      assert %{"test_arr" => var} = state_updates.variables
       assert Variable.get(var, 0) == "a"
       assert Variable.get(var, 1) == "b"
       assert Variable.get(var, 2) == "c"
@@ -239,7 +239,7 @@ defmodule Bash.ArrayAssignmentTest do
       {:ok, result, state_updates} = ArrayAssignment.execute(assignment, "", session_state())
 
       assert result.exit_code == 0
-      assert %{"test_arr" => var} = state_updates.var_updates
+      assert %{"test_arr" => var} = state_updates.variables
       assert Variable.get(var, 5) == "value"
     end
 
@@ -257,7 +257,7 @@ defmodule Bash.ArrayAssignmentTest do
       {:ok, result, state_updates} = ArrayAssignment.execute(assignment, "", state)
 
       assert result.exit_code == 0
-      assert %{"test_arr" => var} = state_updates.var_updates
+      assert %{"test_arr" => var} = state_updates.variables
       # i * 3 + 1 = 2 * 3 + 1 = 7
       assert Variable.get(var, 7) == "value"
     end

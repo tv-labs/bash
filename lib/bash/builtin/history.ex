@@ -80,7 +80,7 @@ defmodule Bash.Builtin.History do
 
   # Clear command history
   defp clear_history do
-    Bash.Builtin.Context.update_state(clear_history: true)
+    Bash.Context.update_state(clear_history: true)
     :ok
   end
 
@@ -100,11 +100,11 @@ defmodule Bash.Builtin.History do
 
     case actual_index do
       nil ->
-        Bash.Builtin.Context.error("history: #{offset}: history position out of range")
+        Bash.Context.error("history: #{offset}: history position out of range")
         {:ok, 1}
 
       index ->
-        Bash.Builtin.Context.update_state(delete_history_entry: index)
+        Bash.Context.update_state(delete_history_entry: index)
         :ok
     end
   end
@@ -112,7 +112,7 @@ defmodule Bash.Builtin.History do
   # List command history
   defp list_history(count, session_state) do
     output = format_history_from_state(session_state, count)
-    if output != "", do: Bash.Builtin.Context.write(output)
+    if output != "", do: Bash.Context.write(output)
     :ok
   end
 

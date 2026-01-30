@@ -175,7 +175,7 @@ defmodule Bash.Builtin.Declare do
     Enum.each(errors, fn err -> error(err) end)
 
     if map_size(var_updates) > 0 do
-      update_state(var_updates: var_updates)
+      update_state(variables: var_updates)
     end
 
     exit_code = if Enum.empty?(errors), do: 0, else: 1

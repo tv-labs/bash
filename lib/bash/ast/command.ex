@@ -31,12 +31,12 @@ defmodule Bash.AST.Command do
   """
 
   alias Bash.AST
+  alias Bash.AST.Function
   alias Bash.AST.Helpers
   alias Bash.Builtin
   alias Bash.Builtin.Coproc
   alias Bash.CommandPort
   alias Bash.CommandResult
-  alias Bash.Function
   alias Bash.Sink
   alias Bash.Telemetry
   alias Bash.Variable
@@ -102,7 +102,7 @@ defmodule Bash.AST.Command do
     execute_debug_trap(session_state)
 
     command_name = Helpers.word_to_string(name, session_state)
-    {expanded_args, env_updates} = Helpers.expand_word_list(args, session_state)
+    {expanded_args, var_updates} = Helpers.expand_word_list(args, session_state)
     default_stdin = stdin || Map.get(session_state, :pipe_stdin)
     effective_stdin = process_input_redirects(redirects, session_state, default_stdin)
 
@@ -157,7 +157,7 @@ defmodule Bash.AST.Command do
 
     completed_at = DateTime.utc_now()
 
-    handle_execution_result(result, ast, started_at, completed_at, env_updates)
+    handle_execution_result(result, ast, started_at, completed_at, var_updates)
   end
 
   defp apply_exec_fd_redirects(redirects, session_state) do
@@ -186,7 +186,7 @@ defmodule Bash.AST.Command do
                 Map.get(session_state.variables, k) != v
               end)
 
-            Map.put(updates, :var_updates, changed)
+            Map.put(updates, :variables, changed)
           else
             updates
           end
@@ -317,7 +317,7 @@ defmodule Bash.AST.Command do
   defp get_exit_code({:error, %{exit_code: code}}), do: code
   defp get_exit_code(_), do: nil
 
-  defp handle_execution_result(result, ast, started_at, completed_at, env_updates) do
+  defp handle_execution_result(result, ast, started_at, completed_at, var_updates_from_expansion) do
     case result do
       {:wait_for_jobs, _} = r ->
         r
@@ -344,11 +344,11 @@ defmodule Bash.AST.Command do
       # Standard ok/error tuples
       {status, command_result, state_updates} when status in [:ok, :error] ->
         executed_ast = wrap_result(ast, command_result, started_at, completed_at)
-        {status, executed_ast, merge_env_updates(state_updates, env_updates)}
+        {status, executed_ast, merge_var_updates(state_updates, var_updates_from_expansion)}
 
       {status, command_result} when status in [:ok, :error] ->
         executed_ast = wrap_result(ast, command_result, started_at, completed_at)
-        maybe_add_env_updates({status, executed_ast}, env_updates)
+        maybe_add_var_updates({status, executed_ast}, var_updates_from_expansion)
     end
   end
 
@@ -356,12 +356,12 @@ defmodule Bash.AST.Command do
     populate_execution_result(ast, result, started_at, completed_at)
   end
 
-  defp maybe_add_env_updates(result, env_updates) when map_size(env_updates) > 0 do
+  defp maybe_add_var_updates(result, var_updates) when map_size(var_updates) > 0 do
     {status, ast} = result
-    {status, ast, %{env_updates: env_updates}}
+    {status, ast, %{variables: var_updates}}
   end
 
-  defp maybe_add_env_updates(result, _), do: result
+  defp maybe_add_var_updates(result, _), do: result
 
   defp populate_execution_result(
          ast,
@@ -389,12 +389,12 @@ defmodule Bash.AST.Command do
     }
   end
 
-  defp merge_env_updates(state_updates, env_updates) when map_size(env_updates) > 0 do
-    merged_env = Map.merge(env_updates, Map.get(state_updates, :env_updates, %{}))
-    Map.put(state_updates, :env_updates, merged_env)
+  defp merge_var_updates(state_updates, var_updates) when map_size(var_updates) > 0 do
+    merged_vars = Map.merge(var_updates, Map.get(state_updates, :variables, %{}))
+    Map.put(state_updates, :variables, merged_vars)
   end
 
-  defp merge_env_updates(state_updates, _env_updates), do: state_updates
+  defp merge_var_updates(state_updates, _var_updates), do: state_updates
 
   @doc false
   def process_input_redirects(redirects, _session_state, default_stdin)
@@ -828,16 +828,20 @@ defmodule Bash.AST.Command do
     command_name = "#{module.__bash_namespace__()}.#{function_name}"
     raw_result = module.__bash_call__(function_name, args, stdin_stream, session_state)
 
-    # Handle control flow before normalization
-    case raw_result do
+    {interop_result, state_updates} = unwrap_interop_result(raw_result)
+
+    case interop_result do
       control when control in [:continue, :break] ->
         {control, %CommandResult{command: command_name, exit_code: 0, error: nil}, 1}
 
-      _ ->
-        normalized = Result.normalize(raw_result, session_state)
+      {:exit, exit_code, opts} when is_integer(exit_code) and is_list(opts) ->
+        stderr = opts |> Keyword.get(:stderr, "") |> to_string()
+        if stderr != "", do: Sink.write_stderr(session_state, stderr)
 
-        # Stream output to sinks if available
-        stream_output_to_sinks(normalized.stdout, normalized.stderr, session_state)
+        {:ok, %CommandResult{command: command_name, exit_code: exit_code, error: nil}}
+
+      _ ->
+        normalized = Result.normalize(interop_result)
 
         command_result = %CommandResult{
           command: command_name,
@@ -845,45 +849,31 @@ defmodule Bash.AST.Command do
           error: nil
         }
 
-        if normalized.state != session_state do
-          {:ok, command_result, %{var_updates: normalized.state.variables}}
-        else
+        if state_updates == %{} do
           {:ok, command_result}
+        else
+          {:ok, command_result, state_updates}
         end
     end
   end
+
+  defp unwrap_interop_result({result, updates}) when is_map(updates), do: {result, updates}
+  defp unwrap_interop_result(result), do: {result, %{}}
 
   defp normalize_stdin_stream(nil), do: nil
   defp normalize_stdin_stream(""), do: nil
   defp normalize_stdin_stream(binary) when is_binary(binary), do: [binary]
   defp normalize_stdin_stream(stream), do: stream
 
-  defp build_output("", ""), do: []
-  defp build_output(stdout, ""), do: [{:stdout, [stdout]}]
-  defp build_output("", stderr), do: [{:stderr, [stderr]}]
-  defp build_output(stdout, stderr), do: [{:stdout, [stdout]}, {:stderr, [stderr]}]
-
-  # Stream output to sinks if available, otherwise return output list for CommandResult
-  defp stream_output_to_sinks(stdout, stderr, session_state) do
-    stdout_sink = Map.get(session_state, :stdout_sink)
-    stderr_sink = Map.get(session_state, :stderr_sink)
-
-    cond do
-      stdout_sink && stderr_sink ->
-        if stdout != "", do: stdout_sink.({:stdout, stdout})
-        if stderr != "", do: stderr_sink.({:stderr, stderr})
-        []
-
-      true ->
-        build_output(stdout, stderr)
-    end
-  end
-
   defp execute_external_command(command_name, args, session_state, stdin, redirects) do
     env =
       session_state.variables
-      |> Map.new(fn {k, v} -> {k, Variable.get(v, nil)} end)
-      |> Map.to_list()
+      |> Enum.flat_map(fn {k, v} ->
+        case Variable.get(v, nil) do
+          val when is_binary(val) -> [{k, val}]
+          _ -> []
+        end
+      end)
 
     stderr_file_redirects = get_stderr_file_redirects(redirects, session_state)
 

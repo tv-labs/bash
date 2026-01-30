@@ -60,13 +60,18 @@ defmodule Bash.Builtin.Coproc do
   """
   use Bash.Builtin
 
+  @doc false
+  use GenServer
+
+  require Logger
+
   alias Bash.Executor
   alias Bash.Variable
 
-  use GenServer
-
-  def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts)
+  @doc false
+  def start_link(opts \\ []) do
+    {name, opts} = opts |> Map.new() |> Map.pop(:name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   defbash execute(args, state) do
@@ -87,19 +92,35 @@ defmodule Bash.Builtin.Coproc do
     end
   end
 
-  defp parse_args([]) do
-    {:error, "command required"}
+  defp parse_args([]), do: {:error, "command required"}
+  defp parse_args([command]), do: {:ok, "COPROC", command, []}
+  defp parse_args([command | rest]), do: {:ok, "COPROC", command, rest}
+
+  @doc false
+  def read_output(coproc_pid, timeout \\ :infinity) do
+    GenServer.call(coproc_pid, :read, timeout)
   end
 
-  defp parse_args([command]) do
-    {:ok, "COPROC", command, []}
+  @doc false
+  def write_input(coproc_pid, data, timeout \\ :infinity) do
+    GenServer.call(coproc_pid, {:write, data}, timeout)
   end
 
-  defp parse_args([command | rest]) do
-    {:ok, "COPROC", command, rest}
+  @doc false
+  def close_write(coproc_pid, timeout \\ :infinity) do
+    GenServer.call(coproc_pid, :close_stdin, timeout)
   end
 
-  # Start a coproc running an external OS command via ExCmd.
+  @doc false
+  def close_read(coproc_pid, timeout \\ :infinity) do
+    GenServer.call(coproc_pid, :close_stdout, timeout)
+  end
+
+  @doc false
+  def get_status(coproc_pid, timeout \\ :infinity) do
+    GenServer.call(coproc_pid, :status, timeout)
+  end
+
   @doc false
   def start_external_coproc(name, command, cmd_args, session_state) do
     child_spec = %{
@@ -121,7 +142,6 @@ defmodule Bash.Builtin.Coproc do
     start_coproc_child(name, child_spec, session_state)
   end
 
-  # Start a coproc running a compound command body within the Elixir interpreter.
   @doc false
   def start_internal_coproc(name, body_ast, session_state) do
     child_spec = %{
@@ -203,7 +223,7 @@ defmodule Bash.Builtin.Coproc do
       )
 
     updates = %{
-      var_updates: var_updates,
+      variables: var_updates,
       coprocs: coproc_updates,
       file_descriptors: new_fds
     }
@@ -233,8 +253,6 @@ defmodule Bash.Builtin.Coproc do
     |> Enum.map(fn {k, v} -> {k, Variable.get(v, nil)} end)
   end
 
-  # GenServer Implementation — External mode (ExCmd)
-
   @impl true
   def init(%{mode: :external} = opts) do
     cmd = [opts.command | opts.args]
@@ -259,8 +277,6 @@ defmodule Bash.Builtin.Coproc do
         {:stop, reason}
     end
   end
-
-  # GenServer Implementation — Internal mode (BEAM process running AST)
 
   def init(%{mode: :internal} = opts) do
     {:ok, stdin_pipe} = Bash.Pipe.create()
@@ -304,15 +320,11 @@ defmodule Bash.Builtin.Coproc do
     Bash.Pipe.close_write(stdout_pipe)
   end
 
-  # Shared callbacks
-
-  @impl true
+  @impl GenServer
   def handle_call(:get_info, _from, state) do
     {:reply, {:ok, state.os_pid}, state}
   end
 
-  # Read — external mode
-  @impl true
   def handle_call(:read, _from, %{mode: :external} = state) do
     case ExCmd.Process.read(state.proc) do
       {:ok, data} -> {:reply, {:ok, data}, state}
@@ -321,7 +333,6 @@ defmodule Bash.Builtin.Coproc do
     end
   end
 
-  # Read — internal mode
   def handle_call(:read, _from, %{mode: :internal} = state) do
     case Bash.Pipe.read_line(state.stdout_pipe) do
       {:ok, data} -> {:reply, {:ok, data}, state}
@@ -329,8 +340,6 @@ defmodule Bash.Builtin.Coproc do
     end
   end
 
-  # Write — external mode
-  @impl true
   def handle_call({:write, data}, _from, %{mode: :external} = state) do
     case ExCmd.Process.write(state.proc, data) do
       :ok -> {:reply, :ok, state}
@@ -338,7 +347,6 @@ defmodule Bash.Builtin.Coproc do
     end
   end
 
-  # Write — internal mode
   def handle_call({:write, data}, _from, %{mode: :internal} = state) do
     case Bash.Pipe.write(state.stdin_pipe, data) do
       :ok -> {:reply, :ok, state}
@@ -346,33 +354,25 @@ defmodule Bash.Builtin.Coproc do
     end
   end
 
-  # Close stdin — external mode
-  @impl true
   def handle_call(:close_stdin, _from, %{mode: :external} = state) do
     ExCmd.Process.close_stdin(state.proc)
     {:reply, :ok, state}
   end
 
-  # Close stdin — internal mode
   def handle_call(:close_stdin, _from, %{mode: :internal} = state) do
     Bash.Pipe.close_write(state.stdin_pipe)
     {:reply, :ok, %{state | stdin_pipe: %{state.stdin_pipe | write_end: nil}}}
   end
 
-  # Close stdout — external mode
-  @impl true
   def handle_call(:close_stdout, _from, %{mode: :external} = state) do
     ExCmd.Process.close_stdout(state.proc)
     {:reply, :ok, state}
   end
 
-  # Close stdout — internal mode
   def handle_call(:close_stdout, _from, %{mode: :internal} = state) do
     {:reply, :ok, state}
   end
 
-  # Status
-  @impl true
   def handle_call(:status, _from, %{mode: :external} = state) do
     case ExCmd.Process.await_exit(state.proc, 0) do
       {:ok, exit_code} -> {:reply, {:exited, exit_code}, state}
@@ -389,7 +389,7 @@ defmodule Bash.Builtin.Coproc do
     end
   end
 
-  @impl true
+  @impl GenServer
   def handle_info({:EXIT, _proc, reason}, state) do
     {:stop, reason, state}
   end
@@ -402,7 +402,6 @@ defmodule Bash.Builtin.Coproc do
   end
 
   def handle_info(msg, state) do
-    require Logger
     Logger.debug("Coproc received unexpected message: #{inspect(msg)}")
     {:noreply, state}
   end
@@ -422,35 +421,5 @@ defmodule Bash.Builtin.Coproc do
     Bash.Pipe.destroy(state.stdin_pipe)
     Bash.Pipe.destroy(state.stdout_pipe)
     :ok
-  end
-
-  # Read from a coprocess's stdout.
-  @doc false
-  def read_output(coproc_pid, timeout \\ :infinity) do
-    GenServer.call(coproc_pid, :read, timeout)
-  end
-
-  # Write to a coprocess's stdin.
-  @doc false
-  def write_input(coproc_pid, data, timeout \\ :infinity) do
-    GenServer.call(coproc_pid, {:write, data}, timeout)
-  end
-
-  # Close the coprocess's stdin (write end).
-  @doc false
-  def close_write(coproc_pid, timeout \\ :infinity) do
-    GenServer.call(coproc_pid, :close_stdin, timeout)
-  end
-
-  # Close the coprocess's stdout (read end).
-  @doc false
-  def close_read(coproc_pid, timeout \\ :infinity) do
-    GenServer.call(coproc_pid, :close_stdout, timeout)
-  end
-
-  # Get the status of a coprocess.
-  @doc false
-  def get_status(coproc_pid, timeout \\ :infinity) do
-    GenServer.call(coproc_pid, :status, timeout)
   end
 end

@@ -32,7 +32,7 @@ defmodule Bash.Builtin.Printf do
             if var_name do
               # -v option: assign to variable instead of printing
               var = Variable.new(output)
-              update_state(var_updates: %{var_name => var})
+              update_state(variables: %{var_name => var})
             else
               write(output)
             end

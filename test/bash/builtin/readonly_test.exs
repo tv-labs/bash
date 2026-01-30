@@ -11,7 +11,7 @@ defmodule Bash.Builtin.ReadonlyTest do
 
   describe "readonly with variable assignment" do
     test "creates readonly variable" do
-      assert {:ok, %CommandResult{exit_code: 0}, %{var_updates: updates}} =
+      assert {:ok, %CommandResult{exit_code: 0}, %{variables: updates}} =
                Readonly.execute(["foo=bar"], nil, @session_state)
 
       assert updates["foo"].value == "bar"
@@ -19,7 +19,7 @@ defmodule Bash.Builtin.ReadonlyTest do
     end
 
     test "creates multiple readonly variables" do
-      assert {:ok, %CommandResult{exit_code: 0}, %{var_updates: updates}} =
+      assert {:ok, %CommandResult{exit_code: 0}, %{variables: updates}} =
                Readonly.execute(["a=1", "b=2"], nil, @session_state)
 
       assert updates["a"].value == "1"
@@ -31,7 +31,7 @@ defmodule Bash.Builtin.ReadonlyTest do
 
   describe "readonly with name only" do
     test "marks variable as readonly without value" do
-      assert {:ok, %CommandResult{exit_code: 0}, %{var_updates: updates}} =
+      assert {:ok, %CommandResult{exit_code: 0}, %{variables: updates}} =
                Readonly.execute(["myvar"], nil, @session_state)
 
       assert Map.has_key?(updates, "myvar")
@@ -41,7 +41,7 @@ defmodule Bash.Builtin.ReadonlyTest do
 
   describe "readonly with -a flag" do
     test "creates readonly indexed array" do
-      assert {:ok, %CommandResult{exit_code: 0}, %{var_updates: updates}} =
+      assert {:ok, %CommandResult{exit_code: 0}, %{variables: updates}} =
                Readonly.execute(["-a", "arr"], nil, @session_state)
 
       assert updates["arr"].attributes[:readonly] == true
@@ -51,7 +51,7 @@ defmodule Bash.Builtin.ReadonlyTest do
 
   describe "readonly with -A flag" do
     test "creates readonly associative array" do
-      assert {:ok, %CommandResult{exit_code: 0}, %{var_updates: updates}} =
+      assert {:ok, %CommandResult{exit_code: 0}, %{variables: updates}} =
                Readonly.execute(["-A", "arr"], nil, @session_state)
 
       assert updates["arr"].attributes[:readonly] == true

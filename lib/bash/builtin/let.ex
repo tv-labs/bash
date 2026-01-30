@@ -69,7 +69,7 @@ defmodule Bash.Builtin.Let do
               end)
               |> Map.new()
 
-            update_state(var_updates: var_updates)
+            update_state(variables: var_updates)
             {:ok, exit_code}
 
           {:error, reason} ->

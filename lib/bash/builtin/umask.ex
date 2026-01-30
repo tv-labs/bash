@@ -53,7 +53,7 @@ defmodule Bash.Builtin.Umask do
             set_umask(new_umask, flags)
 
           {:error, msg} ->
-            Bash.Builtin.Context.error(msg)
+            Bash.Context.error(msg)
             {:ok, 1}
         end
     end
@@ -94,7 +94,7 @@ defmodule Bash.Builtin.Umask do
           "#{format_octal(umask)}\n"
       end
 
-    Bash.Builtin.Context.write(stdout)
+    Bash.Context.write(stdout)
     :ok
   end
 
@@ -115,8 +115,8 @@ defmodule Bash.Builtin.Umask do
           ""
       end
 
-    if stdout != "", do: Bash.Builtin.Context.write(stdout)
-    Bash.Builtin.Context.update_state(umask: new_umask)
+    if stdout != "", do: Bash.Context.write(stdout)
+    Bash.Context.update_state(umask: new_umask)
     :ok
   end
 

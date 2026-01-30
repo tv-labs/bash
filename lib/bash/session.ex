@@ -61,7 +61,7 @@ defmodule Bash.Session do
   alias Bash.SessionSupervisor
   alias Bash.Sink
   alias Bash.Variable
-  alias Bash.Function
+  alias Bash.AST.Function
   alias Bash.Execution
 
   defstruct [
@@ -174,15 +174,12 @@ defmodule Bash.Session do
   Creates a new session with default environment.
   """
   def new(opts \\ []) do
-    id = opts[:id] || generate_session_id()
     supervisor = opts[:supervisor] || SessionSupervisor
+    opts = Keyword.put_new_lazy(opts, :id, &generate_session_id/0)
 
-    # Ensure id is set only once by putting it at the front and removing any duplicate
-    child_opts = Keyword.put(Keyword.delete(opts, :id), :id, id)
-
-    case DynamicSupervisor.start_child(supervisor, {__MODULE__, child_opts}) do
+    case DynamicSupervisor.start_child(supervisor, {__MODULE__, opts}) do
       {:ok, pid} ->
-        Process.register(pid, String.to_atom("session_#{id}"))
+        Process.register(pid, String.to_atom("session_#{opts[:id]}"))
         {:ok, pid}
 
       error ->
@@ -217,7 +214,7 @@ defmodule Bash.Session do
     id = opts[:id] || generate_session_id()
     supervisor = opts[:supervisor] || SessionSupervisor
 
-    child_opts = [
+    opts = [
       id: id,
       # Inherit from parent (bash behavior)
       working_dir: parent_state.working_dir,
@@ -231,18 +228,13 @@ defmodule Bash.Session do
       parent_id: parent_state.id
     ]
 
-    case DynamicSupervisor.start_child(supervisor, {__MODULE__, child_opts}) do
-      {:ok, pid} ->
-        {:ok, pid}
-
-      error ->
-        error
-    end
+    DynamicSupervisor.start_child(supervisor, {__MODULE__, opts})
   end
 
   def new_child(parent_pid, opts) when is_pid(parent_pid) do
-    parent_state = get_state(parent_pid)
-    new_child(parent_state, opts)
+    parent_pid
+    |> get_state()
+    |> new_child(opts)
   end
 
   @doc """
@@ -273,7 +265,6 @@ defmodule Bash.Session do
   @spec list(keyword()) :: [{String.t(), pid()}]
   def list(opts \\ []) do
     registry = opts[:registry] || SessionRegistry
-
     Registry.select(registry, [{{:"$1", :"$2", :_}, [], [{{:"$1", :"$2"}}]}])
   end
 
@@ -588,7 +579,7 @@ defmodule Bash.Session do
     end
   end
 
-  @doc """
+  @doc ~S"""
   Write to an output destination.
 
   Writes to the current execution's StringIO stream. If the session is
@@ -601,20 +592,17 @@ defmodule Bash.Session do
 
   ## Examples
 
-      session = Session.write(session, :stdout, "hello\\n")
-      session = Session.write(session, :stderr, "error message\\n")
+      session = Session.write(session, :stdout, "hello\n")
+      session = Session.write(session, :stderr, "error message\n")
       session = Session.write(session, {:fd, 3}, data)
 
   """
   @spec write(t(), :stdout | :stderr | {:fd, non_neg_integer()}, iodata()) :: t()
-  def write(%__MODULE__{current: nil} = session, _dest, _data) do
-    session
-  end
+  def write(%__MODULE__{current: nil} = session, _dest, _data), do: session
 
   def write(%__MODULE__{current: exec} = session, :stdout, data) do
     IO.binwrite(exec.stdout, data)
 
-    # Forward to user sink if pipeline tail
     if session.is_pipeline_tail && session.stdout_sink do
       session.stdout_sink.({:stdout, data})
     end
@@ -625,7 +613,6 @@ defmodule Bash.Session do
   def write(%__MODULE__{current: exec} = session, :stderr, data) do
     IO.binwrite(exec.stderr, data)
 
-    # Forward to user sink if pipeline tail
     if session.is_pipeline_tail && session.stderr_sink do
       session.stderr_sink.({:stderr, data})
     end
@@ -1073,7 +1060,6 @@ defmodule Bash.Session do
   end
 
   def handle_call(:get_all_env, _from, state) do
-    # Return as plain map for compatibility
     env_map =
       Map.new(state.variables, fn {k, v} ->
         {k, Variable.get(v, nil)}
@@ -1082,13 +1068,11 @@ defmodule Bash.Session do
     {:reply, env_map, state}
   end
 
-  # Backwards compatibility: handle execute without opts
   def handle_call({:execute, ast}, from, state) do
     handle_call({:execute, ast, []}, from, state)
   end
 
   def handle_call({:execute, ast, opts}, from, state) do
-    # Spawn a linked OutputCollector for this execution
     {:ok, collector} = OutputCollector.start_link()
     Process.link(collector)
 
@@ -2721,10 +2705,7 @@ defmodule Bash.Session do
   defp apply_state_updates(state, updates) do
     state
     |> maybe_update_working_dir(updates)
-    # Apply var_updates first, then env_updates (env_updates may come from
-    # arithmetic statements that update variables after initial assignments)
     |> maybe_update_variables(updates)
-    |> maybe_update_env_vars(updates)
     |> maybe_update_functions(updates)
     |> maybe_update_aliases(updates)
     |> maybe_update_positional_params(updates)
@@ -2772,50 +2753,18 @@ defmodule Bash.Session do
 
   defp maybe_update_working_dir(state, _), do: state
 
-  defp maybe_update_env_vars(state, %{env_updates: env_updates}) do
-    # env_updates represents variables that should be exported (from export, allexport, etc.)
-    exported_vars =
-      Map.new(env_updates, fn {k, v} ->
-        var =
-          case v do
-            %Variable{} = var_struct ->
-              var_struct
-
-            _ ->
-              %Variable{
-                value: v,
-                attributes: %{export: true, readonly: false, integer: false, array_type: nil}
-              }
-          end
-
-        {k, %{var | attributes: Map.put(var.attributes, :export, true)}}
-      end)
-
-    new_variables = Map.merge(state.variables, exported_vars)
-
-    %{state | variables: new_variables}
-  end
-
-  defp maybe_update_env_vars(state, _), do: state
-
-  defp maybe_update_variables(state, %{var_updates: var_updates}) do
-    new_variables =
-      state.variables
-      |> Map.merge(var_updates)
-      |> Map.reject(fn {_k, v} -> v == :deleted end)
-
-    %{state | variables: new_variables}
+  defp maybe_update_variables(state, %{variables: variables}) do
+    merge_map_field(state, :variables, variables)
   end
 
   defp maybe_update_variables(state, _), do: state
 
   defp maybe_update_functions(state, %{function_updates: function_updates}) do
-    new_functions =
-      state.functions
-      |> Map.merge(function_updates)
-      |> Map.reject(fn {_k, v} -> v == :deleted end)
+    merge_map_field(state, :functions, function_updates)
+  end
 
-    %{state | functions: new_functions}
+  defp maybe_update_functions(state, %{functions: functions}) do
+    merge_map_field(state, :functions, functions)
   end
 
   defp maybe_update_functions(state, _), do: state
@@ -2825,17 +2774,24 @@ defmodule Bash.Session do
   end
 
   defp maybe_update_aliases(state, %{alias_updates: alias_updates}) when is_map(alias_updates) do
-    # Remove aliases marked with :remove, add/update others
-    new_aliases =
-      Enum.reduce(alias_updates, state.aliases, fn
-        {name, :remove}, acc -> Map.delete(acc, name)
-        {name, value}, acc -> Map.put(acc, name, value)
-      end)
+    merge_map_field(state, :aliases, alias_updates)
+  end
 
-    %{state | aliases: new_aliases}
+  defp maybe_update_aliases(state, %{aliases: aliases}) when is_map(aliases) do
+    merge_map_field(state, :aliases, aliases)
   end
 
   defp maybe_update_aliases(state, _), do: state
+
+  defp merge_map_field(state, field, updates) do
+    new_map =
+      state
+      |> Map.fetch!(field)
+      |> Map.merge(updates)
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
+
+    %{state | field => new_map}
+  end
 
   defp maybe_update_positional_params(state, %{positional_params: positional_params}) do
     %{state | positional_params: positional_params}

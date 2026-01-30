@@ -14,7 +14,7 @@ defmodule Bash.ASTTest do
   alias Bash.AST.Case
   alias Bash.AST.Coproc
   alias Bash.AST.Word
-  alias Bash.Function
+  alias Bash.AST.Function
   alias Bash.Script
 
   describe "prewalk/2" do

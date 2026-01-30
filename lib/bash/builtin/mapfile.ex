@@ -55,11 +55,11 @@ defmodule Bash.Builtin.Mapfile do
   #
   # # Read lines into MAPFILE (default)
   # iex> Mapfile.execute([], "line1\\nline2\\n", %{variables: %{}})
-  # {:ok, %CommandResult{exit_code: 0}, %{var_updates: %{"MAPFILE" => %Variable{...}}}}
+  # {:ok, %CommandResult{exit_code: 0}, %{variables: %{"MAPFILE" => %Variable{...}}}}
   #
   # # Read lines into named array with -t (strip newlines)
   # iex> Mapfile.execute(["-t", "myarray"], "line1\\nline2\\n", %{variables: %{}})
-  # {:ok, %CommandResult{exit_code: 0}, %{var_updates: %{"myarray" => %Variable{...}}}}
+  # {:ok, %CommandResult{exit_code: 0}, %{variables: %{"myarray" => %Variable{...}}}}
   #
   @doc false
   defbash execute(args, state) do
@@ -294,7 +294,7 @@ defmodule Bash.Builtin.Mapfile do
     if input == nil or input == "" do
       # No input - create empty array or preserve origin
       var_updates = build_empty_array(array_name, opts, session_state)
-      update_state(var_updates: var_updates)
+      update_state(variables: var_updates)
       :ok
     else
       # Check if existing variable is readonly
@@ -333,7 +333,7 @@ defmodule Bash.Builtin.Mapfile do
 
           # Build array
           var_updates = build_array(array_name, lines, opts, session_state)
-          update_state(var_updates: var_updates)
+          update_state(variables: var_updates)
           :ok
         end
       end

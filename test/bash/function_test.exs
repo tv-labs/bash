@@ -1,8 +1,8 @@
-defmodule Bash.FunctionTest do
+defmodule Bash.AST.FunctionTest do
   use Bash.SessionCase, async: false
 
   alias Bash.AST
-  alias Bash.Function
+  alias Bash.AST.Function
   alias Bash.Parser
   alias Bash.Script
   alias Bash.Session

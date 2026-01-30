@@ -115,7 +115,7 @@ defmodule Bash.Builtin.Pushd do
               update_state(
                 working_dir: second,
                 dir_stack: new_stack,
-                env_updates: %{
+                variables: %{
                   "PWD" => second,
                   "OLDPWD" => cwd
                 }
@@ -158,7 +158,7 @@ defmodule Bash.Builtin.Pushd do
           update_state(
             working_dir: resolved_dir,
             dir_stack: new_stack,
-            env_updates: %{
+            variables: %{
               "PWD" => resolved_dir,
               "OLDPWD" => cwd
             }
@@ -221,7 +221,7 @@ defmodule Bash.Builtin.Pushd do
             update_state(
               working_dir: new_cwd,
               dir_stack: rotated_stack,
-              env_updates: %{
+              variables: %{
                 "PWD" => new_cwd,
                 "OLDPWD" => session_state.working_dir
               }

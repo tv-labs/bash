@@ -2,7 +2,7 @@ defmodule Bash.Builtin.DeclareFunctionTest do
   use Bash.SessionCase, async: true
 
   alias Bash.Builtin.Declare
-  alias Bash.Function
+  alias Bash.AST.Function
   alias Bash.AST.Command
   alias Bash.AST.Word
   alias Bash.CommandResult

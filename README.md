@@ -174,9 +174,11 @@ defmodule MyApp.BashAPI do
   defbash greet(args, _state) do
     case args do
       [name | _] -> 
-        Bash.puts("Hello #{name}!\n")
-        :ok
+        Bash.puts(:stderr, "uhoh!")
+        # Appended to stdout, and exits 0
+        {:ok, "Hello #{name}!\n"}
       [] -> 
+        # Appended to stderr, and exits 1
         {:error, "usage: myapp.greet NAME"}
     end
   end

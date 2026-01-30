@@ -108,18 +108,23 @@ defmodule Bash.AST.WhileLoop do
         executed_ast = %{
           ast
           | exit_code: result.exit_code,
-            state_updates: %{env_updates: env_updates},
+            state_updates: %{
+              variables: Map.new(env_updates, fn {k, v} -> {k, Variable.new(v)} end)
+            },
             iteration_count: iter_count,
             meta: AST.Meta.mark_evaluated(ast.meta, started_at, completed_at)
         }
 
-        {:ok, executed_ast, %{env_updates: env_updates}}
+        {:ok, executed_ast,
+         %{variables: Map.new(env_updates, fn {k, v} -> {k, Variable.new(v)} end)}}
 
       {:exit, result, env_updates, iter_count} ->
         executed_ast = %{
           ast
           | exit_code: result.exit_code,
-            state_updates: %{env_updates: env_updates},
+            state_updates: %{
+              variables: Map.new(env_updates, fn {k, v} -> {k, Variable.new(v)} end)
+            },
             iteration_count: iter_count,
             meta: AST.Meta.mark_evaluated(ast.meta, started_at, completed_at)
         }
@@ -130,7 +135,9 @@ defmodule Bash.AST.WhileLoop do
         executed_ast = %{
           ast
           | exit_code: 0,
-            state_updates: %{env_updates: env_updates},
+            state_updates: %{
+              variables: Map.new(env_updates, fn {k, v} -> {k, Variable.new(v)} end)
+            },
             iteration_count: iter_count,
             meta: AST.Meta.mark_evaluated(ast.meta, started_at, completed_at)
         }
@@ -138,14 +145,17 @@ defmodule Bash.AST.WhileLoop do
         if levels > 1 do
           {:break, executed_ast, levels - 1}
         else
-          {:ok, executed_ast, %{env_updates: env_updates}}
+          {:ok, executed_ast,
+           %{variables: Map.new(env_updates, fn {k, v} -> {k, Variable.new(v)} end)}}
         end
 
       {:continue, _result, levels, env_updates, iter_count} ->
         executed_ast = %{
           ast
           | exit_code: 0,
-            state_updates: %{env_updates: env_updates},
+            state_updates: %{
+              variables: Map.new(env_updates, fn {k, v} -> {k, Variable.new(v)} end)
+            },
             iteration_count: iter_count,
             meta: AST.Meta.mark_evaluated(ast.meta, started_at, completed_at)
         }
@@ -153,7 +163,8 @@ defmodule Bash.AST.WhileLoop do
         if levels > 1 do
           {:continue, executed_ast, levels - 1}
         else
-          {:ok, executed_ast, %{env_updates: env_updates}}
+          {:ok, executed_ast,
+           %{variables: Map.new(env_updates, fn {k, v} -> {k, Variable.new(v)} end)}}
         end
 
       {:error, result} ->
@@ -219,11 +230,15 @@ defmodule Bash.AST.WhileLoop do
       condition_result =
         case Executor.execute(condition, stmt_session, effective_stdin) do
           {:ok, result, updates} ->
-            # Collect both env_updates and var_updates
-            env_from_cond = Map.get(updates, :env_updates, %{})
-            var_from_cond = Map.get(updates, :var_updates, %{})
-            var_values = Map.new(var_from_cond, fn {k, v} -> {k, Variable.get(v, nil) || ""} end)
-            merged = env_updates |> Map.merge(env_from_cond) |> Map.merge(var_values)
+            var_from_cond = Map.get(updates, :variables, %{})
+
+            var_values =
+              Map.new(var_from_cond, fn {k, v} ->
+                val = Variable.get(v, nil)
+                {k, if(is_binary(val), do: val, else: "")}
+              end)
+
+            merged = Map.merge(env_updates, var_values)
             {:ok, result.exit_code, merged}
 
           {:ok, result} ->
@@ -314,12 +329,15 @@ defmodule Bash.AST.WhileLoop do
 
     case Executor.execute(stmt, stmt_session, nil) do
       {:ok, _result, updates} ->
-        # Collect both env_updates and var_updates (var_updates as string values)
-        env_updates = Map.get(updates, :env_updates, %{})
-        var_updates = Map.get(updates, :var_updates, %{})
-        # Convert var_updates (Variable structs) to string values for accumulation
-        var_values = Map.new(var_updates, fn {k, v} -> {k, Variable.get(v, nil) || ""} end)
-        new_env = env_acc |> Map.merge(env_updates) |> Map.merge(var_values)
+        var_updates = Map.get(updates, :variables, %{})
+
+        var_values =
+          Map.new(var_updates, fn {k, v} ->
+            val = Variable.get(v, nil)
+            {k, if(is_binary(val), do: val, else: "")}
+          end)
+
+        new_env = Map.merge(env_acc, var_values)
         execute_loop_body(rest, session_state, new_env)
 
       {:ok, _result} ->

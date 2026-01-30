@@ -48,7 +48,7 @@ defmodule Bash.Builtin.Unalias do
     # Build alias removals map
     alias_removals =
       found
-      |> Enum.map(fn name -> {name, :remove} end)
+      |> Enum.map(fn name -> {name, nil} end)
       |> Map.new()
 
     if map_size(alias_removals) > 0 do

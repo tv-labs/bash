@@ -276,10 +276,10 @@ defmodule Bash.Builtin.Getopts do
       end
 
     unless silent_mode do
-      Bash.Builtin.Context.error("getopts: illegal option -- #{opt_char}")
+      Bash.Context.error("getopts: illegal option -- #{opt_char}")
     end
 
-    Bash.Builtin.Context.update_state(var_updates: var_updates)
+    Bash.Context.update_state(variables: var_updates)
     :ok
   end
 
@@ -303,7 +303,7 @@ defmodule Bash.Builtin.Getopts do
           "__GETOPTS_OFFSET__" => Variable.new("0")
         }
 
-        Bash.Builtin.Context.update_state(var_updates: var_updates)
+        Bash.Context.update_state(variables: var_updates)
         :ok
 
       # Argument is the next word
@@ -317,7 +317,7 @@ defmodule Bash.Builtin.Getopts do
           "__GETOPTS_OFFSET__" => Variable.new("0")
         }
 
-        Bash.Builtin.Context.update_state(var_updates: var_updates)
+        Bash.Context.update_state(variables: var_updates)
         :ok
 
       # Missing required argument
@@ -348,10 +348,10 @@ defmodule Bash.Builtin.Getopts do
       end
 
     unless silent_mode do
-      Bash.Builtin.Context.error("getopts: option requires an argument -- #{opt_char}")
+      Bash.Context.error("getopts: option requires an argument -- #{opt_char}")
     end
 
-    Bash.Builtin.Context.update_state(var_updates: var_updates)
+    Bash.Context.update_state(variables: var_updates)
     :ok
   end
 
@@ -372,7 +372,7 @@ defmodule Bash.Builtin.Getopts do
       "__GETOPTS_OFFSET__" => Variable.new(to_string(new_offset))
     }
 
-    Bash.Builtin.Context.update_state(var_updates: var_updates)
+    Bash.Context.update_state(variables: var_updates)
     :ok
   end
 
@@ -384,7 +384,7 @@ defmodule Bash.Builtin.Getopts do
       "__GETOPTS_OFFSET__" => Variable.new("0")
     }
 
-    Bash.Builtin.Context.update_state(var_updates: var_updates)
+    Bash.Context.update_state(variables: var_updates)
     {:ok, 1}
   end
 

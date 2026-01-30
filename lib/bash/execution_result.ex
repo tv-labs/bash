@@ -188,7 +188,7 @@ end
 
 # Implementation for Function
 # Note: Function has no output field - output goes to sinks
-defimpl Bash.ExecutionResult, for: Bash.Function do
+defimpl Bash.ExecutionResult, for: Bash.AST.Function do
   alias Bash.AST
 
   def stdout(_result), do: ""

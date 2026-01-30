@@ -112,67 +112,39 @@ defmodule Bash.OutputCollector do
   end
 
   def handle_call(:stdout, _from, state) do
-    stdout_data =
-      state.chunks
-      |> Enum.reverse()
-      |> Enum.flat_map(fn
-        {:stdout, data} -> [data]
-        _ -> []
-      end)
-
+    {stdout_data, _stderr_data} = split_chunks(state.chunks, :stdout)
     {:reply, stdout_data, state}
   end
 
   def handle_call(:stderr, _from, state) do
-    stderr_data =
-      state.chunks
-      |> Enum.reverse()
-      |> Enum.flat_map(fn
-        {:stderr, data} -> [data]
-        _ -> []
-      end)
-
+    {_stdout_data, stderr_data} = split_chunks(state.chunks, :stderr)
     {:reply, stderr_data, state}
   end
 
   def handle_call(:output, _from, state) do
-    reversed = Enum.reverse(state.chunks)
-
-    stdout_data =
-      Enum.flat_map(reversed, fn
-        {:stdout, data} -> [data]
-        _ -> []
-      end)
-
-    stderr_data =
-      Enum.flat_map(reversed, fn
-        {:stderr, data} -> [data]
-        _ -> []
-      end)
-
+    {stdout_data, stderr_data} = split_chunks(state.chunks, :both)
     {:reply, {stdout_data, stderr_data}, state}
   end
 
   def handle_call(:flush, _from, state) do
-    result = Enum.reverse(state.chunks)
-    {:reply, result, %__MODULE__{}}
+    {:reply, Enum.reverse(state.chunks), %{state | chunks: []}}
   end
 
   def handle_call(:flush_split, _from, state) do
-    reversed = Enum.reverse(state.chunks)
+    {stdout_data, stderr_data} = split_chunks(state.chunks, :both)
+    {:reply, {stdout_data, stderr_data}, %{state | chunks: []}}
+  end
 
-    stdout_data =
-      Enum.flat_map(reversed, fn
-        {:stdout, data} -> [data]
-        _ -> []
-      end)
+  defp split_chunks(chunks, mode) do
+    Enum.reduce(chunks, {[], []}, fn
+      {:stdout, data}, {stdout_data, stderr_data} when mode in [:both, :stdout] ->
+        {[data | stdout_data], stderr_data}
 
-    stderr_data =
-      Enum.flat_map(reversed, fn
-        {:stderr, data} -> [data]
-        _ -> []
-      end)
+      {:stderr, data}, {stdout_data, stderr_data} when mode in [:both, :stderr] ->
+        {stdout_data, [data | stderr_data]}
 
-    {:reply, {stdout_data, stderr_data}, %__MODULE__{}}
+      _, {stdout_data, stderr_data} ->
+        {stdout_data, stderr_data}
+    end)
   end
 end

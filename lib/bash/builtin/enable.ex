@@ -114,11 +114,11 @@ defmodule Bash.Builtin.Enable do
     case invalid do
       [] ->
         new_disabled = Enum.reduce(valid, disabled, &MapSet.put(&2, &1))
-        Bash.Builtin.Context.update_state(disabled_builtins: new_disabled)
+        Bash.Context.update_state(disabled_builtins: new_disabled)
         :ok
 
       [first | _] ->
-        Bash.Builtin.Context.error("enable: #{first}: not a shell builtin")
+        Bash.Context.error("enable: #{first}: not a shell builtin")
         {:ok, 1}
     end
   end
@@ -132,11 +132,11 @@ defmodule Bash.Builtin.Enable do
     case invalid do
       [] ->
         new_disabled = Enum.reduce(valid, disabled, &MapSet.delete(&2, &1))
-        Bash.Builtin.Context.update_state(disabled_builtins: new_disabled)
+        Bash.Context.update_state(disabled_builtins: new_disabled)
         :ok
 
       [first | _] ->
-        Bash.Builtin.Context.error("enable: #{first}: not a shell builtin")
+        Bash.Context.error("enable: #{first}: not a shell builtin")
         {:ok, 1}
     end
   end
@@ -159,7 +159,7 @@ defmodule Bash.Builtin.Enable do
       end)
       |> Enum.join()
 
-    if output != "", do: Bash.Builtin.Context.write(output)
+    if output != "", do: Bash.Context.write(output)
     :ok
   end
 
@@ -179,7 +179,7 @@ defmodule Bash.Builtin.Enable do
       |> Enum.map(&"enable #{&1}\n")
       |> Enum.join()
 
-    if output != "", do: Bash.Builtin.Context.write(output)
+    if output != "", do: Bash.Context.write(output)
     :ok
   end
 
@@ -207,12 +207,12 @@ defmodule Bash.Builtin.Enable do
         Returns success unless NAME is not a shell builtin or an error occurs.
     """
 
-    Bash.Builtin.Context.write(help)
+    Bash.Context.write(help)
     :ok
   end
 
   defp unsupported_dynamic_loading do
-    Bash.Builtin.Context.error("enable: dynamic loading of builtins is not supported")
+    Bash.Context.error("enable: dynamic loading of builtins is not supported")
     {:ok, 1}
   end
 end

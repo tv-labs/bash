@@ -7,7 +7,7 @@ defmodule Bash.Statement do
   """
 
   alias Bash.AST
-  alias Bash.Function
+  alias Bash.AST.Function
 
   @type t ::
           AST.Command.t()

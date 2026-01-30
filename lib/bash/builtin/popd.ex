@@ -115,7 +115,7 @@ defmodule Bash.Builtin.Popd do
               update_state(
                 working_dir: new_top,
                 dir_stack: rest,
-                env_updates: %{
+                variables: %{
                   "PWD" => new_top,
                   "OLDPWD" => old_pwd
                 }

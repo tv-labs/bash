@@ -3,13 +3,13 @@ defmodule Bash.Arithmetic do
   Evaluates bash arithmetic expressions.
 
   Supports the full range of bash arithmetic operators:
-  - Arithmetic: +, -, *, /, %, **
-  - Comparison: <, >, <=, >=, ==, !=
-  - Logical: &&, ||, !
-  - Bitwise: &, |, ^, ~, <<, >>
-  - Assignment: =, +=, -=, *=, /=, %=, <<=, >>=, &=, ^=, |=
-  - Increment/decrement: ++, --
-  - Ternary: ?:
+  - Arithmetic: `+ - * / % **`
+  - Comparison: `< > <= >= == !=`
+  - Logical: `&& || !`
+  - Bitwise: `& | ^ ~ << >>`
+  - Assignment: `= += -= *= /= %= <<= >>= &= ^= |=`
+  - Increment/decrement: `++ --`
+  - Ternary: `?:`
   - Parentheses for grouping
 
   Variable references work without $ prefix (e.g., `x + 1` where x is a variable).

@@ -29,8 +29,8 @@ defmodule Bash.Parser do
 
   alias Bash.Tokenizer
   alias Bash.AST
+  alias Bash.AST.Function
   alias Bash.Script
-  alias Bash.Function
 
   @type token :: Tokenizer.token()
   @type state :: %{tokens: [token()], pos: non_neg_integer()}

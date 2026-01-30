@@ -592,17 +592,17 @@ defmodule Bash.Script do
   defp add_pipestatus_update(updates, %Pipeline{pipestatus: pipestatus}, _exit_code)
        when is_list(pipestatus) do
     pipestatus_var = build_pipestatus_var(pipestatus)
-    var_updates = Map.get(updates, :var_updates, %{})
+    var_updates = Map.get(updates, :variables, %{})
     new_var_updates = Map.put(var_updates, "PIPESTATUS", pipestatus_var)
-    Map.put(updates, :var_updates, new_var_updates)
+    Map.put(updates, :variables, new_var_updates)
   end
 
   defp add_pipestatus_update(updates, _executed_stmt, exit_code) do
     # For non-pipeline statements, PIPESTATUS is single element [exit_code]
     pipestatus_var = build_pipestatus_var([exit_code])
-    var_updates = Map.get(updates, :var_updates, %{})
+    var_updates = Map.get(updates, :variables, %{})
     new_var_updates = Map.put(var_updates, "PIPESTATUS", pipestatus_var)
-    Map.put(updates, :var_updates, new_var_updates)
+    Map.put(updates, :variables, new_var_updates)
   end
 
   defp build_pipestatus_var(exit_codes) do
@@ -667,21 +667,11 @@ defmodule Bash.Script do
   defp merge_state_updates(acc, stmt_updates) when map_size(stmt_updates) == 0, do: acc
 
   defp merge_state_updates(acc, stmt_updates) do
-    # Get the new var_updates from this statement
-    new_var_updates = Map.get(stmt_updates, :var_updates, %{})
-
-    # Merge env_updates by combining the inner maps
-    # BUT: remove keys that are in the new var_updates, since a variable assignment
-    # should override stale env_updates from previous arithmetic expressions
-    acc_env_updates = Map.get(acc, :env_updates, %{})
-    cleaned_acc_env = Map.drop(acc_env_updates, Map.keys(new_var_updates))
-    env_updates = Map.merge(cleaned_acc_env, Map.get(stmt_updates, :env_updates, %{}))
-
     # Merge var_updates by combining the inner maps
     var_updates =
       Map.merge(
-        Map.get(acc, :var_updates, %{}),
-        new_var_updates
+        Map.get(acc, :variables, %{}),
+        Map.get(stmt_updates, :variables, %{})
       )
 
     # Merge function_updates by combining the inner maps
@@ -717,17 +707,10 @@ defmodule Bash.Script do
 
     # Put the merged updates back
     merged =
-      if map_size(env_updates) > 0 do
-        Map.put(merged, :env_updates, env_updates)
-      else
-        Map.delete(merged, :env_updates)
-      end
-
-    merged =
       if map_size(var_updates) > 0 do
-        Map.put(merged, :var_updates, var_updates)
+        Map.put(merged, :variables, var_updates)
       else
-        Map.delete(merged, :var_updates)
+        Map.delete(merged, :variables)
       end
 
     merged =
@@ -762,33 +745,23 @@ defmodule Bash.Script do
 
   # Apply accumulated updates to session state for subsequent statements
   defp apply_updates_to_session(session_state, updates) do
-    alias Bash.Variable
-
-    env_updates = Map.get(updates, :env_updates, %{})
-    var_updates = Map.get(updates, :var_updates, %{})
+    var_updates = Map.get(updates, :variables, %{})
     function_updates = Map.get(updates, :function_updates, %{})
     options_updates = Map.get(updates, :options, nil)
     special_vars_updates = Map.get(updates, :special_vars_updates, %{})
     positional_params_updates = Map.get(updates, :positional_params, nil)
     working_dir_update = Map.get(updates, :working_dir, nil)
 
-    # Convert env_updates (string values) to Variable structs
-    env_vars = Map.new(env_updates, fn {k, v} -> {k, Variable.new(v)} end)
-
-    # Merge both types of updates (var_updates are already Variable structs)
-    # Apply env_vars LAST since they may come from arithmetic statements that
-    # update variables after initial assignments (e.g., z=10; ((z+=5)))
     new_variables =
       session_state.variables
       |> Map.merge(var_updates)
-      |> Map.merge(env_vars)
-      |> Map.reject(fn {_k, v} -> v == :deleted end)
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
     new_functions =
       session_state
       |> Map.get(:functions, %{})
       |> Map.merge(function_updates)
-      |> Map.reject(fn {_k, v} -> v == :deleted end)
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
     # Merge options if present
     new_options =

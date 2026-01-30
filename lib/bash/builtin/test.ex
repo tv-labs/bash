@@ -75,24 +75,28 @@ defmodule Bash.Builtin.Test do
     end
   end
 
+  @doc false
   def to_integer(val), do: val
 
-  # File existence and type checks
+  @doc false
   def file_exists?(path, state) do
     full_path = resolve_path(path, state.working_dir)
     File.exists?(full_path)
   end
 
+  @doc false
   def file_regular?(path, state) do
     full_path = resolve_path(path, state.working_dir)
     File.regular?(full_path)
   end
 
+  @doc false
   def file_directory?(path, state) do
     full_path = resolve_path(path, state.working_dir)
     File.dir?(full_path)
   end
 
+  @doc false
   def file_symlink?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
@@ -102,7 +106,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
-  # File permission checks
+  @doc false
   def file_readable?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
@@ -112,6 +116,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
+  @doc false
   def file_writable?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
@@ -121,6 +126,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
+  @doc false
   def file_executable?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
@@ -130,7 +136,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
-  # File attribute checks
+  @doc false
   def file_not_empty?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
@@ -140,6 +146,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
+  @doc false
   def file_block_special?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
@@ -149,6 +156,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
+  @doc false
   def file_char_special?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
@@ -158,6 +166,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
+  @doc false
   def file_named_pipe?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
@@ -167,6 +176,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
+  @doc false
   def file_socket?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
@@ -176,6 +186,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
+  @doc false
   def file_setgid?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
@@ -185,6 +196,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
+  @doc false
   def file_sticky_bit?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
@@ -194,6 +206,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
+  @doc false
   def file_setuid?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
@@ -203,6 +216,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
+  @doc false
   def file_owned_by_user?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
@@ -212,6 +226,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
+  @doc false
   def file_owned_by_group?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
@@ -221,6 +236,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
+  @doc false
   def file_modified_since_read?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
@@ -230,7 +246,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
-  # File comparison checks
+  @doc false
   def file_newer_than?(file1, file2, state) do
     path1 = resolve_path(file1, state.working_dir)
     path2 = resolve_path(file2, state.working_dir)
@@ -243,6 +259,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
+  @doc false
   def file_older_than?(file1, file2, state) do
     path1 = resolve_path(file1, state.working_dir)
     path2 = resolve_path(file2, state.working_dir)
@@ -255,6 +272,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
+  @doc false
   def file_same_file?(file1, file2, state) do
     path1 = resolve_path(file1, state.working_dir)
     path2 = resolve_path(file2, state.working_dir)
@@ -267,7 +285,7 @@ defmodule Bash.Builtin.Test do
     end
   end
 
-  # Terminal check
+  @doc false
   def fd_is_terminal?(fd) do
     case Integer.parse(fd) do
       {0, _} -> true

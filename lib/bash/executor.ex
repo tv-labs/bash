@@ -9,7 +9,7 @@ defmodule Bash.Executor do
 
   alias Bash.AST
   alias Bash.CommandResult
-  alias Bash.Function
+  alias Bash.AST.Function
   alias Bash.Script
 
   # Executes a command AST or list of ASTs within session state.

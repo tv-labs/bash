@@ -269,21 +269,21 @@ defmodule Bash.AST.Pipeline do
     result =
       case Executor.execute(cmd, pipeline_session, stdin_data) do
         {:ok, result, state_updates} ->
-          env_updates = Map.get(state_updates, :env_updates, %{})
+          env_updates = Map.get(state_updates, :variables, %{})
           {result.exit_code || 0, env_updates}
 
         {:ok, result} ->
           {result.exit_code || 0, %{}}
 
         {:error, result, state_updates} ->
-          env_updates = Map.get(state_updates, :env_updates, %{})
+          env_updates = Map.get(state_updates, :variables, %{})
           {result.exit_code || 1, env_updates}
 
         {:error, result} ->
           {result.exit_code || 1, %{}}
 
         {:exit, result, state_updates} ->
-          env_updates = Map.get(state_updates, :env_updates, %{})
+          env_updates = Map.get(state_updates, :variables, %{})
           {result.exit_code || 0, env_updates}
 
         {:exit, result} ->
@@ -324,17 +324,12 @@ defmodule Bash.AST.Pipeline do
   end
 
   # Apply env updates to session state
-  defp apply_env_updates(session_state, env_updates) when map_size(env_updates) == 0 do
+  defp apply_env_updates(session_state, var_updates) when map_size(var_updates) == 0 do
     session_state
   end
 
-  defp apply_env_updates(session_state, env_updates) do
-    new_variables =
-      Map.merge(
-        session_state.variables,
-        Map.new(env_updates, fn {k, v} -> {k, Variable.new(v)} end)
-      )
-
+  defp apply_env_updates(session_state, var_updates) do
+    new_variables = Map.merge(session_state.variables, var_updates)
     %{session_state | variables: new_variables}
   end
 
@@ -447,7 +442,7 @@ defmodule Bash.AST.Pipeline do
       _ ->
         if final_exit_code == 0 do
           if map_size(env_updates) > 0 do
-            {:ok, executed_pipeline, %{env_updates: env_updates}}
+            {:ok, executed_pipeline, %{variables: env_updates}}
           else
             {:ok, executed_pipeline}
           end
@@ -472,21 +467,21 @@ defmodule Bash.AST.Pipeline do
     result =
       case Executor.execute(cmd, pipeline_session, stdin) do
         {:ok, result, state_updates} ->
-          env_updates = Map.get(state_updates, :env_updates, %{})
+          env_updates = Map.get(state_updates, :variables, %{})
           {result.exit_code || 0, env_updates}
 
         {:ok, result} ->
           {result.exit_code || 0, %{}}
 
         {:error, result, state_updates} ->
-          env_updates = Map.get(state_updates, :env_updates, %{})
+          env_updates = Map.get(state_updates, :variables, %{})
           {result.exit_code || 1, env_updates}
 
         {:error, result} ->
           {result.exit_code || 1, %{}}
 
         {:exit, result, state_updates} ->
-          env_updates = Map.get(state_updates, :env_updates, %{})
+          env_updates = Map.get(state_updates, :variables, %{})
           {result.exit_code || 0, env_updates}
 
         {:exit, result} ->
@@ -669,8 +664,13 @@ defmodule Bash.AST.Pipeline do
 
     env =
       session_state.variables
-      |> Enum.filter(fn {_k, v} -> Variable.get(v, nil) != nil end)
-      |> Enum.map(fn {k, v} -> {k, Variable.get(v, nil)} end)
+      |> Enum.flat_map(fn {k, v} ->
+        case Variable.get(v, nil) do
+          nil -> []
+          val when is_binary(val) -> [{k, val}]
+          _ -> []
+        end
+      end)
 
     {command_name, expanded_args, env}
   end

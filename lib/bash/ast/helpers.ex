@@ -21,94 +21,72 @@ defmodule Bash.AST.Helpers do
   end
 
   # Execute a body (list of statements) and track state changes
-  # Tracks env_updates (strings), var_updates (Variable structs), and working_dir
+  # Tracks variables (Variable structs) and working_dir
   # Output goes directly to sinks during execution
-  def execute_body([], _session_state, env_updates) do
-    {:ok, %CommandResult{exit_code: 0}, %{env_updates: env_updates}}
+  def execute_body([], _session_state, var_updates) do
+    {:ok, %CommandResult{exit_code: 0}, %{variables: var_updates}}
   end
 
-  def execute_body(statements, session_state, env_updates) do
+  def execute_body(statements, session_state, var_updates) do
     statements = executable_statements(statements)
-    # Track accumulated state: {env_updates, var_updates, working_dir}
-    # env_updates: string values, var_updates: Variable structs (for arrays, etc.)
-    initial_acc = {env_updates, %{}, session_state.working_dir}
+    initial_acc = {var_updates, session_state.working_dir}
 
-    {final_result, {final_env, final_var, final_working_dir}} =
+    {final_result, {final_var, final_working_dir}} =
       Enum.reduce_while(
         statements,
         {{:ok, %CommandResult{exit_code: 0}}, initial_acc},
-        fn stmt, {_last_result, {acc_env, acc_var, acc_working_dir}} ->
-          # Apply accumulated state updates for this statement
-          # Convert env updates to Variable structs and merge with var_updates
-          env_as_vars = Map.new(acc_env, fn {k, v} -> {k, Variable.new(v)} end)
-
+        fn stmt, {_last_result, {acc_var, acc_working_dir}} ->
           stmt_session = %{
             session_state
             | variables:
                 session_state.variables
-                |> Map.merge(env_as_vars)
                 |> Map.merge(acc_var),
               working_dir: acc_working_dir
           }
 
           case Executor.execute(stmt, stmt_session, nil) do
             {:ok, result, updates} ->
-              # Collect both env_updates and var_updates
-              env_updates_from_stmt = Map.get(updates, :env_updates, %{})
-              var_updates_from_stmt = Map.get(updates, :var_updates, %{})
-              # Keep var_updates as Variable structs (for arrays, etc.)
-              merged_env = Map.merge(acc_env, env_updates_from_stmt)
-              merged_var = Map.merge(acc_var, var_updates_from_stmt)
-              # Track working_dir if it was updated by this command (e.g., cd)
+              variables_from_stmt = Map.get(updates, :variables, %{})
+              merged_var = Map.merge(acc_var, variables_from_stmt)
               new_working_dir = Map.get(updates, :working_dir, acc_working_dir)
-              {:cont, {{:ok, result}, {merged_env, merged_var, new_working_dir}}}
+              {:cont, {{:ok, result}, {merged_var, new_working_dir}}}
 
             {:ok, result} ->
-              {:cont, {{:ok, result}, {acc_env, acc_var, acc_working_dir}}}
+              {:cont, {{:ok, result}, {acc_var, acc_working_dir}}}
 
             {:error, _result} = err ->
-              # Stop on error
-              {:halt, {err, {acc_env, acc_var, acc_working_dir}}}
+              {:halt, {err, {acc_var, acc_working_dir}}}
 
             {:error, result, updates} ->
-              # Error with updates (e.g., hash_updates)
-              env_updates_from_stmt = Map.get(updates, :env_updates, %{})
-              var_updates_from_stmt = Map.get(updates, :var_updates, %{})
-              merged_env = Map.merge(acc_env, env_updates_from_stmt)
-              merged_var = Map.merge(acc_var, var_updates_from_stmt)
+              variables_from_stmt = Map.get(updates, :variables, %{})
+              merged_var = Map.merge(acc_var, variables_from_stmt)
               new_working_dir = Map.get(updates, :working_dir, acc_working_dir)
-              {:halt, {{:error, result}, {merged_env, merged_var, new_working_dir}}}
+              {:halt, {{:error, result}, {merged_var, new_working_dir}}}
 
             {:exit, result} ->
-              # exit builtin - terminate execution immediately
-              {:halt, {{:exit, result}, {acc_env, acc_var, acc_working_dir}}}
+              {:halt, {{:exit, result}, {acc_var, acc_working_dir}}}
 
             {:break, result, levels} ->
-              # break inside body - propagate upward and stop
-              {:halt, {{:break, result, levels}, {acc_env, acc_var, acc_working_dir}}}
+              {:halt, {{:break, result, levels}, {acc_var, acc_working_dir}}}
 
             {:continue, result, levels} ->
-              # continue inside body - propagate upward and stop
-              {:halt, {{:continue, result, levels}, {acc_env, acc_var, acc_working_dir}}}
+              {:halt, {{:continue, result, levels}, {acc_var, acc_working_dir}}}
 
             {:background, foreground_ast, bg_session_state} ->
-              # Background command inside a body - propagate upward to Session level
               {:halt,
-               {{:background, foreground_ast, bg_session_state},
-                {acc_env, acc_var, acc_working_dir}}}
+               {{:background, foreground_ast, bg_session_state}, {acc_var, acc_working_dir}}}
 
             {:exec, _result} = exec ->
-              {:halt, {exec, {acc_env, acc_var, acc_working_dir}}}
+              {:halt, {exec, {acc_var, acc_working_dir}}}
           end
         end
       )
 
     case final_result do
       {:ok, result} ->
-        # Build state updates, including var_updates if any
         state_updates =
-          %{env_updates: final_env}
-          |> maybe_add_var_updates(final_var)
+          %{}
+          |> maybe_add_variables(final_var)
           |> maybe_add_working_dir(final_working_dir, session_state.working_dir)
 
         {:ok, result, state_updates}
@@ -118,13 +96,13 @@ defmodule Bash.AST.Helpers do
     end
   end
 
-  # Add var_updates to state_updates map if non-empty
-  defp maybe_add_var_updates(state_updates, var_updates) when map_size(var_updates) == 0 do
+  # Add variables to state_updates map if non-empty
+  defp maybe_add_variables(state_updates, variables) when map_size(variables) == 0 do
     state_updates
   end
 
-  defp maybe_add_var_updates(state_updates, var_updates) do
-    Map.put(state_updates, :var_updates, var_updates)
+  defp maybe_add_variables(state_updates, variables) do
+    Map.put(state_updates, :variables, variables)
   end
 
   # Add working_dir to state_updates if it changed
@@ -144,13 +122,12 @@ defmodule Bash.AST.Helpers do
 
   def word_to_string(str, _session_state) when is_binary(str), do: str
 
-  # Expand a word to a string and return env updates from arithmetic expressions
+  # Expand a word to a string and return variable updates from arithmetic expressions
   # and ${var:=default} expansions.
   #
   # This is needed because $((n++)) and ${x:=default} should update variables.
   #
-  # The env_updates are threaded through each part expansion, so $((++n)) followed
-  # by $((n++)) will see the updated value of n from the first expansion.
+  # Returns {string, var_updates} where var_updates is a map of name => Variable struct.
   @doc false
   def word_to_string_with_updates(%AST.Word{parts: parts}, session_state) do
     {result_parts, env_updates, _final_state} =
@@ -161,7 +138,8 @@ defmodule Bash.AST.Helpers do
         {[result | results], Map.merge(acc_updates, updates), new_state}
       end)
 
-    {result_parts |> Enum.reverse() |> Enum.join(""), env_updates}
+    var_updates = Map.new(env_updates, fn {k, v} -> {k, Variable.new(v)} end)
+    {result_parts |> Enum.reverse() |> Enum.join(""), var_updates}
   end
 
   def word_to_string_with_updates(str, _session_state) when is_binary(str), do: {str, %{}}

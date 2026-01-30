@@ -76,9 +76,10 @@ defmodule Bash.AST.Assignment do
     # Build updates for this assignment
     assignment_updates =
       if should_export do
-        %{env_updates: %{target_name => expanded_value}}
+        var = Bash.Variable.new(expanded_value)
+        %{variables: %{target_name => %{var | attributes: %{var.attributes | export: true}}}}
       else
-        %{var_updates: %{target_name => Bash.Variable.new(expanded_value)}}
+        %{variables: %{target_name => Bash.Variable.new(expanded_value)}}
       end
 
     # Merge with any updates from the value expansion (e.g., ${x:=default})
@@ -100,10 +101,10 @@ defmodule Bash.AST.Assignment do
   end
 
   defp merge_updates(assignment_updates, value_updates) do
-    # Value updates are env_updates (string values) - merge them
-    existing_env = Map.get(assignment_updates, :env_updates, %{})
-    merged_env = Map.merge(value_updates, existing_env)
-    Map.put(assignment_updates, :env_updates, merged_env)
+    existing_vars = Map.get(assignment_updates, :variables, %{})
+    value_vars = Map.new(value_updates, fn {k, v} -> {k, Bash.Variable.new(v)} end)
+    merged_vars = Map.merge(value_vars, existing_vars)
+    Map.put(assignment_updates, :variables, merged_vars)
   end
 
   # Follow nameref chain to find the actual target variable

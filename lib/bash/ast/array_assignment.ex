@@ -166,7 +166,7 @@ defmodule Bash.AST.ArrayAssignment do
         end
       end
 
-    updates = %{var_updates: %{name => var}}
+    updates = %{variables: %{name => var}}
     completed_at = DateTime.utc_now()
 
     executed_ast = %{
@@ -230,7 +230,7 @@ defmodule Bash.AST.ArrayAssignment do
     idx = evaluate_subscript(subscript, session_state, is_associative)
     expanded_value = Helpers.word_to_string(value_word, session_state)
     updated_var = Variable.set(var, expanded_value, idx)
-    updates = %{var_updates: %{name => updated_var}}
+    updates = %{variables: %{name => updated_var}}
     completed_at = DateTime.utc_now()
 
     executed_ast = %{

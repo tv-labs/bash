@@ -49,15 +49,15 @@ defmodule Bash.Builtin.Read do
   #
   # # Read into REPLY (default)
   # iex> Read.execute([], "hello world", %{variables: %{}})
-  # {:ok, %CommandResult{exit_code: 0}, %{var_updates: %{"REPLY" => %Variable{value: "hello world"}}}}
+  # {:ok, %CommandResult{exit_code: 0}, %{variables: %{"REPLY" => %Variable{value: "hello world"}}}}
   #
   # # Read into named variable
   # iex> Read.execute(["myvar"], "hello", %{variables: %{}})
-  # {:ok, %CommandResult{exit_code: 0}, %{var_updates: %{"myvar" => %Variable{value: "hello"}}}}
+  # {:ok, %CommandResult{exit_code: 0}, %{variables: %{"myvar" => %Variable{value: "hello"}}}}
   #
   # # Read into multiple variables
   # iex> Read.execute(["a", "b"], "one two three", %{variables: %{}})
-  # {:ok, %CommandResult{exit_code: 0}, %{var_updates: %{"a" => %Variable{value: "one"}, "b" => %Variable{value: "two three"}}}}
+  # {:ok, %CommandResult{exit_code: 0}, %{variables: %{"a" => %Variable{value: "one"}, "b" => %Variable{value: "two three"}}}}
   #
   @doc false
   defbash execute(args, state) do
@@ -345,7 +345,7 @@ defmodule Bash.Builtin.Read do
     if input == nil or input == "" do
       # EOF - set variables to empty and return 1
       var_updates = build_eof_updates(opts, var_names, session_state)
-      update_state(var_updates: var_updates)
+      update_state(variables: var_updates)
       {:ok, 1}
     else
       # Read the input (for device-based reading, input is already one line)
@@ -362,7 +362,7 @@ defmodule Bash.Builtin.Read do
         write(opts.prompt)
       end
 
-      update_state(var_updates: var_updates)
+      update_state(variables: var_updates)
       :ok
     end
   end

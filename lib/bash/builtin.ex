@@ -124,45 +124,45 @@ defmodule Bash.Builtin do
         unquote(state_var) = state_with_stdin
 
         # Initialize execution context in process dictionary
-        Bash.Builtin.Context.init(state_with_stdin)
+        Bash.Context.init(state_with_stdin)
 
         try do
           result = unquote(body)
-          Bash.Builtin.Context.finalize(result)
+          Bash.Context.finalize(result)
         rescue
           e ->
-            Bash.Builtin.Context.cleanup()
+            Bash.Context.cleanup()
             reraise e, __STACKTRACE__
         end
       end
 
       # I/O helper functions injected into module scope
       defp puts(message) do
-        Bash.Builtin.Context.puts(message)
+        Bash.Context.puts(message)
       end
 
       defp write(data) do
-        Bash.Builtin.Context.write(data)
+        Bash.Context.write(data)
       end
 
       defp error(message) do
-        Bash.Builtin.Context.error(message)
+        Bash.Context.error(message)
       end
 
       defp gets do
-        Bash.Builtin.Context.gets()
+        Bash.Context.gets()
       end
 
       defp read(mode) do
-        Bash.Builtin.Context.read(mode)
+        Bash.Context.read(mode)
       end
 
       defp update_state(updates) do
-        Bash.Builtin.Context.update_state(updates)
+        Bash.Context.update_state(updates)
       end
 
       defp get_state do
-        Bash.Builtin.Context.get_state()
+        Bash.Context.get_state()
       end
     end
   end
