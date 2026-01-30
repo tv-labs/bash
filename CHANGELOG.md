@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Remove `Bash.Interop.IO` and other builtin context handling to consolidate 
 into `Bash.Context`. Expanded and clarified the `defbash` return signals and 
-how to update state.
+how to update state. An issue with the now-deleted `Bash.Interop.IO` was that 
+it would accumulate state where we intend be focused on streams.
 
 ## 0.2.1 (2026-01-29)
 
