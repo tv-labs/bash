@@ -20,7 +20,7 @@ and the ability to extend Bash with Elixir functions.
 
 ```elixir
 # Add to mix.exs
-{:bash, "~> 0.2.1"}
+{:bash, "~> 0.3.0"}
 ```
 
 ```elixir
