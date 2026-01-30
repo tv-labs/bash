@@ -289,8 +289,6 @@ defmodule ScriptMonitor do
     if duration_ms > 100 do
       Logger.warning("Slow command: #{metadata.command} took #{duration_ms}ms")
     end
-
-    :telemetry.execute([:my_app, :bash, :command], %{duration_ms: duration_ms}, metadata)
   end
 
   def handle_event([:bash, :session, :run, :stop], %{duration: duration}, metadata, _config) do

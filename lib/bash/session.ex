@@ -108,8 +108,6 @@ defmodule Bash.Session do
     # fd 0 is always stdin (passed as parameter), 1/2 are stdout/stderr (not readable)
     file_descriptors: %{},
     # StringIO device for streaming stdin (used by while loops with redirects)
-    # When set, read builtin uses IO.binread(device, :line) for line-by-line reading
-    stdin_device: nil,
     # Timeout for GenServer calls to child processes (coproc, jobs, etc.)
     # Propagated from Session.execute opts. Defaults to :infinity.
     call_timeout: :infinity,
@@ -123,6 +121,8 @@ defmodule Bash.Session do
     },
     # Positional parameters (scope stack for functions)
     positional_params: [[]],
+    # When set, read builtin uses IO.binread(device, :line) for line-by-line reading
+    stdin_device: nil,
     # Callback for starting background jobs synchronously (used by Script executor)
     start_background_job_fn: nil,
     signal_jobs_fn: nil,
