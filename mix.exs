@@ -32,7 +32,7 @@ defmodule Bash.MixProject do
       },
       maintainers: ["David Bernheisel"],
       source_ref: "v#{@version}",
-      files: ~w[lib .formatter.exs mix.exs docs CHANGELOG.md LICENSE.md]
+      files: ~w[lib .formatter.exs mix.exs docs README.md CHANGELOG.md LICENSE.md]
     ]
   end
 
