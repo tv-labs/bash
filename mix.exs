@@ -2,7 +2,7 @@ defmodule Bash.MixProject do
   use Mix.Project
 
   @source_url "https://github.com/tv-labs/bash"
-  @version "0.3.0"
+  @version "0.3.1"
 
   def project do
     [
@@ -31,8 +31,7 @@ defmodule Bash.MixProject do
         "GitHub" => @source_url
       },
       maintainers: ["David Bernheisel"],
-      source_ref: "v#{@version}",
-      files: ~w[lib .formatter.exs mix.exs docs README.md CHANGELOG.md LICENSE.md]
+      source_ref: "v#{@version}"
     ]
   end
 
