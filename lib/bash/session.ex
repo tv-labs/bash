@@ -938,9 +938,13 @@ defmodule Bash.Session do
   end
 
   def start_link(opts) do
-    id = Keyword.fetch!(opts, :id)
-    registry = opts[:registry] || SessionRegistry
-    GenServer.start_link(__MODULE__, opts, name: via(registry, id))
+    if opts[:env_include] && opts[:env_exclude] do
+      {:error, %ArgumentError{message: "cannot specify both :env_include and :env_exclude"}}
+    else
+      id = Keyword.fetch!(opts, :id)
+      registry = opts[:registry] || SessionRegistry
+      GenServer.start_link(__MODULE__, opts, name: via(registry, id))
+    end
   end
 
   @impl GenServer
@@ -950,11 +954,14 @@ defmodule Bash.Session do
     id = Keyword.fetch!(opts, :id)
     working_dir = opts[:working_dir] || System.get_env("PWD") || "/"
 
-    # Use inherited variables if provided (for child sessions), otherwise use Bash defaults
     base_variables =
       case opts[:variables] do
-        nil -> get_bash_default_variables(working_dir)
-        vars -> vars
+        nil ->
+          system_env = resolve_system_env(opts)
+          Map.merge(system_env, get_bash_default_variables(working_dir))
+
+        vars ->
+          vars
       end
 
     variables =
@@ -2842,6 +2849,24 @@ defmodule Bash.Session do
   defp maybe_delete_history_entry(state, _), do: state
 
   # Get default Bash environment variables
+  defp resolve_system_env(opts) do
+    case {opts[:env_include], opts[:env_exclude]} do
+      {nil, nil} ->
+        %{}
+
+      {include, nil} ->
+        System.get_env()
+        |> Map.new()
+        |> Map.take(include)
+
+      {nil, exclude} ->
+        System.get_env()
+        |> Map.new()
+        |> Map.drop(exclude)
+    end
+    |> Map.new(fn {k, v} -> {k, Variable.new(v)} end)
+  end
+
   defp get_bash_default_variables(working_dir) do
     # Detect system information
     {hostname, _} = System.cmd("hostname", [])
