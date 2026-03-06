@@ -1621,7 +1621,6 @@ defmodule Bash.AST.Helpers do
     ""
   end
 
-  # Check if nounset option is enabled in session state
   defp nounset_enabled?(session_state) do
     options = Map.get(session_state, :options, %{})
     Map.get(options, :nounset, false) == true

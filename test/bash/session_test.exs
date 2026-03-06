@@ -266,10 +266,11 @@ defmodule Bash.SessionTest do
     end
 
     test "function is callable within same script", %{session: session} do
-      result = run_script(session, """
-      add() { local a=$1; local b=$2; local sum=$((a + b)); echo $sum; }
-      add 3 4
-      """)
+      result =
+        run_script(session, """
+        add() { local a=$1; local b=$2; local sum=$((a + b)); echo $sum; }
+        add 3 4
+        """)
 
       assert get_stdout(result) == "7\n"
     end
@@ -281,20 +282,22 @@ defmodule Bash.SessionTest do
     end
 
     test "function receives positional parameters", %{session: session} do
-      result = run_script(session, """
-      show() { echo "one=$1 two=$2"; }
-      show a b
-      """)
+      result =
+        run_script(session, """
+        show() { echo "one=$1 two=$2"; }
+        show a b
+        """)
 
       assert get_stdout(result) == "one=a two=b\n"
     end
 
     test "local variables in functions do not leak", %{session: session} do
-      result = run_script(session, """
-      myfn() { local inner=secret; echo "inside=$inner"; }
-      myfn
-      echo "outside=${inner:-empty}"
-      """)
+      result =
+        run_script(session, """
+        myfn() { local inner=secret; echo "inside=$inner"; }
+        myfn
+        echo "outside=${inner:-empty}"
+        """)
 
       stdout = get_stdout(result)
       assert stdout =~ "inside=secret"
@@ -308,28 +311,30 @@ defmodule Bash.SessionTest do
     end
 
     test "recursive function works", %{session: session} do
-      result = run_script(session, """
-      factorial() {
-        if [ $1 -le 1 ]; then
-          echo 1
-        else
-          local prev=$(factorial $(($1 - 1)))
-          echo $(($1 * prev))
-        fi
-      }
-      factorial 5
-      """)
+      result =
+        run_script(session, """
+        factorial() {
+          if [ $1 -le 1 ]; then
+            echo 1
+          else
+            local prev=$(factorial $(($1 - 1)))
+            echo $(($1 * prev))
+          fi
+        }
+        factorial 5
+        """)
 
       assert get_stdout(result) == "120\n"
     end
 
     test "multiple functions can be defined and called", %{session: session} do
-      result = run_script(session, """
-      first() { echo "first"; }
-      second() { echo "second"; }
-      first
-      second
-      """)
+      result =
+        run_script(session, """
+        first() { echo "first"; }
+        second() { echo "second"; }
+        first
+        second
+        """)
 
       assert get_stdout(result) == "first\nsecond\n"
     end
