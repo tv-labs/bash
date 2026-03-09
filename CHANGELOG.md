@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.3 (2026-03-09)
+
+- Fixing compile warnings and `mix format` as a plugin issues.
+
 ## 0.3.2 (2026-03-06)
 
 - `Bash.Session.new(...)` accepts new options for loading env vars from the runtime's environment. Option `env_include: ["ENVVAR", ...]` will pluck these keys from `System.get_env()` when the session is initialized. Likewise, `env_exclude: ["ENVVAR", ...]` will drop the provided keys and include the rest from `System.get_env()`. Only one of these options can be provided at a time. By default, the runtime's environment variables **are not included** to avoid accidentally leaking secrets.
