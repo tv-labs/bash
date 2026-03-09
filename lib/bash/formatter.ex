@@ -45,7 +45,7 @@ defmodule Bash.Formatter do
 
   @impl Mix.Tasks.Format
   def features(_opts) do
-    [sigils: [:BASH, :b], extensions: [".sh", ".bash"]]
+    [sigils: [:BASH, :B], extensions: [".sh", ".bash"]]
   end
 
   @impl Mix.Tasks.Format

@@ -33,9 +33,6 @@ defmodule Bash.Builtin.Source do
 
             {:ok, exit_code}
 
-          {:ok, exit_code} ->
-            {:ok, exit_code}
-
           {:error, msg} ->
             error(msg)
             {:ok, 1}
@@ -101,23 +98,14 @@ defmodule Bash.Builtin.Source do
         }
 
         case Script.execute(script, nil, nested_state) do
-          {:ok, result, updates} when is_map(updates) ->
+          {:ok, result, updates} ->
             {:ok, result.exit_code || 0, updates}
 
-          {:ok, result, _} ->
-            {:ok, result.exit_code || 0}
-
-          {:exit, result, updates} when is_map(updates) ->
+          {:exit, result, updates} ->
             {:ok, result.exit_code || 0, updates}
 
-          {:exit, result, _} ->
-            {:ok, result.exit_code || 0}
-
-          {:error, result, updates} when is_map(updates) ->
+          {:error, result, updates} ->
             {:ok, result.exit_code || 1, updates}
-
-          {:error, result, _} ->
-            {:ok, result.exit_code || 1}
         end
 
       {:error, msg, line, _col} ->

@@ -368,12 +368,9 @@ defmodule Bash.AST.Helpers do
          },
          session_state
        ) do
-    value = expand_array_element(session_state, var_name, idx_expr)
-
-    if value == nil or value == "" do
-      expand_word_or_string(default_value, session_state)
-    else
-      value
+    case expand_array_element(session_state, var_name, idx_expr) do
+      "" -> expand_word_or_string(default_value, session_state)
+      value -> value
     end
   end
 
@@ -386,12 +383,9 @@ defmodule Bash.AST.Helpers do
          },
          session_state
        ) do
-    value = expand_array_element(session_state, var_name, idx_expr)
-
-    if value != nil and value != "" do
-      expand_word_or_string(alt_value, session_state)
-    else
-      ""
+    case expand_array_element(session_state, var_name, idx_expr) do
+      "" -> ""
+      _value -> expand_word_or_string(alt_value, session_state)
     end
   end
 
@@ -404,12 +398,9 @@ defmodule Bash.AST.Helpers do
          },
          session_state
        ) do
-    value = expand_array_element(session_state, var_name, idx_expr)
-
-    if value == nil or value == "" do
-      expand_word_or_string(default_value, session_state)
-    else
-      value
+    case expand_array_element(session_state, var_name, idx_expr) do
+      "" -> expand_word_or_string(default_value, session_state)
+      value -> value
     end
   end
 

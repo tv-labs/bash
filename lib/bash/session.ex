@@ -1156,9 +1156,7 @@ defmodule Bash.Session do
         }
 
         # Use temp sinks for job notification output (the [1] message)
-        if state_with_sinks.stdout_sink do
-          state_with_sinks.stdout_sink.({:stdout, ""})
-        end
+        state_with_sinks.stdout_sink.({:stdout, ""})
 
         {:reply, reply_value, new_state} = do_start_background_job(foreground_ast, bg_state)
         # Transfer job notification output to session's persistent collector
