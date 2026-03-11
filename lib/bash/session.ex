@@ -1087,12 +1087,14 @@ defmodule Bash.Session do
     stdout_sink =
       case Keyword.get(opts, :stdout_into) do
         nil -> Sink.collector(collector)
+        callback when is_function(callback, 1) -> callback
         collectable -> Sink.stream(collectable, stream_type: :stdout)
       end
 
     stderr_sink =
       case Keyword.get(opts, :stderr_into) do
         nil -> Sink.collector(collector)
+        callback when is_function(callback, 1) -> callback
         collectable -> Sink.stream(collectable, stream_type: :stderr)
       end
 

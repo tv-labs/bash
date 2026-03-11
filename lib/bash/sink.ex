@@ -150,7 +150,6 @@ defmodule Bash.Sink do
   def passthrough(callback) when is_function(callback, 1) do
     fn chunk ->
       callback.(chunk)
-      :ok
     end
   end
 

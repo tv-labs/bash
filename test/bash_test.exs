@@ -296,6 +296,56 @@ defmodule BashTest do
     end
   end
 
+  describe "execution options" do
+    test "on_output streams stdout and stderr to callback", %{session: session} do
+      test_pid = self()
+
+      {:ok, _result, _session} =
+        Bash.run("echo out; echo err >&2", session,
+          on_output: fn chunk -> send(test_pid, {:chunk, chunk}) end
+        )
+
+      assert_received {:chunk, {:stdout, "out\n"}}
+      assert_received {:chunk, {:stderr, "err\n"}}
+    end
+
+    test "stdout_into streams stdout to collectable", %{session: session} do
+      buf = StringIO.open("") |> elem(1)
+
+      Bash.run("echo hello", session, stdout_into: IO.stream(buf, :line))
+
+      assert StringIO.contents(buf) |> elem(1) == "hello\n"
+    end
+
+    test "stderr_into streams stderr to collectable", %{session: session} do
+      buf = StringIO.open("") |> elem(1)
+
+      Bash.run("echo err >&2", session, stderr_into: IO.stream(buf, :line))
+
+      assert StringIO.contents(buf) |> elem(1) == "err\n"
+    end
+
+    test "stdout_into accepts a sink function", %{session: session} do
+      test_pid = self()
+
+      Bash.run("echo hello", session,
+        stdout_into: fn {:stdout, data} -> send(test_pid, {:out, data}) end
+      )
+
+      assert_received {:out, "hello\n"}
+    end
+
+    test "stderr_into accepts a sink function", %{session: session} do
+      test_pid = self()
+
+      Bash.run("echo err >&2", session,
+        stderr_into: fn {:stderr, data} -> send(test_pid, {:err, data}) end
+      )
+
+      assert_received {:err, "err\n"}
+    end
+  end
+
   describe "sigil" do
     test "~BASH sigil produces AST at compile time" do
       ast = ~BASH"echo hello"

@@ -92,12 +92,12 @@ defmodule Bash do
     end
   end
 
-  def run(%Script{} = script, session_or_opts, _opts) do
-    {session_pid, _resolved_opts} = resolve_session(session_or_opts)
+  def run(%Script{} = script, session_or_opts, opts) do
+    {session_pid, opts} = resolve_session(session_or_opts, opts)
 
     Telemetry.span(session_pid, fn ->
       result =
-        case Session.execute(session_pid, script) do
+        case Session.execute(session_pid, script, opts) do
           {:ok, executed_script} ->
             {:ok, executed_script, session_pid}
 
@@ -117,13 +117,13 @@ defmodule Bash do
   end
 
   def run(ast, session_or_opts, opts) do
-    {session_pid, _resolved_opts} = resolve_session(session_or_opts)
+    {session_pid, opts} = resolve_session(session_or_opts, opts)
     await = Keyword.get(opts, :await, true)
 
     if await do
       Telemetry.span(session_pid, fn ->
         result =
-          case Session.execute(session_pid, ast) do
+          case Session.execute(session_pid, ast, opts) do
             {:ok, result} ->
               {:ok, result, session_pid}
 
@@ -201,19 +201,19 @@ defmodule Bash do
     end
   end
 
-  defp resolve_session(pid) when is_pid(pid), do: {pid, []}
+  defp resolve_session(pid, opts) when is_pid(pid), do: {pid, opts}
 
-  defp resolve_session(opts) when is_list(opts) or is_map(opts) or is_nil(opts) do
-    opts_list = if is_map(opts), do: Map.to_list(opts), else: opts || []
+  defp resolve_session(opts, extra) when is_list(opts) or is_map(opts) or is_nil(opts) do
+    opts = if is_map(opts), do: Map.to_list(opts), else: opts || []
+    opts = Keyword.merge(opts, extra)
 
-    case Keyword.get(opts_list, :session) do
-      pid when is_pid(pid) ->
-        remaining_opts = Keyword.delete(opts_list, :session)
-        {pid, remaining_opts}
+    case Keyword.pop(opts, :session) do
+      {pid, opts} when is_pid(pid) ->
+        {pid, opts}
 
-      nil ->
-        {:ok, pid} = Session.new(opts_list)
-        {pid, opts_list}
+      {nil, opts} ->
+        {:ok, pid} = Session.new(opts)
+        {pid, opts}
     end
   end
 
