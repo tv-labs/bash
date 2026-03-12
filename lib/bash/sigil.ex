@@ -1,9 +1,9 @@
 defmodule Bash.Sigil do
   @moduledoc """
-  Sigil implementation for ~BASH and ~bash.
+  Sigil implementation for `~BASH`.
 
-  This module provides the ~BASH/bash sigil that parses Bash scripts at compile time
-  and returns a Script struct for execution.
+  This module provides the `~BASH` sigil that parses Bash scripts at compile time
+  and returns a Script struct for execution. Supports Elixir `\#{}` interpolation.
 
   ## Validation
 
@@ -88,18 +88,12 @@ defmodule Bash.Sigil do
       "hi\n"
 
   """
-  defmacro sigil_b(term, modifiers) do
-    handle_sigil(term, modifiers)
-  end
-
-  defmacro sigil_BASH(term, modifiers) do
-    handle_sigil(term, modifiers)
-  end
-
-  defp handle_sigil(term, modifiers) do
-    case term do
-      {:<<>>, _, [script]} when is_binary(script) ->
-        case parse_and_validate(script) do
+  defmacro sigil_BASH({:<<>>, _meta, [raw]}, modifiers) when is_binary(raw) do
+    case extract_interpolations(raw) do
+      {:static, script} ->
+        script
+        |> parse_and_validate()
+        |> case do
           {:ok, ast} ->
             wrap_with_modifier(Macro.escape(ast), modifiers)
 
@@ -107,15 +101,74 @@ defmodule Bash.Sigil do
             raise error
         end
 
-      {:<<>>, _, _parts} ->
+      {:dynamic, pieces} ->
+        pieces
+        |> placeholder_script()
+        |> validate!()
+
+        binary_ast = {:<<>>, [], unescape_tokens(pieces)}
+
         parsed =
           quote do
-            Bash.Sigil.parse_at_runtime(unquote(term))
+            Bash.Sigil.parse_at_runtime(unquote(binary_ast))
           end
 
         wrap_with_modifier(parsed, modifiers)
     end
   end
+
+  @placeholder "__INTERP__"
+  @tokenizer_scope {:elixir_tokenizer, [], true, false, false, nil, nil, :elixir_tokenizer, true,
+                    0, 1, [], []}
+
+  defp extract_interpolations(raw) do
+    charlist = String.to_charlist(raw) ++ [?\0]
+
+    case :elixir_interpolation.extract(1, 1, @tokenizer_scope, true, charlist, ?\0) do
+      {_line, _col, [single], [], _scope} when is_list(single) ->
+        {:static, :elixir_interpolation.unescape_string(raw, &unescape_map/1)}
+
+      {_line, _col, parts, [], _scope} ->
+        pieces =
+          Enum.map(parts, fn
+            charlist when is_list(charlist) ->
+              List.to_string(charlist)
+
+            {_start, _end, tokens} ->
+              {:ok, expr} = :elixir.tokens_to_quoted(tokens, "nofile", [])
+              {{:., [], [Kernel, :to_string]}, [from_interpolation: true], [expr]}
+          end)
+
+        {:dynamic, pieces}
+    end
+  end
+
+  defp placeholder_script(pieces) do
+    Enum.map_join(pieces, fn
+      binary when is_binary(binary) -> binary
+      _expr -> @placeholder
+    end)
+  end
+
+  defp validate!(script) do
+    case parse_and_validate(script) do
+      {:ok, _ast} -> :ok
+      {:error, %SyntaxError{} = error} -> raise error
+    end
+  end
+
+  defp unescape_tokens(pieces) do
+    Enum.map(pieces, fn
+      binary when is_binary(binary) ->
+        :elixir_interpolation.unescape_string(binary, &unescape_map/1)
+
+      expr ->
+        {:"::", [], [expr, {:binary, [], nil}]}
+    end)
+  end
+
+  defp unescape_map(:newline), do: true
+  defp unescape_map(_), do: false
 
   defp wrap_with_modifier(ast_quoted, []), do: ast_quoted
 

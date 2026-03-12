@@ -2,7 +2,7 @@ defmodule Bash.Formatter do
   @moduledoc """
   Mix formatter plugin for Bash scripts and sigils.
 
-  Formats `.sh` and `.bash` files, as well as `~BASH` and `~b` sigils in Elixir code.
+  Formats `.sh` and `.bash` files, as well as the `~BASH` sigil in Elixir code.
 
   ## Configuration
 
@@ -45,7 +45,7 @@ defmodule Bash.Formatter do
 
   @impl Mix.Tasks.Format
   def features(_opts) do
-    [sigils: [:BASH, :B], extensions: [".sh", ".bash"]]
+    [sigils: [:BASH], extensions: [".sh", ".bash"]]
   end
 
   @impl Mix.Tasks.Format

@@ -13,16 +13,16 @@ defmodule Bash.Builtin.HistoryTest do
       {:ok, session} = Session.new()
 
       # Run some commands to build up history
-      {:ok, _result, session} = Bash.run(~b"echo first", session)
-      {:ok, _result, session} = Bash.run(~b"echo second", session)
-      {:ok, _result, session} = Bash.run(~b"echo third", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo first", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo second", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo third", session)
 
       # Verify history has 3 entries
       history = Session.get_command_history(session)
       assert length(history) == 3
 
       # Clear history
-      {:ok, result, session} = Bash.run(~b"history -c", session)
+      {:ok, result, session} = Bash.run(~BASH"history -c", session)
       assert result.exit_code == 0
 
       # Verify history is now empty
@@ -36,12 +36,12 @@ defmodule Bash.Builtin.HistoryTest do
       {:ok, session} = Session.new()
 
       # Build up history
-      {:ok, _result, session} = Bash.run(~b"echo first", session)
-      {:ok, _result, session} = Bash.run(~b"echo second", session)
-      {:ok, _result, session} = Bash.run(~b"echo third", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo first", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo second", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo third", session)
 
       # Delete the second entry (1-based index)
-      {:ok, result, session} = Bash.run(~b"history -d 2", session)
+      {:ok, result, session} = Bash.run(~BASH"history -d 2", session)
       assert result.exit_code == 0
 
       # Verify we now have 3 entries (the deleted entry was removed, but history -d was added)
@@ -58,13 +58,13 @@ defmodule Bash.Builtin.HistoryTest do
       {:ok, session} = Session.new()
 
       # Build up history
-      {:ok, _result, session} = Bash.run(~b"echo first", session)
-      {:ok, _result, session} = Bash.run(~b"echo second", session)
-      {:ok, _result, session} = Bash.run(~b"echo third", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo first", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo second", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo third", session)
 
       # Delete the last entry using negative offset
       # This will delete "echo third" before "history -d -1" is added
-      {:ok, result, session} = Bash.run(~b"history -d -1", session)
+      {:ok, result, session} = Bash.run(~BASH"history -d -1", session)
       assert result.exit_code == 0
 
       # Verify we now have 3 entries ("echo first", "echo second", "history")
@@ -75,10 +75,10 @@ defmodule Bash.Builtin.HistoryTest do
     test "returns error for out of range offset" do
       {:ok, session} = Session.new()
 
-      {:ok, _result, session} = Bash.run(~b"echo first", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo first", session)
 
       # Try to delete entry that doesn't exist
-      {:ok, result, _session} = Bash.run(~b"history -d 100", session)
+      {:ok, result, _session} = Bash.run(~BASH"history -d 100", session)
       assert result.exit_code == 1
       # Check stderr output for error message
       assert ExecutionResult.stderr(result) =~ "out of range"
@@ -89,10 +89,10 @@ defmodule Bash.Builtin.HistoryTest do
     test "lists all history entries" do
       {:ok, session} = Session.new()
 
-      {:ok, _result, session} = Bash.run(~b"echo first", session)
-      {:ok, _result, session} = Bash.run(~b"echo second", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo first", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo second", session)
 
-      {:ok, result, _session} = Bash.run(~b"history", session)
+      {:ok, result, _session} = Bash.run(~BASH"history", session)
       assert result.exit_code == 0
 
       output = ExecutionResult.stdout(result)
@@ -103,11 +103,11 @@ defmodule Bash.Builtin.HistoryTest do
     test "lists last N entries when count is specified" do
       {:ok, session} = Session.new()
 
-      {:ok, _result, session} = Bash.run(~b"echo first", session)
-      {:ok, _result, session} = Bash.run(~b"echo second", session)
-      {:ok, _result, session} = Bash.run(~b"echo third", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo first", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo second", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo third", session)
 
-      {:ok, result, _session} = Bash.run(~b"history 2", session)
+      {:ok, result, _session} = Bash.run(~BASH"history 2", session)
       assert result.exit_code == 0
 
       output = ExecutionResult.stdout(result)
@@ -120,8 +120,8 @@ defmodule Bash.Builtin.HistoryTest do
     test "formats command results with line numbers" do
       {:ok, session} = Session.new()
 
-      {:ok, _result, session} = Bash.run(~b"echo hello", session)
-      {:ok, _result, session} = Bash.run(~b"pwd", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo hello", session)
+      {:ok, _result, session} = Bash.run(~BASH"pwd", session)
 
       history = Session.get_command_history(session)
       formatted = History.format_history(history)
@@ -133,9 +133,9 @@ defmodule Bash.Builtin.HistoryTest do
     test "formats with custom count" do
       {:ok, session} = Session.new()
 
-      {:ok, _result, session} = Bash.run(~b"echo one", session)
-      {:ok, _result, session} = Bash.run(~b"echo two", session)
-      {:ok, _result, session} = Bash.run(~b"echo three", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo one", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo two", session)
+      {:ok, _result, session} = Bash.run(~BASH"echo three", session)
 
       history = Session.get_command_history(session)
       formatted = History.format_history(history, count: 2)

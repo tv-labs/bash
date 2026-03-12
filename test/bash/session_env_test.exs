@@ -286,7 +286,7 @@ defmodule Bash.SessionEnvTest do
 
       {:ok, result, _session} =
         Bash.run(
-          ~b"echo $TOOLKIT/utils",
+          ~BASH"echo $TOOLKIT/utils",
           env: %{"TOOLKIT" => "/path/to/toolkit"}
         )
 

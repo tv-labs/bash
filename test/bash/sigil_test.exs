@@ -54,6 +54,34 @@ defmodule Bash.SigilTest do
     end
   end
 
+  describe "sigil interpolation" do
+    test "interpolates variable into command" do
+      name = "world"
+      assert ~BASH"echo #{name}"S == "world\n"
+    end
+
+    test "interpolates expression with single quotes in bash context" do
+      val = "it's a test"
+      assert ~BASH"echo '#{Bash.escape!(val, ?')}'"S == "it's a test\n"
+    end
+
+    test "interpolates at start of script" do
+      cmd = "echo hello"
+      assert ~BASH"#{cmd}"S == "hello\n"
+    end
+
+    test "interpolates multiple values" do
+      greeting = "hello"
+      name = "world"
+      assert ~BASH"echo #{greeting} #{name}"S == "hello world\n"
+    end
+
+    test "returns Script struct without output modifier" do
+      name = "world"
+      assert %Script{} = ~BASH"echo #{name}"
+    end
+  end
+
   describe "sigil validation errors (runtime)" do
     # Test validation errors using parse_at_runtime since compile-time
     # errors can't be easily tested in the same module

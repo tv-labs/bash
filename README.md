@@ -95,7 +95,7 @@ power - call Elixir functions directly from Bash pipelines.
 
 | Feature | Description |
 |---------|-------------|
-| **Compile-time parsing** | `~BASH` and `~b` sigil validates scripts at compile time with ShellCheck-compatible errors |
+| **Compile-time parsing** | `~BASH` sigil validates scripts at compile time with ShellCheck-compatible errors |
 | **Persistent sessions** | Maintain environment variables, working directory, aliases, functions, and history |
 | **Elixir interop** | Define Elixir functions callable from Bash using `defbash` |
 | **Full I/O support** | Redirections, pipes, heredocs, process substitution |
@@ -108,12 +108,12 @@ power - call Elixir functions directly from Bash pipelines.
 
 ```elixir
 # Simple execution
-{:ok, result, _} = Bash.run(~b"echo hello")
+{:ok, result, _} = Bash.run(~BASH"echo hello")
 Bash.stdout(result)
 #=> "hello\n"
 
 # With environment variables
-{:ok, result, _} = Bash.run(~b"echo $USER", env: %{"USER" => "alice"})
+{:ok, result, _} = Bash.run(~BASH"echo $USER", env: %{"USER" => "alice"})
 Bash.stdout(result)
 #=> "alice\n"
 
@@ -137,8 +137,7 @@ import Bash.Sigil
 ~BASH"echo error >&2"E       # returns stderr string
 ~BASH"echo hello"            # returns %Bash.Script{} AST (no execution)
 person = "world"
-~BASH"echo 'Hello #{person}'"O  # returns "Hello #{person}\n"
-~b"echo 'Hello #{person}'"O     # returns "Hello world\n"
+~BASH"echo 'Hello #{person}'"O  # returns "Hello world\n"
 ```
 
 ### Sessions
@@ -300,7 +299,7 @@ end
 iex> ScriptMonitor.start_link()
 {:ok, #PID<...>}
 
-iex> ~b"sleep 4"O
+iex> ~BASH"sleep 4"O
 11:51:26.658 [warning] Slow command: sleep took 4017ms
 11:51:26.658 [info] Script completed in 4018ms (exit: 0)
 ```
@@ -316,7 +315,7 @@ defmodule GitHelper do
         "GIT_AUTHOR_EMAIL" => user.email,
       })
 
-    script = ~b"""
+    script = ~BASH"""
     git add -A
     git commit -m "#{message}"
     git push origin HEAD
@@ -329,7 +328,7 @@ defmodule GitHelper do
   end
 
   def branch_status do
-    ~b"""
+    ~BASH"""
     echo "Branch: $(git branch --show-current)"
     echo "Status:"
     git status --short
@@ -362,7 +361,7 @@ end
 # Usage:
 # import CI.Pipeline
 # step "Install deps" do
-#   ~b"mix deps.get"
+#   ~BASH"mix deps.get"
 # end
 ```
 
@@ -393,7 +392,7 @@ defmodule LogAnalyzer do
   def errors_per_hour(log_file) do
     {:ok, session} = Bash.Session.new(apis: [__MODULE__])
 
-    script = ~b"""
+    script = ~BASH"""
     grep ERROR #{log_file} | \\
       awk '{print $1}' | \\
       while read ts; do
@@ -418,7 +417,7 @@ defmodule DockerHelper do
   import Bash.Sigil
 
   def services_status do
-    ~b"""
+    ~BASH"""
     docker compose ps --format json | \\
       while read line; do
         name=$(echo "$line" | jq -r '.Name')
@@ -435,7 +434,7 @@ defmodule DockerHelper do
 
   def restart_unhealthy do
     for {name, "unhealthy"} <- services_status() do
-      Bash.run(~b"docker compose restart #{name}")
+      Bash.run(~BASH"docker compose restart #{name}")
     end
   end
 end
@@ -445,22 +444,21 @@ end
 
 ### Neovim Syntax Highlighting
 
-To get Bash syntax highlighting inside `~BASH` and `~b` sigils with Neovim and
+To get Bash syntax highlighting inside `~BASH` sigils with Neovim and
 treesitter, add this to `~/.config/nvim/after/queries/elixir/injections.scm`:
 
 ```scheme
-; Bash sigil highlighting for ~BASH and ~b
+; Bash sigil highlighting for ~BASH
 (sigil
   (sigil_name) @_sigil_name
   (quoted_content) @injection.content
-  (#any-of? @_sigil_name "BASH" "b")
+  (#eq? @_sigil_name "BASH")
   (#set! injection.language "bash"))
 ```
 
 This injects the `bash` language parser into sigil content, giving you:
 - Syntax highlighting for Bash commands, variables, and operators
 - Proper highlighting of `$VAR`, pipes, redirections, etc.
-- Works with both `~BASH"..."` and `~b"..."` variants
 
 Requires the Bash treesitter parser: `:TSInstall bash`
 

@@ -918,7 +918,7 @@ defmodule Bash.Session do
   ## Examples
 
       {:ok, session} = Session.new()
-      {:ok, _, _} = Bash.run(~b"echo hello", session)
+      {:ok, _, _} = Bash.run(~BASH"echo hello", session)
       {stdout, stderr} = Session.get_output(session)
       assert stdout =~ "hello"
   """
