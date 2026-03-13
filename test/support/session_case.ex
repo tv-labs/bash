@@ -144,6 +144,34 @@ defmodule Bash.SessionCase do
   end
 
   @doc """
+  Wait until a background job has a running OS process.
+
+  Polls `Session.list_jobs/1` until a job with the given number has a non-nil
+  `os_pid`, meaning the OS process has actually started and can receive signals.
+  Times out after `timeout` ms (default 2000).
+  """
+  def await_job_running(session, job_number, timeout \\ 2000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+
+    do_await_job_running(session, job_number, deadline)
+  end
+
+  defp do_await_job_running(session, job_number, deadline) do
+    if System.monotonic_time(:millisecond) > deadline do
+      raise "Timed out waiting for job #{job_number} to start"
+    end
+
+    case Session.get_job(session, job_number) do
+      {:ok, %{os_pid: pid, status: :running}} when is_integer(pid) ->
+        :ok
+
+      _ ->
+        Process.sleep(5)
+        do_await_job_running(session, job_number, deadline)
+    end
+  end
+
+  @doc """
   Create a session state suitable for direct builtin testing.
 
   Returns a state map with sinks configured for output capture.
