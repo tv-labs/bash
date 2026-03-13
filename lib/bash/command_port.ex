@@ -21,6 +21,7 @@ defmodule Bash.CommandPort do
   """
 
   alias Bash.CommandResult
+  alias Bash.ExternalProcess
 
   # Executes a command with optional stdin input.
   #
@@ -41,11 +42,12 @@ defmodule Bash.CommandPort do
     cd = opts[:cd] || File.cwd!()
     env = opts[:env] || []
     sink_opt = opts[:sink]
+    restricted = opts[:restricted] || false
 
-    execute_command(command_name, args, stdin, cd, env, timeout, sink_opt)
+    execute_command(command_name, args, stdin, cd, env, timeout, sink_opt, restricted)
   end
 
-  defp execute_command(command_name, args, stdin, cd, env, timeout, sink_opt) do
+  defp execute_command(command_name, args, stdin, cd, env, timeout, sink_opt, restricted) do
     cmd_parts = [command_name | args]
 
     # Check if command exists before trying to execute
@@ -60,11 +62,11 @@ defmodule Bash.CommandPort do
          error: :command_not_found
        }}
     else
-      execute_with_excmd(cmd_parts, stdin, cd, env, timeout, sink_opt)
+      execute_with_excmd(cmd_parts, stdin, cd, env, timeout, sink_opt, restricted)
     end
   end
 
-  defp execute_with_excmd(cmd_parts, stdin, cd, env, timeout, sink_opt) do
+  defp execute_with_excmd(cmd_parts, stdin, cd, env, timeout, sink_opt, restricted) do
     # Build ExCmd options - ExCmd 0.18.0 only accepts cd, env, and stderr options
     exec_opts = [
       cd: cd,
@@ -74,7 +76,18 @@ defmodule Bash.CommandPort do
 
     sink = sink_opt || fn _chunk -> :ok end
 
-    case ExCmd.Process.start_link(cmd_parts, exec_opts) do
+    case ExternalProcess.start_link(cmd_parts, exec_opts, restricted) do
+      {:error, :restricted} ->
+        command_name = hd(cmd_parts)
+        sink.({:stderr, "bash: #{command_name}: restricted\n"})
+
+        {:error,
+         %CommandResult{
+           command: Enum.join(cmd_parts, " "),
+           exit_code: 1,
+           error: :restricted
+         }}
+
       {:ok, process} ->
         # Write stdin if provided, then close stdin
         write_stdin(process, stdin)

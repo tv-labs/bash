@@ -53,6 +53,7 @@ defmodule Bash.SessionCase do
     case Session.execute(session, ast) do
       {:ok, result} -> result
       {:exit, result} -> result
+      {:exec, result} -> result
       {:error, result} -> result
     end
   end

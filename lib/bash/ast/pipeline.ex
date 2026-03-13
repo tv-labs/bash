@@ -24,6 +24,7 @@ defmodule Bash.AST.Pipeline do
   alias Bash.AST.Helpers
   alias Bash.Builtin
   alias Bash.Executor
+  alias Bash.ExternalProcess
   alias Bash.OutputCollector
   alias Bash.Sink
   alias Bash.Variable
@@ -291,8 +292,17 @@ defmodule Bash.AST.Pipeline do
       end
 
     # Extract output from the temporary collector
-    {stdout_iodata, _stderr_iodata} = OutputCollector.flush_split(temp_collector)
+    {stdout_iodata, stderr_iodata} = OutputCollector.flush_split(temp_collector)
     GenServer.stop(temp_collector, :normal)
+
+    stderr_output = IO.iodata_to_binary(stderr_iodata)
+
+    if stderr_output != "" do
+      case Map.get(session_state, :stderr_sink) do
+        sink when is_function(sink) -> sink.({:stderr, stderr_output})
+        _ -> :ok
+      end
+    end
 
     output = IO.iodata_to_binary(stdout_iodata)
     {exit_code, env_updates} = result
@@ -488,8 +498,17 @@ defmodule Bash.AST.Pipeline do
           {result.exit_code || 0, %{}}
       end
 
-    {stdout_iodata, _stderr_iodata} = OutputCollector.flush_split(temp_collector)
+    {stdout_iodata, stderr_iodata} = OutputCollector.flush_split(temp_collector)
     GenServer.stop(temp_collector, :normal)
+
+    stderr_output = IO.iodata_to_binary(stderr_iodata)
+
+    if stderr_output != "" do
+      case Map.get(session_state, :stderr_sink) do
+        sink when is_function(sink) -> sink.({:stderr, stderr_output})
+        _ -> :ok
+      end
+    end
 
     output = IO.iodata_to_binary(stdout_iodata)
     {exit_code, env_updates} = result
@@ -514,6 +533,8 @@ defmodule Bash.AST.Pipeline do
 
   # Check if a single command is external (not a builtin or function) and has no redirects.
   # Commands with redirects need sequential execution to handle the redirect logic.
+  defp external_command?(_command, %{options: %{restricted: true}}), do: false
+
   defp external_command?(%AST.Command{name: name, redirects: redirects}, session_state) do
     # Commands with redirects can't use simple streaming
     if redirects != [] do
@@ -625,13 +646,21 @@ defmodule Bash.AST.Pipeline do
   # Build nested ExCmd.stream calls from innermost (first command) to outermost (last command)
   defp build_stream_pipeline([cmd], stdin, session_state) do
     {name, args, env} = resolve_external_command(cmd, session_state)
+    restricted = ExternalProcess.restricted?(session_state)
 
-    ExCmd.stream([name | args],
+    opts = [
       input: stdin,
       cd: session_state.working_dir,
       env: env,
       stderr: :redirect_to_stdout
-    )
+    ]
+
+    case ExternalProcess.stream([name | args], opts, restricted) do
+      # Safety net: external_command?/2 returns false in restricted mode,
+      # so this branch should be unreachable. Returns empty stream as a fallback.
+      {:error, :restricted} -> Stream.map([], & &1)
+      stream -> stream
+    end
   end
 
   defp build_stream_pipeline([cmd | rest], stdin, session_state) do
@@ -648,13 +677,21 @@ defmodule Bash.AST.Pipeline do
       end)
 
     {name, args, env} = resolve_external_command(cmd, session_state)
+    restricted = ExternalProcess.restricted?(session_state)
 
-    ExCmd.stream([name | args],
+    opts = [
       input: filtered_upstream,
       cd: session_state.working_dir,
       env: env,
       stderr: :redirect_to_stdout
-    )
+    ]
+
+    case ExternalProcess.stream([name | args], opts, restricted) do
+      # Safety net: external_command?/2 returns false in restricted mode,
+      # so this branch should be unreachable. Returns empty stream as a fallback.
+      {:error, :restricted} -> Stream.map([], & &1)
+      stream -> stream
+    end
   end
 
   # Resolve command name, args, and environment from AST

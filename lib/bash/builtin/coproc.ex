@@ -66,6 +66,7 @@ defmodule Bash.Builtin.Coproc do
   require Logger
 
   alias Bash.Executor
+  alias Bash.ExternalProcess
   alias Bash.Variable
 
   @doc false
@@ -133,7 +134,8 @@ defmodule Bash.Builtin.Coproc do
              command: command,
              args: cmd_args,
              working_dir: session_state.working_dir,
-             env: build_env(session_state)
+             env: build_env(session_state),
+             restricted: Bash.ExternalProcess.restricted?(session_state)
            }
          ]},
       restart: :temporary
@@ -184,6 +186,10 @@ defmodule Bash.Builtin.Coproc do
 
               {:error, 1}
           end
+
+        {:error, :restricted} ->
+          Bash.Sink.write_stderr(session_state, "bash: coproc: restricted\n")
+          {:error, 1}
 
         {:error, reason} ->
           Bash.Sink.write_stderr(session_state, "coproc: failed to start: #{inspect(reason)}\n")
@@ -263,7 +269,7 @@ defmodule Bash.Builtin.Coproc do
       stderr: :redirect_to_stdout
     ]
 
-    case ExCmd.Process.start_link(cmd, proc_opts) do
+    case ExternalProcess.start_link(cmd, proc_opts, opts[:restricted] || false) do
       {:ok, pid} ->
         os_pid =
           case ExCmd.Process.os_pid(pid) do
@@ -272,6 +278,9 @@ defmodule Bash.Builtin.Coproc do
           end
 
         {:ok, %{mode: :external, proc: pid, os_pid: os_pid}}
+
+      {:error, :restricted} ->
+        {:stop, :restricted}
 
       {:error, reason} ->
         {:stop, reason}

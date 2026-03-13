@@ -31,6 +31,7 @@ defmodule Bash.JobProcess do
   end
 
   alias Bash.CommandResult
+  alias Bash.ExternalProcess
   alias Bash.Job
 
   defstruct [
@@ -46,11 +47,10 @@ defmodule Bash.JobProcess do
     :working_dir,
     :env,
     :last_signal,
-    # Sinks for streaming output directly to destination
     :stdout_sink,
     :stderr_sink,
-    # Session's persistent output collector for later retrieval
-    :output_collector
+    :output_collector,
+    restricted: false
   ]
 
   @type t :: %__MODULE__{
@@ -148,7 +148,8 @@ defmodule Bash.JobProcess do
     working_dir = Keyword.fetch!(opts, :working_dir)
     env = Keyword.get(opts, :env, [])
 
-    # Get sinks for streaming output directly
+    restricted = Keyword.get(opts, :restricted, false)
+
     stdout_sink = Keyword.get(opts, :stdout_sink)
     stderr_sink = Keyword.get(opts, :stderr_sink)
     output_collector = Keyword.get(opts, :output_collector)
@@ -177,7 +178,8 @@ defmodule Bash.JobProcess do
       env: env,
       stdout_sink: stdout_sink,
       stderr_sink: stderr_sink,
-      output_collector: output_collector
+      output_collector: output_collector,
+      restricted: restricted
     }
 
     # Start the process asynchronously
@@ -186,7 +188,7 @@ defmodule Bash.JobProcess do
 
   @impl true
   def handle_continue({:start_process, command, args}, state) do
-    case start_os_process(command, args, state.working_dir, state.env) do
+    case start_os_process(command, args, state.working_dir, state.env, state.restricted) do
       {:ok, excmd_process, os_pid, stdout_reader, stderr_reader} ->
         job = %{state.job | os_pid: os_pid}
 
@@ -414,15 +416,13 @@ defmodule Bash.JobProcess do
 
   def handle_info(_msg, state), do: {:noreply, state}
 
-  defp start_os_process(command, args, working_dir, env) do
+  defp start_os_process(command, args, working_dir, env, restricted) do
     cmd_parts = [command | args]
     parent = self()
 
-    # Spawn a worker process that owns the ExCmd process
-    # This avoids blocking the GenServer on await_exit
     worker =
       spawn(fn ->
-        run_command_worker(cmd_parts, working_dir, env, parent)
+        run_command_worker(cmd_parts, working_dir, env, parent, restricted)
       end)
 
     # Wait for the worker to report the OS PID
@@ -439,14 +439,14 @@ defmodule Bash.JobProcess do
     end
   end
 
-  defp run_command_worker(cmd_parts, working_dir, env, parent) do
+  defp run_command_worker(cmd_parts, working_dir, env, parent, restricted) do
     exec_opts = [
       cd: working_dir,
       env: normalize_env(env),
       stderr: :redirect_to_stdout
     ]
 
-    case ExCmd.Process.start_link(cmd_parts, exec_opts) do
+    case ExternalProcess.start_link(cmd_parts, exec_opts, restricted) do
       {:ok, process} ->
         os_pid =
           case ExCmd.Process.os_pid(process) do

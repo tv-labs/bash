@@ -398,7 +398,8 @@ defmodule Bash.AST.Command do
 
   @doc false
   def process_input_redirects(redirects, _session_state, default_stdin)
-      when redirects in [nil, []], do: default_stdin
+      when redirects in [nil, []],
+      do: default_stdin
 
   def process_input_redirects(redirects, session_state, default_stdin) do
     redirects
@@ -881,7 +882,14 @@ defmodule Bash.AST.Command do
     # This ensures external command output is interleaved correctly with builtin output
     combined_sink = build_combined_sink(session_state)
 
-    base_opts = [cd: session_state.working_dir, env: env, stdin: stdin, timeout: 5000]
+    base_opts = [
+      cd: session_state.working_dir,
+      env: env,
+      stdin: stdin,
+      timeout: 5000,
+      restricted: Bash.ExternalProcess.restricted?(session_state)
+    ]
+
     opts = if combined_sink, do: [{:sink, combined_sink} | base_opts], else: base_opts
 
     # Resolve command through hash table or PATH
@@ -1018,7 +1026,14 @@ defmodule Bash.AST.Command do
     # Create a combined sink that routes stdout/stderr to the session's sinks
     combined_sink = build_combined_sink(session_state)
 
-    base_opts = [cd: session_state.working_dir, env: env, stdin: stdin, timeout: 5000]
+    base_opts = [
+      cd: session_state.working_dir,
+      env: env,
+      stdin: stdin,
+      timeout: 5000,
+      restricted: Bash.ExternalProcess.restricted?(session_state)
+    ]
+
     opts = if combined_sink, do: [{:sink, combined_sink} | base_opts], else: base_opts
 
     CommandPort.execute("bash", ["-c", full_cmd], opts)

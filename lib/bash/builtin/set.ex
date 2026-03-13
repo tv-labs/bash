@@ -134,12 +134,16 @@ defmodule Bash.Builtin.Set do
         # Get current options, starting with defaults
         current_options = Map.merge(@default_options, state.options || %{})
 
-        # Apply changes
-        # Set options to true for set, and false for unset (not drop, so merge works correctly)
+        # Apply changes, filtering out :restricted which is immutable once set.
+        # Without this filter, `set -o restricted` or `set +o restricted` could
+        # alter the flag through the merge maps below.
+        safe_to_set = Enum.reject(options_to_set, &(&1 == :restricted))
+        safe_to_unset = Enum.reject(options_to_unset, &(&1 == :restricted))
+
         new_options =
           current_options
-          |> Map.merge(Map.new(options_to_set, fn opt -> {opt, true} end))
-          |> Map.merge(Map.new(options_to_unset, fn opt -> {opt, false} end))
+          |> Map.merge(Map.new(safe_to_set, fn opt -> {opt, true} end))
+          |> Map.merge(Map.new(safe_to_unset, fn opt -> {opt, false} end))
 
         # Build updates
         update_state(options: new_options)

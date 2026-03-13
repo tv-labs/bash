@@ -109,9 +109,12 @@ defmodule Bash.Builtin.Exec do
     end)
   end
 
-  # Execute the command with the given options
+  defp execute_command(command, _args, _opts, %{options: %{restricted: true}}) do
+    error("bash: exec: #{command}: restricted")
+    {:ok, 1}
+  end
+
   defp execute_command(command, args, opts, session_state) do
-    # Build environment
     env =
       if opts.clear_env do
         []

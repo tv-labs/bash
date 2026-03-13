@@ -18,6 +18,7 @@ defmodule Bash.Builtin.Command do
   use Bash.Builtin
 
   alias Bash.Builtin
+  alias Bash.ExternalProcess
   alias Bash.Variable
 
   # Standard utilities path that is guaranteed to find all standard utilities
@@ -231,19 +232,25 @@ defmodule Bash.Builtin.Command do
         builtin.execute(args, nil, state)
 
       nil ->
-        case find_in_path(command_name, lookup_state) do
-          nil ->
-            error("bash: #{command_name}: command not found")
-            {:ok, 127}
+        if Bash.ExternalProcess.restricted?(state) do
+          error("bash: #{command_name}: restricted")
+          {:ok, 1}
+        else
+          case find_in_path(command_name, lookup_state) do
+            nil ->
+              error("bash: #{command_name}: command not found")
+              {:ok, 127}
 
-          path ->
-            # Execute external command
-            execute_external(path, args, state, opts)
+            path ->
+              execute_external(path, args, state, opts)
+          end
         end
     end
   end
 
   # Find command in PATH
+  defp find_in_path(_name, %{options: %{restricted: true}}), do: nil
+
   defp find_in_path(name, state) do
     if String.contains?(name, "/") do
       # Absolute or relative path - check directly
@@ -282,7 +289,16 @@ defmodule Bash.Builtin.Command do
     ]
 
     try do
-      case System.cmd(path, args, cmd_opts) do
+      case ExternalProcess.system_cmd(
+             path,
+             args,
+             cmd_opts,
+             ExternalProcess.restricted?(state)
+           ) do
+        {:error, :restricted} ->
+          error("bash: #{path}: restricted")
+          {:ok, 1}
+
         {stdout, exit_code} ->
           write(stdout)
           {:ok, exit_code}

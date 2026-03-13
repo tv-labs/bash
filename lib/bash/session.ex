@@ -976,7 +976,7 @@ defmodule Bash.Session do
 
     aliases = opts[:aliases] || %{}
     functions = opts[:functions] || %{}
-    default_options = %{hashall: true, braceexpand: true}
+    default_options = %{hashall: true, braceexpand: true, restricted: false}
     options = Map.merge(default_options, opts[:options] || %{})
 
     {:ok, job_supervisor} = DynamicSupervisor.start_link(strategy: :one_for_one)
@@ -1438,7 +1438,8 @@ defmodule Bash.Session do
       stdout_sink: state.stdout_sink,
       stderr_sink: state.stderr_sink,
       # Also pass the session's persistent output collector for later retrieval
-      output_collector: state.output_collector
+      output_collector: state.output_collector,
+      restricted: Map.get(state.options, :restricted, false)
     ]
 
     case DynamicSupervisor.start_child(state.job_supervisor, {JobProcess, job_opts}) do
@@ -1954,7 +1955,8 @@ defmodule Bash.Session do
       stdout_sink: state.stdout_sink,
       stderr_sink: state.stderr_sink,
       # Also pass the session's persistent output collector for later retrieval
-      output_collector: state.output_collector
+      output_collector: state.output_collector,
+      restricted: Map.get(state.options, :restricted, false)
     ]
 
     case DynamicSupervisor.start_child(state.job_supervisor, {JobProcess, job_opts}) do
@@ -2048,16 +2050,22 @@ defmodule Bash.Session do
         end),
       stdout_sink: persistent_stdout_sink,
       stderr_sink: persistent_stderr_sink,
-      output_collector: original_state.output_collector
+      output_collector: original_state.output_collector,
+      restricted: Map.get(original_state.options, :restricted, false)
     ]
 
     case DynamicSupervisor.start_child(original_state.job_supervisor, {JobProcess, job_opts}) do
       {:ok, job_pid} ->
         # Wait for the OS process to actually start
         os_pid_str =
-          case JobProcess.await_start(job_pid) do
-            {:ok, os_pid} -> to_string(os_pid)
-            {:error, _} -> ""
+          try do
+            case JobProcess.await_start(job_pid) do
+              {:ok, os_pid} -> to_string(os_pid)
+              {:error, _} -> ""
+            end
+          catch
+            :exit, {reason, {GenServer, :call, _}} when reason in [:noproc, :normal, :timeout] ->
+              ""
           end
 
         # Write job notification to stderr (matches bash behavior)

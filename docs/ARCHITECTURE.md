@@ -12,6 +12,7 @@ The shell is built around GenServer-based session management with a multi-layer 
 - **Coproc** - GenServer managing coprocess I/O in external or internal mode
 - **ProcessSubst** - GenServer managing process substitution FIFOs
 - **Sink** - Pluggable output destinations
+- **ExternalProcess** - Centralized OS process gateway (restricted mode enforcement)
 
 ## Supervision Tree
 
@@ -465,6 +466,27 @@ Background job state (output flows to OutputCollector via sinks):
   collector: #PID<0.150.0>   # OutputCollector for post-exec reading
 }
 ```
+
+## Sandboxing
+
+### ExternalProcess
+
+Centralized gateway wrapping all user-facing OS process spawning (`ExCmd.Process`, `ExCmd.stream`, `System.cmd`). When restricted mode is active, all calls return `{:error, :restricted}`.
+
+```mermaid
+graph TD
+    CP[CommandPort] --> EP[ExternalProcess]
+    JP[JobProcess] --> EP
+    CO[Coproc] --> EP
+    PL[Pipeline] --> EP
+    CM[Command builtin] --> EP
+    EP -->|restricted?| ERR["{:error, :restricted}"]
+    EP -->|allowed| EX[ExCmd / System.cmd]
+```
+
+Internal plumbing (signal delivery via `kill`, hostname/uname lookup, `mkfifo`) bypasses this gateway.
+
+Enabled via `Bash.Session.new(restricted: true)`. The flag is immutable — `set` cannot toggle it, and `shopt restricted_shell` reflects actual state read-only.
 
 ## Design Patterns
 
