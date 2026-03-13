@@ -101,6 +101,7 @@ power - call Elixir functions directly from Bash pipelines.
 | **Full I/O support** | Redirections, pipes, heredocs, process substitution |
 | **Job control** | Background jobs, fg/bg switching, signal handling |
 | **Streaming output** | Process stdout/stderr incrementally with configurable sinks |
+| **Sandboxing** | Pluggable virtual filesystem and restricted mode for isolated execution |
 
 ## Usage
 
@@ -215,6 +216,26 @@ Bash.stdout(result)
 {:ok, result, _} = Bash.run("echo hello | myapp.upcase", session)
 Bash.stdout(result)
 #=> "HELLO\n"
+```
+
+### Sandboxing
+
+Run scripts against a virtual filesystem to isolate them from the host OS:
+
+```elixir
+# Provide a custom filesystem adapter
+{:ok, session} = Bash.Session.new(filesystem: {MyVFS, vfs_config})
+
+# Builtins (echo, test, cd, etc.) operate on the VFS.
+# External commands (ls, cat, grep, etc.) are automatically blocked —
+# restricted mode is enforced whenever a non-LocalDisk filesystem is used.
+{:ok, result, _} = Bash.run("test -f /data/input.csv && echo found", session)
+```
+
+To use restricted mode with the real filesystem (block external commands without a VFS):
+
+```elixir
+{:ok, session} = Bash.Session.new(options: %{restricted: true})
 ```
 
 ## Supported Features
