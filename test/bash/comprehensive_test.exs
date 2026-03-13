@@ -723,12 +723,8 @@ defmodule Bash.ComprehensiveTest do
              Enum.map_join(unknown, "\n", fn {line, idx} -> "  #{idx}: #{line}" end)
   end
 
-  @known_gap_patterns [
-    ~r/^TIMES:/
-  ]
-
   defp known_gap?(line) do
-    Enum.any?(@known_gap_patterns, &Regex.match?(&1, line))
+    Enum.any?([~r/^TIMES:/], &Regex.match?(&1, line))
   end
 
   defp get_partial_reference(reference, up_to_line) do
@@ -752,9 +748,13 @@ defmodule Bash.ComprehensiveTest do
     |> String.replace(~r|Script: [^\s]+|, "Script: XXXX")
     |> String.replace(~r/BASH_VERSION: [^\n]+/, "BASH_VERSION: XXXX")
     |> String.replace(~r/\r\n/, "\n")
-    # Path normalization
+    # Path normalization - replace known home/working dir, then common prefixes
+    |> String.replace(File.cwd!(), "/XXXX")
+    |> String.replace(System.get_env("HOME", "/nonexistent"), "/XXXX")
     |> String.replace(~r|/Users/[^\s]+|, "/XXXX")
     |> String.replace(~r|/home/[^\s]+|, "/XXXX")
+    # Collapse /XXXX/subpath to /XXXX (CWD/HOME prefix was replaced but trailing path remained)
+    |> String.replace(~r|/XXXX/[^\s]+|, "/XXXX")
     # Hash/associative array iteration order: sort aa[...]=... lines
     |> normalize_sorted_block(~r/^aa\[/)
     # Sort Hash: and Keys: values (order depends on hash iteration)
@@ -766,8 +766,9 @@ defmodule Bash.ComprehensiveTest do
     # Jobs output ([1]+ Running ...)
     |> String.replace(~r/^\[\d+\]\+?\s+(Running|Done)\s+.+$/m, "JOBS: XXXX")
     |> String.replace(~r/^\[\d+\]\+?\s*$/m, "JOBS: XXXX")
-    # dirs output with tilde (~)
+    # dirs output with tilde (~) or absolute paths
     |> String.replace(~r|^/tmp ~/\S*$|m, "DIRS: XXXX")
+    |> String.replace(~r|^/tmp /XXXX\S*$|m, "DIRS: XXXX")
     # caller output (line_num main script_path)
     |> String.replace(~r/^\d+ main .+$/m, "CALLER: XXXX")
     # glob for: line depends on working directory files
@@ -779,7 +780,7 @@ defmodule Bash.ComprehensiveTest do
     # declare -p output paths
     |> String.replace(~r/(declare\s+-\S+\s+\S+=").*(\/XXXX)/, "\\1XXXX")
     # Float via bc: depends on external bc
-    |> String.replace(~r/^Float via bc: .+$/m, "FLOAT_BC: XXXX")
+    |> String.replace(~r/^Float via bc: .*$/m, "FLOAT_BC: XXXX")
     # wait error messages from stderr (real bash and our interpreter format differently)
     |> String.replace(~r/^.+\bline \d+: wait_for: .+$/m, "WAIT_ERR: XXXX")
     |> String.replace(~r/^wait: %\d+: no such job$/m, "WAIT_ERR: XXXX")
