@@ -24,3 +24,4 @@ bash-*.tar
 
 .grepai/
 docs/plans
+.claude
