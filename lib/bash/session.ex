@@ -126,7 +126,8 @@ defmodule Bash.Session do
     # Callback for starting background jobs synchronously (used by Script executor)
     start_background_job_fn: nil,
     signal_jobs_fn: nil,
-    pipe_stdin: nil
+    pipe_stdin: nil,
+    filesystem: {Bash.Filesystem.LocalDisk, nil}
   ]
 
   @type t :: %__MODULE__{
@@ -165,7 +166,8 @@ defmodule Bash.Session do
           completed_jobs: [Job.t()],
           command_history: [CommandResult.t()],
           special_vars: %{String.t() => integer() | String.t() | nil},
-          positional_params: [[String.t()]]
+          positional_params: [[String.t()]],
+          filesystem: Bash.Filesystem.fs()
         }
 
   # Client API
@@ -221,6 +223,7 @@ defmodule Bash.Session do
       variables: parent_state.variables,
       functions: parent_state.functions,
       options: parent_state.options,
+      filesystem: parent_state.filesystem,
       # NOT inherited in subshells (bash behavior):
       # - aliases are NOT inherited
       # - hash table is NOT inherited
@@ -856,7 +859,7 @@ defmodule Bash.Session do
   """
   @spec open_fd(t(), non_neg_integer(), String.t(), [atom()]) :: {:ok, t()} | {:error, term()}
   def open_fd(%__MODULE__{} = session, fd, path, modes) when fd >= 3 do
-    case File.open(path, modes) do
+    case Bash.Filesystem.open(session.filesystem, path, modes) do
       {:ok, device} ->
         new_fds = Map.put(session.file_descriptors, fd, device)
         {:ok, %{session | file_descriptors: new_fds}}
@@ -896,7 +899,7 @@ defmodule Bash.Session do
         %{session | file_descriptors: Map.delete(fds, fd)}
 
       device when is_pid(device) ->
-        File.close(device)
+        Bash.Filesystem.handle_close(session.filesystem, device)
         %{session | file_descriptors: Map.delete(fds, fd)}
     end
   end
@@ -993,6 +996,8 @@ defmodule Bash.Session do
     positional_params = [opts[:args] || []]
     {:ok, output_collector} = OutputCollector.start_link()
 
+    filesystem = opts[:filesystem] || {Bash.Filesystem.LocalDisk, nil}
+
     state = %__MODULE__{
       id: id,
       variables: variables,
@@ -1015,7 +1020,8 @@ defmodule Bash.Session do
       start_runtime_ms: start_runtime_ms,
       special_vars: special_vars,
       positional_params: positional_params,
-      call_timeout: opts[:call_timeout] || :infinity
+      call_timeout: opts[:call_timeout] || :infinity,
+      filesystem: filesystem
     }
 
     # Load any API modules provided at creation
@@ -1034,7 +1040,7 @@ defmodule Bash.Session do
   end
 
   def handle_call({:chdir, path}, _from, state) do
-    if File.dir?(path) do
+    if Bash.Filesystem.dir?(state.filesystem, path) do
       new_state = %{state | working_dir: Path.expand(path)}
       {:reply, :ok, new_state}
     else
@@ -1793,7 +1799,7 @@ defmodule Bash.Session do
         :ok
 
       {_fd, device} when is_pid(device) ->
-        File.close(device)
+        Bash.Filesystem.handle_close(state.filesystem, device)
     end)
   end
 

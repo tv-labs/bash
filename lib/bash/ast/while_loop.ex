@@ -390,10 +390,16 @@ defmodule Bash.AST.WhileLoop do
           nil
 
         %AST.Redirect{direction: :input, target: {:file, file_word}} ->
-          # Read from file (including process substitution results via /dev/fd/N)
-          file_path = Bash.AST.Helpers.word_to_string(file_word, session_state)
+          file_path =
+            file_word
+            |> Helpers.word_to_string(session_state)
+            |> then(fn p ->
+              if Path.type(p) == :relative,
+                do: Path.join(session_state.working_dir, p),
+                else: p
+            end)
 
-          case File.read(file_path) do
+          case Bash.Filesystem.read(session_state.filesystem, file_path) do
             {:ok, content} -> content
             {:error, _} -> nil
           end

@@ -241,7 +241,10 @@ defmodule Bash.Builtin.Hash do
   defp find_in_path(name, session_state) do
     if String.contains?(name, "/") do
       # Contains slash - treat as path
-      if File.exists?(name) and not File.dir?(name), do: name, else: nil
+      if Bash.Filesystem.exists?(session_state.filesystem, name) and
+           not Bash.Filesystem.dir?(session_state.filesystem, name),
+         do: name,
+         else: nil
     else
       path_var = Map.get(session_state.variables, "PATH", Variable.new("/usr/bin:/bin"))
       path_dirs = path_var |> Variable.get(nil) |> String.split(":")
@@ -249,7 +252,8 @@ defmodule Bash.Builtin.Hash do
       Enum.find_value(path_dirs, fn dir ->
         full_path = Path.join(dir, name)
 
-        if File.exists?(full_path) and not File.dir?(full_path) do
+        if Bash.Filesystem.exists?(session_state.filesystem, full_path) and
+             not Bash.Filesystem.dir?(session_state.filesystem, full_path) do
           full_path
         end
       end)

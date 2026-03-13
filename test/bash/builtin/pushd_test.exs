@@ -12,7 +12,8 @@ defmodule Bash.Builtin.PushdTest do
       session_state = %{
         dir_stack: [tmp_dir],
         working_dir: "/",
-        variables: %{}
+        variables: %{},
+        filesystem: {Bash.Filesystem.LocalDisk, nil}
       }
 
       assert {:ok, %CommandResult{exit_code: 0}, updates} =
@@ -26,7 +27,8 @@ defmodule Bash.Builtin.PushdTest do
       session_state = %{
         dir_stack: [],
         working_dir: "/",
-        variables: %{}
+        variables: %{},
+        filesystem: {Bash.Filesystem.LocalDisk, nil}
       }
 
       assert {:ok, %CommandResult{exit_code: 1}} =
@@ -41,7 +43,8 @@ defmodule Bash.Builtin.PushdTest do
       session_state = %{
         dir_stack: [],
         working_dir: "/",
-        variables: %{}
+        variables: %{},
+        filesystem: {Bash.Filesystem.LocalDisk, nil}
       }
 
       assert {:ok, %CommandResult{exit_code: 0}, updates} =
@@ -57,7 +60,8 @@ defmodule Bash.Builtin.PushdTest do
       session_state = %{
         dir_stack: [],
         working_dir: "/",
-        variables: %{}
+        variables: %{},
+        filesystem: {Bash.Filesystem.LocalDisk, nil}
       }
 
       assert {:ok, %CommandResult{exit_code: 0}, updates} =
@@ -71,7 +75,8 @@ defmodule Bash.Builtin.PushdTest do
       session_state = %{
         dir_stack: [],
         working_dir: "/",
-        variables: %{}
+        variables: %{},
+        filesystem: {Bash.Filesystem.LocalDisk, nil}
       }
 
       assert {:ok, %CommandResult{exit_code: 1}} =
@@ -86,7 +91,8 @@ defmodule Bash.Builtin.PushdTest do
       session_state = %{
         dir_stack: [],
         working_dir: "/",
-        variables: %{}
+        variables: %{},
+        filesystem: {Bash.Filesystem.LocalDisk, nil}
       }
 
       assert {:ok, %CommandResult{exit_code: 0}, updates} =
@@ -103,7 +109,8 @@ defmodule Bash.Builtin.PushdTest do
       session_state = %{
         dir_stack: [tmp_dir],
         working_dir: "/",
-        variables: %{}
+        variables: %{},
+        filesystem: {Bash.Filesystem.LocalDisk, nil}
       }
 
       assert {:ok, %CommandResult{exit_code: 0}, updates} =
@@ -121,7 +128,8 @@ defmodule Bash.Builtin.PushdTest do
       session_state = %{
         dir_stack: [tmp_dir],
         working_dir: "/",
-        variables: %{}
+        variables: %{},
+        filesystem: {Bash.Filesystem.LocalDisk, nil}
       }
 
       assert {:ok, %CommandResult{exit_code: 0}, updates} =
@@ -137,7 +145,8 @@ defmodule Bash.Builtin.PushdTest do
       session_state = %{
         dir_stack: [tmp_dir, "/var"],
         working_dir: "/",
-        variables: %{}
+        variables: %{},
+        filesystem: {Bash.Filesystem.LocalDisk, nil}
       }
 
       assert {:ok, %CommandResult{exit_code: 0}, updates} =
@@ -151,7 +160,8 @@ defmodule Bash.Builtin.PushdTest do
       session_state = %{
         dir_stack: ["/"],
         working_dir: "/",
-        variables: %{}
+        variables: %{},
+        filesystem: {Bash.Filesystem.LocalDisk, nil}
       }
 
       assert {:ok, %CommandResult{exit_code: 1}} =
@@ -166,7 +176,8 @@ defmodule Bash.Builtin.PushdTest do
       session_state = %{
         dir_stack: ["/", tmp_dir],
         working_dir: "/var",
-        variables: %{}
+        variables: %{},
+        filesystem: {Bash.Filesystem.LocalDisk, nil}
       }
 
       assert {:ok, %CommandResult{exit_code: 0}, updates} =
@@ -186,7 +197,8 @@ defmodule Bash.Builtin.PushdTest do
         working_dir: "/",
         variables: %{
           "HOME" => Variable.new(home)
-        }
+        },
+        filesystem: {Bash.Filesystem.LocalDisk, nil}
       }
 
       assert {:ok, %CommandResult{exit_code: 0}, updates} =
@@ -203,7 +215,8 @@ defmodule Bash.Builtin.PushdTest do
         working_dir: "/",
         variables: %{
           "HOME" => Variable.new(home)
-        }
+        },
+        filesystem: {Bash.Filesystem.LocalDisk, nil}
       }
 
       # Use a directory that's likely to exist
@@ -217,7 +230,8 @@ defmodule Bash.Builtin.PushdTest do
       session_state = %{
         dir_stack: [],
         working_dir: "/",
-        variables: %{}
+        variables: %{},
+        filesystem: {Bash.Filesystem.LocalDisk, nil}
       }
 
       assert {:ok, %CommandResult{exit_code: 1}} =

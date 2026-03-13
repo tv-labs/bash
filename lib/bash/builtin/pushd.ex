@@ -107,7 +107,7 @@ defmodule Bash.Builtin.Pushd do
           :ok
         else
           # Swap and change directory
-          case validate_directory(second) do
+          case validate_directory(second, session_state) do
             :ok ->
               new_stack = [cwd | rest]
               write(format_stack_output(second, new_stack, session_state))
@@ -139,7 +139,7 @@ defmodule Bash.Builtin.Pushd do
     # Resolve relative paths
     resolved_dir = resolve_path(expanded_dir, session_state)
 
-    case validate_directory(resolved_dir) do
+    case validate_directory(resolved_dir, session_state) do
       :ok ->
         cwd = session_state.working_dir
         stack = Map.get(session_state, :dir_stack, [])
@@ -214,7 +214,7 @@ defmodule Bash.Builtin.Pushd do
 
         :ok
       else
-        case validate_directory(new_cwd) do
+        case validate_directory(new_cwd, session_state) do
           :ok ->
             write(format_stack_output(new_cwd, rotated_stack, session_state))
 
@@ -238,12 +238,12 @@ defmodule Bash.Builtin.Pushd do
   end
 
   # Validate that the path is a directory
-  defp validate_directory(path) do
+  defp validate_directory(path, session_state) do
     cond do
-      not File.exists?(path) ->
+      not Bash.Filesystem.exists?(session_state.filesystem, path) ->
         {:error, "No such file or directory"}
 
-      not File.dir?(path) ->
+      not Bash.Filesystem.dir?(session_state.filesystem, path) ->
         {:error, "Not a directory"}
 
       true ->

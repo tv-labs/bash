@@ -20,6 +20,7 @@ defmodule Bash.HeredocTest do
       aliases: %{},
       hash: %{},
       functions: %{},
+      filesystem: {Bash.Filesystem.LocalDisk, nil},
       output_collector: collector,
       stdout_sink: sink,
       stderr_sink: sink

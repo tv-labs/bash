@@ -987,7 +987,7 @@ defmodule Bash.AST.Helpers do
         {Path.join(session_state.working_dir, pattern), false, has_dot}
       end
 
-    case Path.wildcard(glob_path, match_dot: false) do
+    case Bash.Filesystem.wildcard(session_state.filesystem, glob_path, match_dot: false) do
       [] ->
         pattern
 
@@ -1027,7 +1027,7 @@ defmodule Bash.AST.Helpers do
         listing_dir =
           if is_absolute, do: dir, else: Path.join(session_state.working_dir, dir || "")
 
-        case File.ls(listing_dir) do
+        case Bash.Filesystem.ls(session_state.filesystem, listing_dir) do
           {:ok, entries} ->
             matches =
               entries
@@ -1077,7 +1077,7 @@ defmodule Bash.AST.Helpers do
             Path.join(session_state.working_dir, dir)
           end
 
-        if File.dir?(full_dir) do
+        if Bash.Filesystem.dir?(session_state.filesystem, full_dir) do
           {is_absolute, has_dot_prefix, dir, file}
         else
           # Directory part contains glob chars, fall back to standard

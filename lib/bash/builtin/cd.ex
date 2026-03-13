@@ -99,7 +99,7 @@ defmodule Bash.Builtin.Cd do
     resolved_path = resolve_path(expanded_target, session_state, flags)
 
     # Check if it's a directory and exists
-    case validate_directory(resolved_path, flags) do
+    case validate_directory(resolved_path, flags, session_state) do
       :ok ->
         # Success - prepare state updates
         old_pwd = session_state.working_dir
@@ -107,7 +107,7 @@ defmodule Bash.Builtin.Cd do
         new_pwd =
           if flags.physical do
             # Resolve all symlinks for physical path
-            case resolve_symlinks(Path.expand(resolved_path)) do
+            case resolve_symlinks(Path.expand(resolved_path), session_state) do
               {:ok, real_path} -> real_path
               {:error, _} -> Path.expand(resolved_path)
             end
@@ -145,7 +145,7 @@ defmodule Bash.Builtin.Cd do
     else
       candidate = Path.join(session_state.working_dir, path)
 
-      if File.dir?(candidate) do
+      if Bash.Filesystem.dir?(session_state.filesystem, candidate) do
         candidate
       else
         # Try CDPATH if not starting with . or /
@@ -173,7 +173,7 @@ defmodule Bash.Builtin.Cd do
         search_path = if search_path == "", do: ".", else: search_path
         candidate = Path.join(search_path, dir)
 
-        if File.dir?(candidate) do
+        if Bash.Filesystem.dir?(session_state.filesystem, candidate) do
           candidate
         end
       end)
@@ -198,12 +198,12 @@ defmodule Bash.Builtin.Cd do
   defp expand_tilde(path, _session_state), do: path
 
   # Validate that the path is a directory
-  defp validate_directory(path, _flags) do
+  defp validate_directory(path, _flags, session_state) do
     cond do
-      not File.exists?(path) ->
+      not Bash.Filesystem.exists?(session_state.filesystem, path) ->
         {:error, "No such file or directory"}
 
-      not File.dir?(path) ->
+      not Bash.Filesystem.dir?(session_state.filesystem, path) ->
         {:error, "Not a directory"}
 
       true ->
@@ -212,10 +212,11 @@ defmodule Bash.Builtin.Cd do
   end
 
   # Resolve symlinks in a path (for -P flag)
-  defp resolve_symlinks(path) do
-    case :file.read_link_all(to_charlist(path)) do
-      {:ok, real_path} -> {:ok, List.to_string(real_path)}
+  defp resolve_symlinks(path, session_state) do
+    case Bash.Filesystem.read_link_all(session_state.filesystem, path) do
+      {:ok, real_path} -> {:ok, real_path}
       {:error, :einval} -> {:ok, path}
+      {:error, :enotsup} -> {:ok, path}
       {:error, reason} -> {:error, reason}
     end
   end

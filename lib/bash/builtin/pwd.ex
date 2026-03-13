@@ -17,7 +17,7 @@ defmodule Bash.Builtin.Pwd do
     output =
       if flags.physical do
         # Physical mode: resolve symlinks to get real path
-        resolve_physical_path(state.working_dir)
+        resolve_physical_path(state.working_dir, state)
       else
         # Logical mode: return working_dir as-is
         state.working_dir
@@ -65,25 +65,24 @@ defmodule Bash.Builtin.Pwd do
 
   # Resolve symlinks in a path to get the physical path (for -P flag)
   # This resolves the path component by component, following symlinks
-  defp resolve_physical_path(path) do
+  defp resolve_physical_path(path, session_state) do
     try do
       expanded = Path.expand(path)
-      resolve_path_components(String.split(expanded, "/", trim: true), "/")
+      resolve_path_components(String.split(expanded, "/", trim: true), "/", session_state)
     rescue
       _ -> path
     end
   end
 
   # Resolve path component by component, following any symlinks
-  defp resolve_path_components([], acc), do: acc
+  defp resolve_path_components([], acc, _session_state), do: acc
 
-  defp resolve_path_components([component | rest], acc) do
+  defp resolve_path_components([component | rest], acc, session_state) do
     current = Path.join(acc, component)
 
-    case :file.read_link(to_charlist(current)) do
+    case Bash.Filesystem.read_link(session_state.filesystem, current) do
       {:ok, target} ->
-        # It's a symlink - follow it
-        target_str = List.to_string(target)
+        target_str = target
 
         resolved =
           if String.starts_with?(target_str, "/") do
@@ -92,11 +91,10 @@ defmodule Bash.Builtin.Pwd do
             Path.join(acc, target_str) |> Path.expand()
           end
 
-        resolve_path_components(rest, resolved)
+        resolve_path_components(rest, resolved, session_state)
 
       {:error, _} ->
-        # Not a symlink, continue
-        resolve_path_components(rest, current)
+        resolve_path_components(rest, current, session_state)
     end
   end
 end

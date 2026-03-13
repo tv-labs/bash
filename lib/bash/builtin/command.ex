@@ -254,7 +254,8 @@ defmodule Bash.Builtin.Command do
   defp find_in_path(name, state) do
     if String.contains?(name, "/") do
       # Absolute or relative path - check directly
-      if File.exists?(name) and not File.dir?(name) do
+      if Bash.Filesystem.exists?(state.filesystem, name) and
+           not Bash.Filesystem.dir?(state.filesystem, name) do
         Path.expand(name, state.working_dir)
       else
         nil
@@ -267,7 +268,8 @@ defmodule Bash.Builtin.Command do
       Enum.find_value(path_dirs, fn dir ->
         full_path = Path.join(dir, name)
 
-        if File.exists?(full_path) and not File.dir?(full_path) do
+        if Bash.Filesystem.exists?(state.filesystem, full_path) and
+             not Bash.Filesystem.dir?(state.filesystem, full_path) do
           full_path
         end
       end)

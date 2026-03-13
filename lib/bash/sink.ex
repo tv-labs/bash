@@ -173,25 +173,26 @@ defmodule Bash.Sink do
   def file(path, opts \\ []) do
     append = Keyword.get(opts, :append, false)
     stream_type = Keyword.get(opts, :stream_type, :stdout)
+    filesystem = Keyword.get(opts, :filesystem, {Bash.Filesystem.LocalDisk, nil})
 
     mode = if append, do: [:write, :append, :raw], else: [:write, :raw]
 
-    case :file.open(path, mode) do
+    case Bash.Filesystem.open(filesystem, path, mode) do
       {:ok, fd} ->
         sink = fn
           {:stdout, data} when stream_type in [:stdout, :both] and is_binary(data) ->
-            :file.write(fd, data)
+            Bash.Filesystem.handle_write(filesystem, fd, data)
             :ok
 
           {:stderr, data} when stream_type in [:stderr, :both] and is_binary(data) ->
-            :file.write(fd, data)
+            Bash.Filesystem.handle_write(filesystem, fd, data)
             :ok
 
           _ ->
             :ok
         end
 
-        close = fn -> :file.close(fd) end
+        close = fn -> Bash.Filesystem.handle_close(filesystem, fd) end
         {sink, close}
 
       {:error, reason} ->

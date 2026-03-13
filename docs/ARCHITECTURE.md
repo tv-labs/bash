@@ -13,6 +13,7 @@ The shell is built around GenServer-based session management with a multi-layer 
 - **ProcessSubst** - GenServer managing process substitution FIFOs
 - **Sink** - Pluggable output destinations
 - **ExternalProcess** - Centralized OS process gateway (restricted mode enforcement)
+- **Filesystem** - Pluggable filesystem behaviour (sandboxed I/O)
 
 ## Supervision Tree
 
@@ -88,12 +89,15 @@ stateDiagram-v2
 | `special_vars` | Map | `$?`, `$!`, `$$`, `$0`, `$_` |
 | `positional_params` | list | Function argument stack |
 | `file_descriptors` | Map | FD number to pid or `{:coproc, pid, :read \| :write}` |
+| `options` | Map | Shell options including `restricted`, `hashall`, `braceexpand` |
+| `filesystem` | `{module, config}` | Pluggable filesystem adapter (default: `{LocalDisk, nil}`) |
 
 **Internal fields (opaque):**
 - `job_supervisor`, `output_collector` - Process pids
 - `stdout_sink`, `stderr_sink` - Sink functions
 - `executions`, `current`, `is_pipeline_tail` - Execution tracking
 - `file_descriptors` - Routes FD reads/writes to coproc GenServers or StringIO devices
+- `filesystem` - Dispatches all file I/O through the pluggable adapter
 
 ### OutputCollector GenServer
 
@@ -487,6 +491,30 @@ graph TD
 Internal plumbing (signal delivery via `kill`, hostname/uname lookup, `mkfifo`) bypasses this gateway.
 
 Enabled via `Bash.Session.new(restricted: true)`. The flag is immutable — `set` cannot toggle it, and `shopt restricted_shell` reflects actual state read-only.
+
+### Filesystem
+
+Behaviour and dispatcher for pluggable filesystem implementations. Stored in session state as a `{module, config}` tuple. All filesystem access (57+ call sites across 14 files) dispatches through `Bash.Filesystem` instead of calling `File.*` directly.
+
+```mermaid
+graph TD
+    subgraph Callers
+        T[Test builtin]
+        CD[cd/pwd]
+        SRC[source]
+        CMD[Command/Pipeline]
+        R[Redirections]
+        G[Glob expansion]
+    end
+
+    Callers --> FS[Bash.Filesystem]
+    FS --> LD[LocalDisk — default]
+    FS --> VFS[Custom VFS adapter]
+```
+
+The default adapter `Bash.Filesystem.LocalDisk` delegates to Elixir's `File` and Erlang's `:file` modules. Custom adapters implement the `Bash.Filesystem` behaviour (16 callbacks).
+
+Enabled via `Bash.Session.new(filesystem: {MyVFS, config})`. Inherits to child sessions.
 
 ## Design Patterns
 
