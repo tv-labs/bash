@@ -174,6 +174,20 @@ defmodule Bash.Session do
 
   @doc """
   Creates a new session with default environment.
+
+  ## Options
+
+    * `:filesystem` — `{module, config}` filesystem adapter. Defaults to
+      `{Bash.Filesystem.LocalDisk, nil}`. When a non-LocalDisk filesystem is
+      provided, restricted mode is automatically enabled to prevent external
+      commands from bypassing the virtual filesystem.
+    * `:options` — map of shell options (e.g. `%{restricted: true}`).
+    * `:env` — map of initial environment variables.
+    * `:working_dir` — initial working directory. Defaults to `File.cwd!()`.
+    * `:aliases` — map of shell aliases.
+    * `:functions` — map of shell functions.
+    * `:args` — positional parameters (`$1`, `$2`, …).
+    * `:script_name` — value of `$0`. Defaults to `"bash"`.
   """
   def new(opts \\ []) do
     supervisor = opts[:supervisor] || SessionSupervisor
@@ -997,6 +1011,13 @@ defmodule Bash.Session do
     {:ok, output_collector} = OutputCollector.start_link()
 
     filesystem = opts[:filesystem] || {Bash.Filesystem.LocalDisk, nil}
+
+    options =
+      if not Bash.Filesystem.local_disk?(filesystem) do
+        Map.put(options, :restricted, true)
+      else
+        options
+      end
 
     state = %__MODULE__{
       id: id,

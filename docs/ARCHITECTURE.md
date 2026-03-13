@@ -490,7 +490,7 @@ graph TD
 
 Internal plumbing (signal delivery via `kill`, hostname/uname lookup, `mkfifo`) bypasses this gateway.
 
-Enabled via `Bash.Session.new(restricted: true)`. The flag is immutable — `set` cannot toggle it, and `shopt restricted_shell` reflects actual state read-only.
+Enabled via `Bash.Session.new(restricted: true)` or automatically when a non-LocalDisk filesystem is provided (see below). The flag is immutable — `set` cannot toggle it, and `shopt restricted_shell` reflects actual state read-only.
 
 ### Filesystem
 
@@ -515,6 +515,12 @@ graph TD
 The default adapter `Bash.Filesystem.LocalDisk` delegates to Elixir's `File` and Erlang's `:file` modules. Custom adapters implement the `Bash.Filesystem` behaviour (16 callbacks).
 
 Enabled via `Bash.Session.new(filesystem: {MyVFS, config})`. Inherits to child sessions.
+
+### Auto-enforcement
+
+When a non-LocalDisk filesystem is provided, `Session.init/1` automatically enables restricted mode. This prevents a split-brain state where builtins operate on the virtual filesystem while external commands (`ls`, `cat`, etc.) bypass it and hit the real OS. With auto-enforcement, there is no way to create a session that uses a VFS for builtins but allows unrestricted external process execution.
+
+`Bash.Filesystem.local_disk?/1` is the predicate used to decide whether enforcement applies.
 
 ## Design Patterns
 

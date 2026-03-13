@@ -248,8 +248,13 @@ defmodule Bash.Builtin.Command do
     end
   end
 
-  # Find command in PATH
-  defp find_in_path(_name, %{options: %{restricted: true}}), do: nil
+  # In restricted mode with LocalDisk, block PATH lookup entirely.
+  # With a VFS, allow lookup since execution is separately guarded by ExternalProcess.
+  defp find_in_path(_name, %{
+         options: %{restricted: true},
+         filesystem: {Bash.Filesystem.LocalDisk, _}
+       }),
+       do: nil
 
   defp find_in_path(name, state) do
     if String.contains?(name, "/") do

@@ -26,6 +26,11 @@ defmodule Bash.Filesystem do
       end
 
       {:ok, session} = Bash.Session.new(filesystem: {MyVFS, my_config})
+
+  Non-LocalDisk filesystems automatically enable restricted mode in the
+  session, blocking external process execution. This prevents a split-brain
+  state where builtins see the VFS while commands like `ls` hit the real OS.
+  See `local_disk?/1`.
   """
 
   @type fs :: {module(), config :: term()}
@@ -65,6 +70,10 @@ defmodule Bash.Filesystem do
               {:ok, String.t()} | {:error, term()}
 
   @optional_callbacks [lstat: 2, read_link: 2, read_link_all: 2]
+
+  @spec local_disk?(fs()) :: boolean()
+  def local_disk?({Bash.Filesystem.LocalDisk, _}), do: true
+  def local_disk?(_), do: false
 
   @spec exists?(fs(), String.t()) :: boolean()
   def exists?({mod, config}, path), do: mod.exists?(config, path)

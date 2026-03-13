@@ -561,6 +561,53 @@ defmodule Bash.VirtualFilesystemTest do
     end
   end
 
+  describe "auto-enforced restricted mode for non-LocalDisk filesystems" do
+    test "VFS session auto-sets restricted: true in state", context do
+      {session, _fs} = start_vfs_session(context, %{"/workspace/file.txt" => "hello"})
+
+      state = Session.get_state(session)
+      assert state.options[:restricted] == true
+    end
+
+    test "shopt restricted_shell reports on with VFS", context do
+      {session, _fs} = start_vfs_session(context, %{"/workspace/file.txt" => "hello"})
+
+      result = run_script(session, "shopt restricted_shell")
+      assert get_stdout(result) =~ "on"
+    end
+
+    test "external commands are blocked when only VFS is specified", context do
+      {session, _fs} = start_vfs_session(context, %{"/workspace/file.txt" => "hello"})
+
+      result = run_script(session, "ls")
+      assert get_stderr(result) =~ "restricted"
+    end
+
+    test "LocalDisk sessions remain unrestricted by default", context do
+      registry_name = Module.concat([context.module, LDRegistry, context.test])
+      supervisor_name = Module.concat([context.module, LDSupervisor, context.test])
+
+      _registry =
+        start_supervised!({Registry, keys: :unique, name: registry_name}, id: registry_name)
+
+      _supervisor =
+        start_supervised!(
+          {DynamicSupervisor, strategy: :one_for_one, name: supervisor_name},
+          id: supervisor_name
+        )
+
+      {:ok, session} =
+        Session.new(
+          id: "#{context.test}",
+          registry: registry_name,
+          supervisor: supervisor_name
+        )
+
+      state = Session.get_state(session)
+      assert state.options[:restricted] == false
+    end
+  end
+
   describe "glob expansion with virtual filesystem" do
     test "*.txt expands against VFS files", context do
       {session, _fs} =
