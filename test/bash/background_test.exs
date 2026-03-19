@@ -146,16 +146,17 @@ defmodule Bash.BackgroundTest do
 
     test "kill sends SIGTERM by default like bash", %{session: session} do
       # In bash, kill without signal sends SIGTERM (15)
-      run_script(session, "sleep 10 &")
-      Process.sleep(50)
+      # Use bash -c with a trap to guarantee signal readiness: the trap is
+      # registered before sleep runs, so SIGTERM is never missed.
+      run_script(session, "bash -c 'trap \"exit 143\" TERM; sleep 10' &")
+      await_job_running(session, 1)
 
       run_script(session, "kill %1")
 
-      # Wait for the killed job - should exit with signal code
+      # Wait for the killed job - should exit with signal code 128+15=143
       result = run_script(session, "wait")
 
-      # Process killed by SIGTERM typically exits with 128+15=143 or just 15
-      assert result.exit_code in [15, 143]
+      assert result.exit_code == 143
     end
 
     test "fg returns job's output like bash", %{session: session} do

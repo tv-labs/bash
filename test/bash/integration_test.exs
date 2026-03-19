@@ -400,8 +400,10 @@ defmodule Bash.IntegrationTest do
       # Get output from the Script result (reads from collector)
       accumulated_output = ExecutionResult.all_output(result)
 
-      # Compare with expected output
-      assert accumulated_output == @expected, """
+      # Normalize leading whitespace for platform independence (e.g. wc output padding)
+      normalize = &String.replace(&1, ~r/^ +/m, "")
+
+      assert normalize.(accumulated_output) == normalize.(@expected), """
         === ACTUAL OUTPUT ===
         #{accumulated_output}
         === EXPECTED OUTPUT ===
@@ -436,15 +438,20 @@ defmodule Bash.IntegrationTest do
       # Get output from the Script result (reads from collector)
       accumulated_output = ExecutionResult.all_output(result)
 
+      # Normalize leading whitespace for platform independence (e.g. wc output padding)
+      normalize = &String.replace(&1, ~r/^ +/m, "")
+      normalized_actual = normalize.(accumulated_output)
+      normalized_expected = normalize.(@golden_test_expected)
+
       # Show diff when outputs don't match
-      if accumulated_output != @golden_test_expected do
+      if normalized_actual != normalized_expected do
         IO.puts("\n=== ACTUAL OUTPUT ===")
         IO.puts(accumulated_output)
         IO.puts("\n=== EXPECTED OUTPUT ===")
         IO.puts(@golden_test_expected)
       end
 
-      assert accumulated_output == @golden_test_expected, "Golden test output mismatch"
+      assert normalized_actual == normalized_expected, "Golden test output mismatch"
     end
   end
 end
