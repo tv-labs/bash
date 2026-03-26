@@ -38,6 +38,7 @@ defmodule Bash.AST.Command do
   alias Bash.CommandPolicy
   alias Bash.CommandPort
   alias Bash.CommandResult
+  alias Bash.Filesystem
   alias Bash.Sink
   alias Bash.Telemetry
   alias Bash.Variable
@@ -538,18 +539,19 @@ defmodule Bash.AST.Command do
     file_path = resolve_redirect_path(file_word, session_state)
     append = dir == :append
 
+    fs = Filesystem.from_state(session_state)
+
     # Check noclobber (set -C): cannot overwrite existing file with >
-    if noclobber && !append && File.exists?(file_path) do
+    if noclobber && !append && Filesystem.exists?(fs, file_path) do
       error_msg = "bash: #{file_path}: cannot overwrite existing file\n"
       {:error, error_msg, state}
     else
-      create_file_sink_for_redirect(file_path, append, fd, state)
+      create_file_sink_for_redirect(file_path, append, fd, state, fs)
     end
   end
 
-  defp create_file_sink_for_redirect(file_path, append, fd, state) do
-    # Ensure parent directory exists
-    file_path |> Path.dirname() |> File.mkdir_p()
+  defp create_file_sink_for_redirect(file_path, append, fd, state, fs) do
+    Filesystem.mkdir_p(fs, Path.dirname(file_path))
 
     # Set stream_type based on which fd this sink is for
     # This matters when FD duplication re-tags chunks (e.g., 1>&2 sends :stderr to this sink)
@@ -560,7 +562,7 @@ defmodule Bash.AST.Command do
         _ -> :stdout
       end
 
-    {sink, close_fn} = Sink.file(file_path, append: append, stream_type: stream_type)
+    {sink, close_fn} = Sink.file(fs, file_path, append: append, stream_type: stream_type)
 
     new_state =
       case fd do
@@ -672,9 +674,11 @@ defmodule Bash.AST.Command do
          session_state,
          default_stdin
        ) do
+    fs = Filesystem.from_state(session_state)
+
     file_word
     |> resolve_redirect_path(session_state)
-    |> File.read()
+    |> then(&Filesystem.read(fs, &1))
     |> case do
       {:ok, content} -> content
       {:error, _} -> default_stdin
@@ -960,6 +964,7 @@ defmodule Bash.AST.Command do
   end
 
   defp resolve_via_hash_or_path(command_name, session_state) do
+    fs = Filesystem.from_state(session_state)
     hash_table = Map.get(session_state, :hash, %{})
     options = Map.get(session_state, :options, %{})
     hashall_enabled = Map.get(options, :hashall, true)
@@ -967,7 +972,7 @@ defmodule Bash.AST.Command do
     case Map.get(hash_table, command_name) do
       {hit_count, cached_path} ->
         # Found in hash table - verify path still exists
-        if File.exists?(cached_path) and not File.dir?(cached_path) do
+        if Filesystem.exists?(fs, cached_path) and not Filesystem.dir?(fs, cached_path) do
           # Path valid - increment hit count and use cached path
           {cached_path, %{hash_updates: %{command_name => {hit_count + 1, cached_path}}}}
         else
@@ -1014,13 +1019,14 @@ defmodule Bash.AST.Command do
   end
 
   defp find_command_in_path(command_name, session_state) do
+    fs = Filesystem.from_state(session_state)
     path_var = Map.get(session_state.variables, "PATH", Variable.new("/usr/bin:/bin"))
     path_dirs = path_var |> Variable.get(nil) |> String.split(":")
 
     Enum.find_value(path_dirs, fn dir ->
       full_path = Path.join(dir, command_name)
 
-      if File.exists?(full_path) and not File.dir?(full_path) do
+      if Filesystem.exists?(fs, full_path) and not Filesystem.dir?(fs, full_path) do
         full_path
       end
     end)

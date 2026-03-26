@@ -20,8 +20,9 @@ defmodule Bash.Builtin.Popd do
   """
   use Bash.Builtin
 
-  alias Bash.Variable
   alias Bash.Builtin.Dirs
+  alias Bash.Filesystem
+  alias Bash.Variable
 
   defbash execute(args, state) do
     case parse_args(args) do
@@ -107,7 +108,7 @@ defmodule Bash.Builtin.Popd do
           :ok
         else
           # Change to new top and update stack
-          case validate_directory(new_top) do
+          case validate_directory(new_top, session_state) do
             :ok ->
               write(format_stack_output(new_top, rest, session_state))
               old_pwd = session_state.working_dir
@@ -173,12 +174,14 @@ defmodule Bash.Builtin.Popd do
   end
 
   # Validate that the path is a directory
-  defp validate_directory(path) do
+  defp validate_directory(path, session_state) do
+    fs = Filesystem.from_state(session_state)
+
     cond do
-      not File.exists?(path) ->
+      not Filesystem.exists?(fs, path) ->
         {:error, "No such file or directory"}
 
-      not File.dir?(path) ->
+      not Filesystem.dir?(fs, path) ->
         {:error, "Not a directory"}
 
       true ->

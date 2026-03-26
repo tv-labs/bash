@@ -11,6 +11,7 @@ defmodule Bash.Builtin.Source do
   """
   use Bash.Builtin
 
+  alias Bash.Filesystem
   alias Bash.Parser
   alias Bash.Script
   alias Bash.Variable
@@ -49,7 +50,7 @@ defmodule Bash.Builtin.Source do
         {:error, "source: #{filename}: No such file or directory"}
 
       path ->
-        case File.read(path) do
+        case Filesystem.read(Filesystem.from_state(session_state), path) do
           {:ok, content} ->
             execute_content(content, args, session_state)
 
@@ -60,15 +61,17 @@ defmodule Bash.Builtin.Source do
   end
 
   defp resolve_path(filename, session_state) do
+    fs = Filesystem.from_state(session_state)
+
     cond do
       # Absolute path
       String.starts_with?(filename, "/") ->
-        if File.exists?(filename), do: filename, else: nil
+        if Filesystem.exists?(fs, filename), do: filename, else: nil
 
       # Relative path (contains /)
       String.contains?(filename, "/") ->
         full_path = Path.join(session_state.working_dir, filename)
-        if File.exists?(full_path), do: full_path, else: nil
+        if Filesystem.exists?(fs, full_path), do: full_path, else: nil
 
       # Search in PATH
       true ->
@@ -80,7 +83,7 @@ defmodule Bash.Builtin.Source do
 
         Enum.find_value(path_dirs, fn dir ->
           full_path = Path.join(dir, filename)
-          if File.exists?(full_path), do: full_path, else: nil
+          if Filesystem.exists?(fs, full_path), do: full_path, else: nil
         end)
     end
   end
