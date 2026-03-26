@@ -101,7 +101,8 @@ defmodule Bash.CommandPort do
   defdelegate close_stdout(process), to: ExCmd.Process
 
   @doc "Waits for the process to exit within the given timeout."
-  @spec await_exit(pid(), non_neg_integer() | :infinity) :: {:ok, non_neg_integer()} | {:error, term()}
+  @spec await_exit(pid(), non_neg_integer() | :infinity) ::
+          {:ok, non_neg_integer()} | {:error, term()}
   defdelegate await_exit(process, timeout), to: ExCmd.Process
 
   # ---------------------------------------------------------------------------

@@ -5,7 +5,8 @@ defmodule Bash.CommandPortTest do
 
   describe "low-level process API" do
     test "start_link + os_pid + read + await_exit" do
-      {:ok, proc} = CommandPort.start_link(["echo", "hello"], [stderr: :redirect_to_stdout], false)
+      {:ok, proc} =
+        CommandPort.start_link(["echo", "hello"], [stderr: :redirect_to_stdout], false)
 
       os_pid =
         case CommandPort.os_pid(proc) do

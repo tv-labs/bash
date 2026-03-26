@@ -279,7 +279,10 @@ defmodule Bash.ControlFlowTest do
     end
 
     @tag :tmp_dir
-    test "reads from file with relative path input redirect", %{session: session, tmp_dir: tmp_dir} do
+    test "reads from file with relative path input redirect", %{
+      session: session,
+      tmp_dir: tmp_dir
+    } do
       test_file = Path.join(tmp_dir, "input.txt")
       File.write!(test_file, "alpha\nbeta\n")
 
