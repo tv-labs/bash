@@ -10,7 +10,7 @@ defmodule Bash.CommandPolicy do
 
     * `:unrestricted` -- No restrictions. All external commands are allowed.
     * `:disallow_external` -- Block all external command execution.
-    * `{:allow, commands}` -- Only allow external commands in the given `MapSet`.
+    * `{:allow, commands}` -- Only allow external commands in the given list or `MapSet`.
 
   ## Immutability
 
@@ -70,16 +70,31 @@ defmodule Bash.CommandPolicy do
   def allowed?(policy, command_name), do: check(policy, command_name) == :ok
 
   @doc """
-  Normalizes legacy `restricted: true` option into `command_policy: :disallow_external`.
+  Normalizes session options for command policy.
 
-  Called during session initialization to support backwards compatibility.
+  Handles two normalizations:
+    * `restricted: true` becomes `command_policy: :disallow_external`
+    * `{:allow, list}` becomes `{:allow, MapSet.t()}`
   """
   @spec normalize_options(map()) :: map()
-  def normalize_options(%{restricted: true} = options) do
+  def normalize_options(options) do
+    options
+    |> normalize_restricted()
+    |> normalize_allow_list()
+  end
+
+  defp normalize_restricted(%{restricted: true} = options) do
     options
     |> Map.delete(:restricted)
     |> Map.put_new(:command_policy, :disallow_external)
   end
 
-  def normalize_options(options), do: options
+  defp normalize_restricted(options), do: options
+
+  defp normalize_allow_list(%{command_policy: {:allow, commands}} = options)
+       when is_list(commands) do
+    %{options | command_policy: {:allow, MapSet.new(commands)}}
+  end
+
+  defp normalize_allow_list(options), do: options
 end

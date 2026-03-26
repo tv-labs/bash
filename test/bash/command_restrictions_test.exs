@@ -44,7 +44,7 @@ defmodule Bash.CommandRestrictionsTest do
         id: "#{context.test}",
         registry: registry_name,
         supervisor: supervisor_name,
-        options: %{command_policy: {:allow, MapSet.new(["cat", "echo"])}}
+        options: %{command_policy: {:allow, ["cat", "echo"]}}
       )
 
     {:ok, %{session: session}}
@@ -422,6 +422,12 @@ defmodule Bash.CommandRestrictionsTest do
       opts = %{restricted: true, command_policy: policy}
       result = CommandPolicy.normalize_options(opts)
       assert result[:command_policy] == policy
+    end
+
+    test "normalize_options converts allow list to MapSet" do
+      opts = %{command_policy: {:allow, ["cat", "grep"]}}
+      result = CommandPolicy.normalize_options(opts)
+      assert result[:command_policy] == {:allow, MapSet.new(["cat", "grep"])}
     end
   end
 
