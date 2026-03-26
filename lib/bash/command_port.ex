@@ -1,39 +1,147 @@
 defmodule Bash.CommandPort do
   @moduledoc """
-  Executes external commands using ExCmd.
+  Single interface for all user-facing OS process execution.
 
-  ExCmd provides proper stdin/stdout/stderr separation with backpressure,
-  unlike native Erlang ports which cannot close stdin separately from stdout.
+  Provides two layers of API:
 
-  ## Streaming
+  ## High-level API
 
-  By default, output is accumulated for backwards compatibility. To stream
-  output without accumulation, pass a `:sink` option:
+  `execute/3` runs a command to completion, streaming output to a sink:
 
-      # Streaming to callback
-      sink = Bash.Sink.Passthrough.new(fn chunk -> IO.inspect(chunk) end)
       CommandPort.execute("cat", ["bigfile.txt"], sink: sink)
 
-      # Streaming to file
-      {sink, close} = Bash.Sink.File.new("/tmp/output.txt")
-      CommandPort.execute("cat", ["bigfile.txt"], sink: sink)
-      close.()
+  ## Low-level Process API
+
+  For callers that manage process lifecycles directly (JobProcess, Coproc):
+
+      {:ok, proc} = CommandPort.start_link(["cat"], opts)
+      CommandPort.write(proc, "data")
+      CommandPort.close_stdin(proc)
+      {:ok, data} = CommandPort.read(proc)
+      {:ok, 0} = CommandPort.await_exit(proc, 5000)
+
+  ## Streaming API
+
+  For pipeline streaming:
+
+      stream = CommandPort.stream(["sort"], input: upstream)
+
+  ## Restricted Mode
+
+  All process-spawning functions accept a `restricted` boolean. When `true`,
+  they return `{:error, :restricted}` instead of spawning a process.
+
+  Internal plumbing (signal delivery, hostname lookup, named pipe creation)
+  is exempt and continues to use `System.cmd` directly.
+
+  ```mermaid
+  graph TD
+    AST[AST.Command] --> CP[CommandPort]
+    JP[JobProcess] --> CP
+    CO[Coproc] --> CP
+    PL[Pipeline] --> CP
+    CM[Command builtin] --> CP
+    CP -->|restricted?| ERR["{:error, :restricted}"]
+    CP -->|allowed| EX[ExCmd / System.cmd]
+  ```
   """
 
   alias Bash.CommandResult
 
-  # Executes a command with optional stdin input.
-  #
-  # Returns {:ok, %CommandResult{}} or {:error, %CommandResult{}}.
-  # Output is streamed to the sink during execution rather than accumulated.
-  #
-  # ## Options
-  #
-  # - `:stdin` - Binary data to write to the command's stdin
-  # - `:timeout` - Timeout in milliseconds (default: 5000)
-  # - `:cd` - Working directory for the command
-  # - `:env` - Environment variables as a list of `{key, value}` tuples
-  # - `:sink` - Output sink function (default: uses Sink.List for backwards compat)
+  defguardp is_restricted(restricted) when restricted == true
+
+  # ---------------------------------------------------------------------------
+  # Restricted mode helper
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Returns whether restricted mode is active for the given session state.
+
+  Safely traverses the nested options map, defaulting to `false` when keys
+  are absent (e.g. bare state maps in tests).
+  """
+  @spec restricted?(map()) :: boolean()
+  def restricted?(state), do: state |> Map.get(:options, %{}) |> Map.get(:restricted, false)
+
+  # ---------------------------------------------------------------------------
+  # Low-level process API (thin delegates to ExCmd.Process)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Starts an OS process via `ExCmd.Process.start_link/2`.
+
+  Returns `{:error, :restricted}` when `restricted` is `true`.
+  """
+  @spec start_link(list(String.t()), keyword(), boolean()) ::
+          {:ok, pid()} | {:error, :restricted} | {:error, term()}
+  def start_link(_cmd_parts, _opts, restricted) when is_restricted(restricted),
+    do: {:error, :restricted}
+
+  def start_link(cmd_parts, opts, _restricted),
+    do: ExCmd.Process.start_link(cmd_parts, opts)
+
+  @doc "Returns the OS PID of the process."
+  @spec os_pid(pid()) :: {:ok, non_neg_integer()} | non_neg_integer()
+  defdelegate os_pid(process), to: ExCmd.Process
+
+  @doc "Reads a chunk from the process stdout. Returns `{:ok, data}`, `:eof`, or `{:error, reason}`."
+  @spec read(pid()) :: {:ok, binary()} | :eof | {:error, term()}
+  defdelegate read(process), to: ExCmd.Process
+
+  @doc "Writes data to the process stdin."
+  @spec write(pid(), binary()) :: :ok | {:error, term()}
+  defdelegate write(process, data), to: ExCmd.Process
+
+  @doc "Closes the process stdin."
+  @spec close_stdin(pid()) :: :ok
+  defdelegate close_stdin(process), to: ExCmd.Process
+
+  @doc "Closes the process stdout."
+  @spec close_stdout(pid()) :: :ok
+  defdelegate close_stdout(process), to: ExCmd.Process
+
+  @doc "Waits for the process to exit within the given timeout."
+  @spec await_exit(pid(), non_neg_integer() | :infinity) :: {:ok, non_neg_integer()} | {:error, term()}
+  defdelegate await_exit(process, timeout), to: ExCmd.Process
+
+  # ---------------------------------------------------------------------------
+  # Streaming API
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Creates an OS process stream via `ExCmd.stream/2`.
+
+  Returns `{:error, :restricted}` when `restricted` is `true`.
+  """
+  @spec stream(list(String.t()), keyword(), boolean()) ::
+          Enumerable.t() | {:error, :restricted}
+  def stream(_cmd_parts, _opts, restricted) when is_restricted(restricted),
+    do: {:error, :restricted}
+
+  def stream(cmd_parts, opts, _restricted),
+    do: ExCmd.stream(cmd_parts, opts)
+
+  # ---------------------------------------------------------------------------
+  # System.cmd wrapper
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Executes a command via `System.cmd/3`.
+
+  Returns `{:error, :restricted}` when `restricted` is `true`.
+  """
+  @spec system_cmd(String.t(), list(String.t()), keyword(), boolean()) ::
+          {String.t(), non_neg_integer()} | {:error, :restricted}
+  def system_cmd(_path, _args, _opts, restricted) when is_restricted(restricted),
+    do: {:error, :restricted}
+
+  def system_cmd(path, args, opts, _restricted),
+    do: System.cmd(path, args, opts)
+
+  # ---------------------------------------------------------------------------
+  # High-level API
+  # ---------------------------------------------------------------------------
+
   @doc false
   def execute(command_name, args, opts \\ []) do
     stdin = opts[:stdin]
@@ -41,15 +149,14 @@ defmodule Bash.CommandPort do
     cd = opts[:cd] || File.cwd!()
     env = opts[:env] || []
     sink_opt = opts[:sink]
+    restricted = opts[:restricted] || false
 
-    execute_command(command_name, args, stdin, cd, env, timeout, sink_opt)
+    execute_command(command_name, args, stdin, cd, env, timeout, sink_opt, restricted)
   end
 
-  defp execute_command(command_name, args, stdin, cd, env, timeout, sink_opt) do
+  defp execute_command(command_name, args, stdin, cd, env, timeout, sink_opt, restricted) do
     cmd_parts = [command_name | args]
 
-    # Check if command exists before trying to execute
-    # ExCmd doesn't return 127 for command not found, so we check manually
     if System.find_executable(command_name) == nil and
          not String.starts_with?(command_name, "/") and
          not String.starts_with?(command_name, "./") do
@@ -60,12 +167,11 @@ defmodule Bash.CommandPort do
          error: :command_not_found
        }}
     else
-      execute_with_excmd(cmd_parts, stdin, cd, env, timeout, sink_opt)
+      execute_with_excmd(cmd_parts, stdin, cd, env, timeout, sink_opt, restricted)
     end
   end
 
-  defp execute_with_excmd(cmd_parts, stdin, cd, env, timeout, sink_opt) do
-    # Build ExCmd options - ExCmd 0.18.0 only accepts cd, env, and stderr options
+  defp execute_with_excmd(cmd_parts, stdin, cd, env, timeout, sink_opt, restricted) do
     exec_opts = [
       cd: cd,
       env: normalize_env(env),
@@ -74,16 +180,23 @@ defmodule Bash.CommandPort do
 
     sink = sink_opt || fn _chunk -> :ok end
 
-    case ExCmd.Process.start_link(cmd_parts, exec_opts) do
-      {:ok, process} ->
-        # Write stdin if provided, then close stdin
-        write_stdin(process, stdin)
+    case start_link(cmd_parts, exec_opts, restricted) do
+      {:error, :restricted} ->
+        command_name = hd(cmd_parts)
+        sink.({:stderr, "bash: #{command_name}: restricted\n"})
 
-        # Stream output to sink (does not accumulate in memory)
+        {:error,
+         %CommandResult{
+           command: Enum.join(cmd_parts, " "),
+           exit_code: 1,
+           error: :restricted
+         }}
+
+      {:ok, process} ->
+        write_stdin_then_close(process, stdin)
         stream_to_sink(process, sink)
 
-        # Wait for exit
-        case ExCmd.Process.await_exit(process, timeout) do
+        case await_exit(process, timeout) do
           {:ok, 0} ->
             {:ok,
              %CommandResult{
@@ -135,9 +248,8 @@ defmodule Bash.CommandPort do
     end
   end
 
-  # Stream output chunks to sink without accumulating in memory
   defp stream_to_sink(process, sink) do
-    case ExCmd.Process.read(process) do
+    case read(process) do
       {:ok, data} ->
         sink.({:stdout, data})
         stream_to_sink(process, sink)
@@ -150,7 +262,6 @@ defmodule Bash.CommandPort do
     end
   end
 
-  # Normalize environment to keyword list format expected by ExCmd
   defp normalize_env([]), do: []
 
   defp normalize_env(env) when is_list(env) do
@@ -167,27 +278,27 @@ defmodule Bash.CommandPort do
     end)
   end
 
-  defp write_stdin(process, nil) do
-    ExCmd.Process.close_stdin(process)
+  defp write_stdin_then_close(process, nil) do
+    close_stdin(process)
   end
 
-  defp write_stdin(process, data) when is_binary(data) do
-    case ExCmd.Process.write(process, data) do
-      :ok -> ExCmd.Process.close_stdin(process)
+  defp write_stdin_then_close(process, data) when is_binary(data) do
+    case write(process, data) do
+      :ok -> close_stdin(process)
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp write_stdin(process, %Bash.Pipe{} = pipe) do
+  defp write_stdin_then_close(process, %Bash.Pipe{} = pipe) do
     case Bash.Pipe.read_line(pipe) do
       {:ok, data} ->
-        case ExCmd.Process.write(process, data) do
-          :ok -> write_stdin(process, pipe)
-          {:error, _} -> ExCmd.Process.close_stdin(process)
+        case write(process, data) do
+          :ok -> write_stdin_then_close(process, pipe)
+          {:error, _} -> close_stdin(process)
         end
 
       :eof ->
-        ExCmd.Process.close_stdin(process)
+        close_stdin(process)
     end
   end
 end
