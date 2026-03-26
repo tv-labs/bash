@@ -35,6 +35,7 @@ defmodule Bash.AST.Command do
   alias Bash.AST.Helpers
   alias Bash.Builtin
   alias Bash.Builtin.Coproc
+  alias Bash.CommandPolicy
   alias Bash.CommandPort
   alias Bash.CommandResult
   alias Bash.Sink
@@ -770,12 +771,32 @@ defmodule Bash.AST.Command do
     if Path.type(path) == :relative, do: Path.join(working_dir, path), else: path
   end
 
-  # Dispatch order: functions -> elixir interop -> builtins -> external
+  # Dispatch order: functions -> elixir interop -> builtins -> policy check -> external
   defp resolve_and_execute(command_name, args, session_state, stdin, redirects, meta) do
     with nil <- try_bash_function(command_name, args, session_state, meta),
          nil <- try_elixir_interop(command_name, args, stdin, session_state),
-         nil <- try_builtin(command_name, args, stdin, session_state) do
+         nil <- try_builtin(command_name, args, stdin, session_state),
+         :ok <- check_command_policy(command_name, session_state) do
       execute_external_command(command_name, args, session_state, stdin, redirects)
+    end
+  end
+
+  defp check_command_policy(command_name, session_state) do
+    policy = CommandPolicy.from_state(session_state)
+
+    case CommandPolicy.check(policy, command_name) do
+      :ok ->
+        :ok
+
+      {:error, message} ->
+        Sink.write_stderr(session_state, message <> "\n")
+
+        {:error,
+         %CommandResult{
+           command: command_name,
+           exit_code: 1,
+           error: :command_policy
+         }}
     end
   end
 

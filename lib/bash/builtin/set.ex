@@ -134,14 +134,18 @@ defmodule Bash.Builtin.Set do
         # Get current options, starting with defaults
         current_options = Map.merge(@default_options, state.options || %{})
 
-        # Apply changes
-        # Set options to true for set, and false for unset (not drop, so merge works correctly)
         new_options =
           current_options
           |> Map.merge(Map.new(options_to_set, fn opt -> {opt, true} end))
           |> Map.merge(Map.new(options_to_unset, fn opt -> {opt, false} end))
 
-        # Build updates
+        # Preserve immutable command_policy from current state
+        new_options =
+          case Map.get(current_options, :command_policy) do
+            nil -> new_options
+            policy -> Map.put(new_options, :command_policy, policy)
+          end
+
         update_state(options: new_options)
 
         # Handle positional parameters if provided after --

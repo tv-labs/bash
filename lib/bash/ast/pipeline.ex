@@ -23,9 +23,9 @@ defmodule Bash.AST.Pipeline do
   alias Bash.AST
   alias Bash.AST.Helpers
   alias Bash.Builtin
+  alias Bash.CommandPolicy
   alias Bash.CommandPort
   alias Bash.Executor
-  alias Bash.Session
   alias Bash.OutputCollector
   alias Bash.Sink
   alias Bash.Variable
@@ -534,19 +534,18 @@ defmodule Bash.AST.Pipeline do
 
   # Check if a single command is external (not a builtin or function) and has no redirects.
   # Commands with redirects need sequential execution to handle the redirect logic.
-  defp external_command?(_command, %{options: %{restricted: true}}), do: false
-
+  # Commands blocked by command policy are not considered external for streaming purposes.
   defp external_command?(%AST.Command{name: name, redirects: redirects}, session_state) do
-    # Commands with redirects can't use simple streaming
     if redirects != [] do
       false
     else
       command_name = Helpers.word_to_string(name, session_state)
+      policy = CommandPolicy.from_state(session_state)
 
-      # Check in order: functions, elixir interop, builtins
       not has_function?(command_name, session_state) and
         not has_elixir_interop?(command_name, session_state) and
-        not Builtin.implemented?(command_name)
+        not Builtin.implemented?(command_name) and
+        CommandPolicy.allowed?(policy, command_name)
     end
   end
 
@@ -647,7 +646,6 @@ defmodule Bash.AST.Pipeline do
   # Build nested stream pipeline from innermost (first command) to outermost (last command)
   defp build_stream_pipeline([cmd], stdin, session_state) do
     {name, args, env} = resolve_external_command(cmd, session_state)
-    restricted = Session.restricted?(session_state)
 
     opts = [
       input: stdin,
@@ -656,14 +654,10 @@ defmodule Bash.AST.Pipeline do
       stderr: :redirect_to_stdout
     ]
 
-    case CommandPort.stream([name | args], opts, restricted) do
-      {:error, :restricted} -> Stream.map([], & &1)
-      stream -> stream
-    end
+    CommandPort.stream([name | args], opts)
   end
 
   defp build_stream_pipeline([cmd | rest], stdin, session_state) do
-    # Build upstream first (inner stream)
     upstream = build_stream_pipeline(rest, stdin, session_state)
 
     # Filter out exit tuples - only pass binary data to downstream command
@@ -676,7 +670,6 @@ defmodule Bash.AST.Pipeline do
       end)
 
     {name, args, env} = resolve_external_command(cmd, session_state)
-    restricted = Session.restricted?(session_state)
 
     opts = [
       input: filtered_upstream,
@@ -685,10 +678,7 @@ defmodule Bash.AST.Pipeline do
       stderr: :redirect_to_stdout
     ]
 
-    case CommandPort.stream([name | args], opts, restricted) do
-      {:error, :restricted} -> Stream.map([], & &1)
-      stream -> stream
-    end
+    CommandPort.stream([name | args], opts)
   end
 
   # Resolve command name, args, and environment from AST

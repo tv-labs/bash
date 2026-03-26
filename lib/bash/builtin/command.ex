@@ -18,8 +18,8 @@ defmodule Bash.Builtin.Command do
   use Bash.Builtin
 
   alias Bash.Builtin
+  alias Bash.CommandPolicy
   alias Bash.CommandPort
-  alias Bash.Session
   alias Bash.Variable
 
   # Standard utilities path that is guaranteed to find all standard utilities
@@ -201,8 +201,15 @@ defmodule Bash.Builtin.Command do
       # Check PATH for external command
       true ->
         case find_in_path(name, state) do
-          nil -> :not_found
-          path -> {:file, path}
+          nil ->
+            :not_found
+
+          path ->
+            if CommandPolicy.allowed?(CommandPolicy.from_state(state), name) do
+              {:file, path}
+            else
+              :not_found
+            end
         end
     end
   end
@@ -239,8 +246,14 @@ defmodule Bash.Builtin.Command do
             {:ok, 127}
 
           path ->
-            # Execute external command
-            execute_external(path, args, state, opts)
+            case CommandPolicy.check(CommandPolicy.from_state(state), command_name) do
+              {:error, message} ->
+                error(message)
+                {:ok, 1}
+
+              :ok ->
+                execute_external(path, args, state, opts)
+            end
         end
     end
   end
@@ -284,11 +297,7 @@ defmodule Bash.Builtin.Command do
     ]
 
     try do
-      case CommandPort.system_cmd(path, args, cmd_opts, Session.restricted?(state)) do
-        {:error, :restricted} ->
-          error("bash: #{path}: restricted")
-          {:ok, 1}
-
+      case CommandPort.system_cmd(path, args, cmd_opts) do
         {stdout, exit_code} ->
           write(stdout)
           {:ok, exit_code}

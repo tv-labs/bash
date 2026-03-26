@@ -20,6 +20,7 @@ defmodule Bash.Builtin.Exec do
   """
   use Bash.Builtin
 
+  alias Bash.CommandPolicy
   alias Bash.CommandPort
   alias Bash.Variable
 
@@ -109,9 +110,18 @@ defmodule Bash.Builtin.Exec do
     end)
   end
 
-  # Execute the command with the given options
   defp execute_command(command, args, opts, session_state) do
-    # Build environment
+    case CommandPolicy.check(CommandPolicy.from_state(session_state), command) do
+      {:error, message} ->
+        error(message)
+        {:ok, 1}
+
+      :ok ->
+        do_execute_command(command, args, opts, session_state)
+    end
+  end
+
+  defp do_execute_command(command, args, opts, session_state) do
     env =
       if opts.clear_env do
         []

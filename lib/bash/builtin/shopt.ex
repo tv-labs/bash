@@ -24,6 +24,10 @@ defmodule Bash.Builtin.Shopt do
   """
   use Bash.Builtin
 
+  alias Bash.CommandPolicy
+
+  @read_only_shopt_options ~w(restricted_shell login_shell)
+
   # Default shopt options - these are distinct from set -o options
   # Format: {name, default_value, description}
   @shopt_options %{
@@ -256,53 +260,76 @@ defmodule Bash.Builtin.Shopt do
     end
   end
 
-  # Set (enable) options
   defp set_options(optnames, opts, session_state) do
     if Enum.empty?(optnames) do
       :ok
     else
       {valid, invalid} = validate_optnames(optnames, opts.use_set_o)
 
-      if Enum.empty?(invalid) do
-        # Build option updates
-        option_updates =
-          Enum.reduce(valid, %{}, fn optname, acc ->
-            key = option_key(optname, opts.use_set_o)
-            Map.put(acc, key, true)
-          end)
-
-        new_options = Map.merge(session_state.options || %{}, option_updates)
-        update_state(options: new_options)
-        :ok
-      else
+      if not Enum.empty?(invalid) do
         Enum.each(invalid, fn name -> error("shopt: #{name}: invalid shell option name") end)
         {:ok, 1}
+      else
+        {read_only, settable} = split_read_only(valid, opts.use_set_o)
+
+        if read_only != [] do
+          Enum.each(read_only, fn name -> error("shopt: #{name}: cannot be set") end)
+        end
+
+        if settable != [] do
+          option_updates =
+            Enum.reduce(settable, %{}, fn optname, acc ->
+              key = option_key(optname, opts.use_set_o)
+              Map.put(acc, key, true)
+            end)
+
+          new_options = Map.merge(session_state.options || %{}, option_updates)
+          update_state(options: new_options)
+        end
+
+        if read_only != [], do: {:ok, 1}, else: :ok
       end
     end
   end
 
-  # Unset (disable) options
   defp unset_options(optnames, opts, session_state) do
     if Enum.empty?(optnames) do
       :ok
     else
       {valid, invalid} = validate_optnames(optnames, opts.use_set_o)
 
-      if Enum.empty?(invalid) do
-        # Build option updates
-        option_updates =
-          Enum.reduce(valid, %{}, fn optname, acc ->
-            key = option_key(optname, opts.use_set_o)
-            Map.put(acc, key, false)
-          end)
-
-        new_options = Map.merge(session_state.options || %{}, option_updates)
-        update_state(options: new_options)
-        :ok
-      else
+      if not Enum.empty?(invalid) do
         Enum.each(invalid, fn name -> error("shopt: #{name}: invalid shell option name") end)
         {:ok, 1}
+      else
+        {read_only, settable} = split_read_only(valid, opts.use_set_o)
+
+        if read_only != [] do
+          Enum.each(read_only, fn name -> error("shopt: #{name}: cannot be unset") end)
+        end
+
+        if settable != [] do
+          option_updates =
+            Enum.reduce(settable, %{}, fn optname, acc ->
+              key = option_key(optname, opts.use_set_o)
+              Map.put(acc, key, false)
+            end)
+
+          new_options = Map.merge(session_state.options || %{}, option_updates)
+          update_state(options: new_options)
+        end
+
+        if read_only != [], do: {:ok, 1}, else: :ok
       end
+    end
+  end
+
+  defp split_read_only(optnames, use_set_o) do
+    if use_set_o do
+      # set -o options are all mutable
+      {[], optnames}
+    else
+      Enum.split_with(optnames, &(&1 in @read_only_shopt_options))
     end
   end
 
@@ -408,9 +435,13 @@ defmodule Bash.Builtin.Shopt do
     Map.get(session_state.options || %{}, key, false)
   end
 
+  defp get_option_value("restricted_shell", false = _use_set_o, session_state) do
+    CommandPolicy.from_state(session_state) != :unrestricted
+  end
+
   defp get_option_value(optname, false = _use_set_o, session_state) do
     key = String.to_atom("shopt_" <> optname)
-    # Get default value from @shopt_options if not set
+
     default =
       case Map.get(@shopt_options, optname) do
         {default_val, _desc} -> default_val

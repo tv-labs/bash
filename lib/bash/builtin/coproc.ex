@@ -65,6 +65,7 @@ defmodule Bash.Builtin.Coproc do
 
   require Logger
 
+  alias Bash.CommandPolicy
   alias Bash.CommandPort
   alias Bash.Executor
   alias Bash.Variable
@@ -124,6 +125,17 @@ defmodule Bash.Builtin.Coproc do
 
   @doc false
   def start_external_coproc(name, command, cmd_args, session_state) do
+    case CommandPolicy.check(CommandPolicy.from_state(session_state), command) do
+      {:error, message} ->
+        Bash.Sink.write_stderr(session_state, message <> "\n")
+        {:error, 1}
+
+      :ok ->
+        do_start_external_coproc(name, command, cmd_args, session_state)
+    end
+  end
+
+  defp do_start_external_coproc(name, command, cmd_args, session_state) do
     child_spec = %{
       id: {__MODULE__, name},
       start:
@@ -264,7 +276,7 @@ defmodule Bash.Builtin.Coproc do
       stderr: :redirect_to_stdout
     ]
 
-    case CommandPort.start_link(cmd, proc_opts, false) do
+    case CommandPort.start_link(cmd, proc_opts) do
       {:ok, pid} ->
         os_pid =
           case CommandPort.os_pid(pid) do

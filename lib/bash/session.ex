@@ -51,8 +51,9 @@ defmodule Bash.Session do
   alias Bash.AST
   alias Bash.AST.Compound
   alias Bash.AST.Pipeline
-  alias Bash.Executor
+  alias Bash.CommandPolicy
   alias Bash.CommandResult
+  alias Bash.Executor
   alias Bash.Script
   alias Bash.Job
   alias Bash.JobProcess
@@ -451,15 +452,6 @@ defmodule Bash.Session do
   def get_state(session) do
     GenServer.call(session, :get_state)
   end
-
-  @doc """
-  Returns whether restricted mode is active for the given session state.
-
-  Safely traverses the nested options map, defaulting to `false` when keys
-  are absent (e.g. bare state maps in tests).
-  """
-  @spec restricted?(map()) :: boolean()
-  def restricted?(state), do: state |> Map.get(:options, %{}) |> Map.get(:restricted, false)
 
   @doc """
   Load an Elixir API module into a session.
@@ -986,7 +978,8 @@ defmodule Bash.Session do
     aliases = opts[:aliases] || %{}
     functions = opts[:functions] || %{}
     default_options = %{hashall: true, braceexpand: true}
-    options = Map.merge(default_options, opts[:options] || %{})
+    raw_options = Map.merge(default_options, opts[:options] || %{})
+    options = CommandPolicy.normalize_options(raw_options)
 
     {:ok, job_supervisor} = DynamicSupervisor.start_link(strategy: :one_for_one)
     {start_runtime_ms, _} = :erlang.statistics(:runtime)
@@ -1933,22 +1926,36 @@ defmodule Bash.Session do
     %{state | variables: Map.put(state.variables, "PIPESTATUS", pipestatus_var)}
   end
 
-  # Start a background job from a foreground AST (internal helper for handle_call)
   defp do_start_background_job(foreground_ast, state) do
-    # For compound commands, run through bash to preserve && and || logic
     {command, args, command_string} =
       case foreground_ast do
         %Compound{} ->
-          # Compound command - run through bash -c
           script = build_command_string(foreground_ast)
           {"bash", ["-c", script], script}
 
         _ ->
-          # Simple command - extract directly
           {cmd, cmd_args} = extract_command_info(foreground_ast, state)
           {cmd, cmd_args, build_command_string(foreground_ast)}
       end
 
+    case CommandPolicy.check(CommandPolicy.from_state(state), command) do
+      {:error, message} ->
+        if state.stderr_sink, do: state.stderr_sink.({:stderr, message <> "\n"})
+
+        error_result = %CommandResult{
+          command: command_string,
+          exit_code: 1,
+          error: :command_policy
+        }
+
+        {:reply, {:error, error_result}, state}
+
+      :ok ->
+        do_start_background_job_allowed(command, args, command_string, foreground_ast, state)
+    end
+  end
+
+  defp do_start_background_job_allowed(command, args, command_string, foreground_ast, state) do
     job_opts = [
       job_number: state.next_job_number,
       command: command,
@@ -2021,7 +2028,6 @@ defmodule Bash.Session do
   # This is used by Script executor to get $! immediately when & is encountered
   # Returns {os_pid_string, updated_session_state} or {:error, reason}
   defp start_background_job_sync(foreground_ast, current_session_state, original_state) do
-    # For compound commands, run through bash to preserve && and || logic
     {command, args, _command_string} =
       case foreground_ast do
         %Compound{} ->
@@ -2033,8 +2039,32 @@ defmodule Bash.Session do
           {cmd, cmd_args, build_command_string(foreground_ast)}
       end
 
-    # Use the session state seen by the script (which has accumulated updates from
-    # prior background jobs in the same script) for job numbering
+    case CommandPolicy.check(CommandPolicy.from_state(current_session_state), command) do
+      {:error, message} ->
+        if current_session_state.stderr_sink do
+          current_session_state.stderr_sink.({:stderr, message <> "\n"})
+        end
+
+        {:error, :command_policy}
+
+      :ok ->
+        do_start_background_job_sync(
+          command,
+          args,
+          foreground_ast,
+          current_session_state,
+          original_state
+        )
+    end
+  end
+
+  defp do_start_background_job_sync(
+         command,
+         args,
+         _foreground_ast,
+         current_session_state,
+         original_state
+       ) do
     job_number =
       case Map.get(current_session_state, :next_job_number) do
         n when is_integer(n) and n > 0 -> n
