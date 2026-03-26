@@ -1379,8 +1379,17 @@ defmodule Bash.AST.Helpers do
     _result = Executor.execute(ast, subst_session, nil)
 
     # Extract stdout from the temporary collector
-    {stdout_iodata, _stderr_iodata} = OutputCollector.flush_split(temp_collector)
+    {stdout_iodata, stderr_iodata} = OutputCollector.flush_split(temp_collector)
     GenServer.stop(temp_collector, :normal)
+
+    stderr_output = IO.iodata_to_binary(stderr_iodata)
+
+    if stderr_output != "" do
+      case Map.get(session_state, :stderr_sink) do
+        sink when is_function(sink) -> sink.({:stderr, stderr_output})
+        _ -> :ok
+      end
+    end
 
     # Convert iodata to string and trim trailing newline (bash behavior)
     IO.iodata_to_binary(stdout_iodata)

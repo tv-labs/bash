@@ -291,8 +291,17 @@ defmodule Bash.AST.Pipeline do
       end
 
     # Extract output from the temporary collector
-    {stdout_iodata, _stderr_iodata} = OutputCollector.flush_split(temp_collector)
+    {stdout_iodata, stderr_iodata} = OutputCollector.flush_split(temp_collector)
     GenServer.stop(temp_collector, :normal)
+
+    stderr_output = IO.iodata_to_binary(stderr_iodata)
+
+    if stderr_output != "" do
+      case Map.get(session_state, :stderr_sink) do
+        sink when is_function(sink) -> sink.({:stderr, stderr_output})
+        _ -> :ok
+      end
+    end
 
     output = IO.iodata_to_binary(stdout_iodata)
     {exit_code, env_updates} = result
@@ -488,8 +497,17 @@ defmodule Bash.AST.Pipeline do
           {result.exit_code || 0, %{}}
       end
 
-    {stdout_iodata, _stderr_iodata} = OutputCollector.flush_split(temp_collector)
+    {stdout_iodata, stderr_iodata} = OutputCollector.flush_split(temp_collector)
     GenServer.stop(temp_collector, :normal)
+
+    stderr_output = IO.iodata_to_binary(stderr_iodata)
+
+    if stderr_output != "" do
+      case Map.get(session_state, :stderr_sink) do
+        sink when is_function(sink) -> sink.({:stderr, stderr_output})
+        _ -> :ok
+      end
+    end
 
     output = IO.iodata_to_binary(stdout_iodata)
     {exit_code, env_updates} = result
