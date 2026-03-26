@@ -8,7 +8,7 @@ defmodule Bash.AST.Coproc do
   the coproc array variable and PID variable use that name. Otherwise,
   the default name "COPROC" is used.
 
-  Simple commands are executed via `ExCmd.Process` (external OS process).
+  Simple commands are executed via `CommandPort` (external OS process).
   Compound commands are executed within the Elixir bash interpreter in a
   spawned BEAM process with message-passing I/O.
 

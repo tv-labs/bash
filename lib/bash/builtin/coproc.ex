@@ -35,7 +35,7 @@ defmodule Bash.Builtin.Coproc do
   ```mermaid
   stateDiagram-v2
       [*] --> running: start_link external
-      running --> running: read/write via ExCmd.Process
+      running --> running: read/write via CommandPort
       running --> closing: close_stdin
       closing --> stopped: process exits
       running --> stopped: process exits
@@ -65,6 +65,7 @@ defmodule Bash.Builtin.Coproc do
 
   require Logger
 
+  alias Bash.CommandPort
   alias Bash.Executor
   alias Bash.Variable
 
@@ -263,10 +264,10 @@ defmodule Bash.Builtin.Coproc do
       stderr: :redirect_to_stdout
     ]
 
-    case ExCmd.Process.start_link(cmd, proc_opts) do
+    case CommandPort.start_link(cmd, proc_opts, false) do
       {:ok, pid} ->
         os_pid =
-          case ExCmd.Process.os_pid(pid) do
+          case CommandPort.os_pid(pid) do
             {:ok, os_pid} -> os_pid
             os_pid when is_integer(os_pid) -> os_pid
           end
@@ -326,7 +327,7 @@ defmodule Bash.Builtin.Coproc do
   end
 
   def handle_call(:read, _from, %{mode: :external} = state) do
-    case ExCmd.Process.read(state.proc) do
+    case CommandPort.read(state.proc) do
       {:ok, data} -> {:reply, {:ok, data}, state}
       :eof -> {:reply, :eof, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
@@ -341,7 +342,7 @@ defmodule Bash.Builtin.Coproc do
   end
 
   def handle_call({:write, data}, _from, %{mode: :external} = state) do
-    case ExCmd.Process.write(state.proc, data) do
+    case CommandPort.write(state.proc, data) do
       :ok -> {:reply, :ok, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
@@ -355,7 +356,7 @@ defmodule Bash.Builtin.Coproc do
   end
 
   def handle_call(:close_stdin, _from, %{mode: :external} = state) do
-    ExCmd.Process.close_stdin(state.proc)
+    CommandPort.close_stdin(state.proc)
     {:reply, :ok, state}
   end
 
@@ -365,7 +366,7 @@ defmodule Bash.Builtin.Coproc do
   end
 
   def handle_call(:close_stdout, _from, %{mode: :external} = state) do
-    ExCmd.Process.close_stdout(state.proc)
+    CommandPort.close_stdout(state.proc)
     {:reply, :ok, state}
   end
 
@@ -374,7 +375,7 @@ defmodule Bash.Builtin.Coproc do
   end
 
   def handle_call(:status, _from, %{mode: :external} = state) do
-    case ExCmd.Process.await_exit(state.proc, 0) do
+    case CommandPort.await_exit(state.proc, 0) do
       {:ok, exit_code} -> {:reply, {:exited, exit_code}, state}
       {:error, :timeout} -> {:reply, :running, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
@@ -409,8 +410,8 @@ defmodule Bash.Builtin.Coproc do
   @impl true
   def terminate(_reason, %{mode: :external} = state) do
     if state.proc do
-      ExCmd.Process.close_stdin(state.proc)
-      ExCmd.Process.await_exit(state.proc, 1000)
+      CommandPort.close_stdin(state.proc)
+      CommandPort.await_exit(state.proc, 1000)
     end
 
     :ok
