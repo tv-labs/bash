@@ -868,74 +868,272 @@ defmodule Bash.CommandRestrictionsTest do
     end
   end
 
-  describe "category-aware integration" do
-    test "builtins-only policy allows builtins, blocks externals" do
+  describe "category-aware: builtins only" do
+    test "allows builtins" do
       {:ok, session} = start_session_with_policy(commands: [{:allow, [:builtins]}])
-      result = run_script(session, "echo hello")
-      assert get_stdout(result) == "hello\n"
+      assert get_stdout(run_script(session, "echo hello")) == "hello\n"
+    end
 
+    test "blocks externals" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, [:builtins]}])
+      assert get_stderr(run_script(session, "cat /dev/null")) =~ "command not allowed"
+    end
+
+    test "blocks functions" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, [:builtins]}])
+
+      assert get_stderr(run_script(session, "greet() { echo hi; }; greet")) =~
+               "command not allowed"
+    end
+
+    test "blocks interop" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, [:builtins]}])
+      Session.load_api(session, TestAPI)
+
+      assert get_stderr(run_script(session, "restrict_test.greet alice")) =~
+               "command not allowed"
+    end
+  end
+
+  describe "category-aware: externals only" do
+    test "allows externals" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, [:externals]}])
       result = run_script(session, "cat /dev/null")
-      assert get_stderr(result) =~ "command not allowed"
+      refute get_stderr(result) =~ "command not allowed"
     end
 
-    test "disallow specific builtin by name" do
-      {:ok, session} =
-        start_session_with_policy(commands: [{:disallow, ["eval"]}, {:allow, :all}])
-
-      result = run_script(session, "eval 'echo hi'")
-      assert get_stderr(result) =~ "command not allowed"
-
-      result = run_script(session, "echo works")
-      assert get_stdout(result) == "works\n"
+    test "blocks builtins" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, [:externals]}])
+      assert get_stderr(run_script(session, "echo hello")) =~ "command not allowed"
     end
 
-    test "function gating blocks user-defined functions" do
-      {:ok, session} = start_session_with_policy(commands: [{:allow, [:builtins]}])
-      result = run_script(session, "greet() { echo hi; }; greet")
-      assert get_stderr(result) =~ "command not allowed"
+    test "blocks functions" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, [:externals]}])
+
+      assert get_stderr(run_script(session, "greet() { echo hi; }; greet")) =~
+               "command not allowed"
     end
 
-    test "function gating allows functions when permitted" do
+    test "blocks interop" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, [:externals]}])
+      Session.load_api(session, TestAPI)
+
+      assert get_stderr(run_script(session, "restrict_test.greet alice")) =~
+               "command not allowed"
+    end
+  end
+
+  describe "category-aware: functions only" do
+    test "allows functions" do
       {:ok, session} =
         start_session_with_policy(commands: [{:allow, [:builtins, :functions]}])
 
-      result = run_script(session, "greet() { echo hi; }; greet")
-      assert get_stdout(result) == "hi\n"
+      assert get_stdout(run_script(session, "greet() { echo hi; }; greet")) == "hi\n"
     end
 
-    test "interop gating blocks interop calls" do
-      {:ok, session} = start_session_with_policy(commands: [{:allow, [:builtins]}])
+    test "blocks externals" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:allow, [:builtins, :functions]}])
+
+      assert get_stderr(run_script(session, "cat /dev/null")) =~ "command not allowed"
+    end
+
+    test "blocks interop" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:allow, [:builtins, :functions]}])
+
       Session.load_api(session, TestAPI)
-      result = run_script(session, "restrict_test.greet alice")
-      assert get_stderr(result) =~ "command not allowed"
-    end
 
-    test "interop gating allows interop when permitted" do
+      assert get_stderr(run_script(session, "restrict_test.greet alice")) =~
+               "command not allowed"
+    end
+  end
+
+  describe "category-aware: interop only" do
+    test "allows interop" do
       {:ok, session} =
         start_session_with_policy(commands: [{:allow, [:builtins, :interop]}])
 
       Session.load_api(session, TestAPI)
-      result = run_script(session, "restrict_test.greet alice")
-      assert get_stdout(result) == "hello alice\n"
+
+      assert get_stdout(run_script(session, "restrict_test.greet alice")) ==
+               "hello alice\n"
     end
 
-    test "{:disallow, :all} blocks everything" do
+    test "blocks externals" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:allow, [:builtins, :interop]}])
+
+      assert get_stderr(run_script(session, "cat /dev/null")) =~ "command not allowed"
+    end
+
+    test "blocks functions" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:allow, [:builtins, :interop]}])
+
+      assert get_stderr(run_script(session, "greet() { echo hi; }; greet")) =~
+               "command not allowed"
+    end
+  end
+
+  describe "category-aware: builtins + externals" do
+    test "allows both builtins and externals" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:allow, [:builtins, :externals]}])
+
+      assert get_stdout(run_script(session, "echo hello")) == "hello\n"
+      result = run_script(session, "cat /dev/null")
+      refute get_stderr(result) =~ "command not allowed"
+    end
+
+    test "blocks functions" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:allow, [:builtins, :externals]}])
+
+      assert get_stderr(run_script(session, "greet() { echo hi; }; greet")) =~
+               "command not allowed"
+    end
+
+    test "blocks interop" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:allow, [:builtins, :externals]}])
+
+      Session.load_api(session, TestAPI)
+
+      assert get_stderr(run_script(session, "restrict_test.greet alice")) =~
+               "command not allowed"
+    end
+  end
+
+  describe "category-aware: builtins + functions + interop (no externals)" do
+    test "allows builtins, functions, and interop" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:allow, [:builtins, :functions, :interop]}])
+
+      Session.load_api(session, TestAPI)
+      assert get_stdout(run_script(session, "echo hello")) == "hello\n"
+
+      assert get_stdout(run_script(session, "greet() { echo hi; }; greet")) == "hi\n"
+
+      assert get_stdout(run_script(session, "restrict_test.greet alice")) ==
+               "hello alice\n"
+    end
+
+    test "blocks externals" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:allow, [:builtins, :functions, :interop]}])
+
+      assert get_stderr(run_script(session, "cat /dev/null")) =~ "command not allowed"
+    end
+  end
+
+  describe "category-aware: disallow specific categories" do
+    test "disallow externals, allow everything else" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:disallow, [:externals]}, {:allow, :all}])
+
+      assert get_stdout(run_script(session, "echo hello")) == "hello\n"
+      assert get_stderr(run_script(session, "cat /dev/null")) =~ "command not allowed"
+    end
+
+    test "disallow interop, allow everything else" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:disallow, [:interop]}, {:allow, :all}])
+
+      Session.load_api(session, TestAPI)
+      assert get_stdout(run_script(session, "echo hello")) == "hello\n"
+
+      assert get_stderr(run_script(session, "restrict_test.greet alice")) =~
+               "command not allowed"
+    end
+
+    test "disallow functions, allow everything else" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:disallow, [:functions]}, {:allow, :all}])
+
+      assert get_stdout(run_script(session, "echo hello")) == "hello\n"
+
+      assert get_stderr(run_script(session, "greet() { echo hi; }; greet")) =~
+               "command not allowed"
+    end
+
+    test "disallow builtins, allow everything else" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:disallow, [:builtins]}, {:allow, :all}])
+
+      assert get_stderr(run_script(session, "echo hello")) =~ "command not allowed"
+    end
+  end
+
+  describe "category-aware: disallow specific commands by name" do
+    test "block specific builtin by name" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:disallow, ["eval"]}, {:allow, :all}])
+
+      assert get_stderr(run_script(session, "eval 'echo hi'")) =~ "command not allowed"
+      assert get_stdout(run_script(session, "echo works")) == "works\n"
+    end
+
+    test "block specific external by name with categories allowed" do
+      {:ok, session} =
+        start_session_with_policy(
+          commands: [{:disallow, ["rm"]}, {:allow, [:builtins, :externals]}]
+        )
+
+      result = run_script(session, "cat /dev/null")
+      refute get_stderr(result) =~ "command not allowed"
+      assert get_stderr(run_script(session, "rm /nonexistent")) =~ "command not allowed"
+    end
+  end
+
+  describe "category-aware: block everything" do
+    test "{:disallow, :all} blocks all categories" do
       {:ok, session} = start_session_with_policy(commands: [{:disallow, :all}])
-      result = run_script(session, "echo hello")
-      assert get_stderr(result) =~ "command not allowed"
+      assert get_stderr(run_script(session, "echo hello")) =~ "command not allowed"
+    end
+  end
+
+  describe "category-aware: builtins + specific externals" do
+    test "allows builtins and named externals" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:allow, [:builtins, "cat"]}])
+
+      assert get_stdout(run_script(session, "echo hello")) == "hello\n"
+      result = run_script(session, "cat /dev/null")
+      refute get_stderr(result) =~ "command not allowed"
     end
 
-    test "category-aware fun/2 policy" do
+    test "blocks unlisted externals" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:allow, [:builtins, "cat"]}])
+
+      assert get_stderr(run_script(session, "ls /tmp")) =~ "command not allowed"
+    end
+  end
+
+  describe "category-aware: fun/2 policy" do
+    test "fun/2 receives category for gating" do
       {:ok, session} =
         start_session_with_policy(
           commands: fn _name, category -> category in [:builtin, :function] end
         )
 
-      result = run_script(session, "echo hello")
-      assert get_stdout(result) == "hello\n"
+      assert get_stdout(run_script(session, "echo hello")) == "hello\n"
+      assert get_stderr(run_script(session, "cat /dev/null")) =~ "command not allowed"
+    end
 
+    test "fun/2 can gate by both name and category" do
+      {:ok, session} =
+        start_session_with_policy(
+          commands: fn name, category ->
+            category == :builtin or (category == :external and name == "cat")
+          end
+        )
+
+      assert get_stdout(run_script(session, "echo hello")) == "hello\n"
       result = run_script(session, "cat /dev/null")
-      assert get_stderr(result) =~ "command not allowed"
+      refute get_stderr(result) =~ "command not allowed"
+      assert get_stderr(run_script(session, "ls /tmp")) =~ "command not allowed"
     end
   end
 

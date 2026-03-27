@@ -55,6 +55,27 @@ defmodule Bash.CommandPolicy do
 
   If no rule matches, the command is **denied**.
 
+  ## Common Recipes
+
+  The table below shows how to set up policies for common scenarios. Categories
+  not listed in an `{:allow, [...]}` rule are denied by default (fail-closed).
+
+  | Goal                                  | Policy                                                            |
+  |---------------------------------------|-------------------------------------------------------------------|
+  | Allow everything (default)            | `commands: :unrestricted`                                         |
+  | Block all externals                   | `commands: :no_external`                                          |
+  | Builtins only                         | `commands: [{:allow, [:builtins]}]`                               |
+  | Externals only                        | `commands: [{:allow, [:externals]}]`                              |
+  | Builtins + functions                  | `commands: [{:allow, [:builtins, :functions]}]`                   |
+  | Builtins + externals                  | `commands: [{:allow, [:builtins, :externals]}]`                   |
+  | Builtins + interop                    | `commands: [{:allow, [:builtins, :interop]}]`                     |
+  | Builtins + functions + interop        | `commands: [{:allow, [:builtins, :functions, :interop]}]`         |
+  | Everything except externals           | `commands: [{:disallow, [:externals]}, {:allow, :all}]`           |
+  | Everything except interop             | `commands: [{:disallow, [:interop]}, {:allow, :all}]`             |
+  | Block specific builtins               | `commands: [{:disallow, ["eval", "source"]}, {:allow, :all}]`     |
+  | Builtins + specific externals         | `commands: [{:allow, [:builtins, "cat", "grep"]}]`                |
+  | Block everything                      | `commands: [{:disallow, :all}]`                                   |
+
   ## Examples
 
       # Block all external commands (shorthand)
