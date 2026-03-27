@@ -51,19 +51,6 @@ defmodule Bash.CommandPort do
   defguardp is_restricted(restricted) when restricted == true
 
   # ---------------------------------------------------------------------------
-  # Restricted mode helper
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  Returns whether restricted mode is active for the given session state.
-
-  Safely traverses the nested options map, defaulting to `false` when keys
-  are absent (e.g. bare state maps in tests).
-  """
-  @spec restricted?(map()) :: boolean()
-  def restricted?(state), do: state |> Map.get(:options, %{}) |> Map.get(:restricted, false)
-
-  # ---------------------------------------------------------------------------
   # Low-level process API (thin delegates to ExCmd.Process)
   # ---------------------------------------------------------------------------
 

@@ -25,6 +25,7 @@ defmodule Bash.AST.Pipeline do
   alias Bash.Builtin
   alias Bash.CommandPort
   alias Bash.Executor
+  alias Bash.Session
   alias Bash.OutputCollector
   alias Bash.Sink
   alias Bash.Variable
@@ -646,7 +647,7 @@ defmodule Bash.AST.Pipeline do
   # Build nested stream pipeline from innermost (first command) to outermost (last command)
   defp build_stream_pipeline([cmd], stdin, session_state) do
     {name, args, env} = resolve_external_command(cmd, session_state)
-    restricted = CommandPort.restricted?(session_state)
+    restricted = Session.restricted?(session_state)
 
     opts = [
       input: stdin,
@@ -675,7 +676,7 @@ defmodule Bash.AST.Pipeline do
       end)
 
     {name, args, env} = resolve_external_command(cmd, session_state)
-    restricted = CommandPort.restricted?(session_state)
+    restricted = Session.restricted?(session_state)
 
     opts = [
       input: filtered_upstream,

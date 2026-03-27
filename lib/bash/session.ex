@@ -453,6 +453,15 @@ defmodule Bash.Session do
   end
 
   @doc """
+  Returns whether restricted mode is active for the given session state.
+
+  Safely traverses the nested options map, defaulting to `false` when keys
+  are absent (e.g. bare state maps in tests).
+  """
+  @spec restricted?(map()) :: boolean()
+  def restricted?(state), do: state |> Map.get(:options, %{}) |> Map.get(:restricted, false)
+
+  @doc """
   Load an Elixir API module into a session.
 
   The module must `use Bash.Interop` and define a namespace.

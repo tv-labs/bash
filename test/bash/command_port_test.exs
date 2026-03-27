@@ -54,17 +54,17 @@ defmodule Bash.CommandPortTest do
     end
   end
 
-  describe "restricted? helper" do
+  describe "restricted? helper (on Session)" do
     test "returns false for unrestricted state" do
-      refute CommandPort.restricted?(%{options: %{restricted: false}})
+      refute Bash.Session.restricted?(%{options: %{restricted: false}})
     end
 
     test "returns true for restricted state" do
-      assert CommandPort.restricted?(%{options: %{restricted: true}})
+      assert Bash.Session.restricted?(%{options: %{restricted: true}})
     end
 
     test "returns false when options missing" do
-      refute CommandPort.restricted?(%{})
+      refute Bash.Session.restricted?(%{})
     end
   end
 end
