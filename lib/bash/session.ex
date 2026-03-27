@@ -145,11 +145,12 @@ defmodule Bash.Session do
           executions: [Execution.t()],
           current: Execution.t() | nil,
           is_pipeline_tail: boolean(),
-          options: %{String.t() => boolean()},
+          options: %{atom() => boolean()},
           hash: %{String.t() => {pos_integer, String.t()}},
           aliases: %{String.t() => String.t()},
           functions: %{String.t() => Function.t()},
           elixir_modules: %{String.t() => module()},
+          command_policy: CommandPolicy.t(),
           in_function: boolean(),
           in_loop: boolean(),
           call_stack: [
@@ -174,6 +175,33 @@ defmodule Bash.Session do
 
   @doc """
   Creates a new session with default environment.
+
+  ## Options
+
+    * `:id` — unique session identifier (auto-generated if omitted)
+    * `:working_dir` — initial working directory (defaults to `File.cwd!()`)
+    * `:env` — map of environment variables to set (e.g., `%{"HOME" => "/root"}`)
+    * `:env_include` — list of host env vars to include (defaults to all)
+    * `:env_exclude` — list of host env vars to exclude
+    * `:options` — shell options map (e.g., `%{hashall: true, braceexpand: true}`)
+    * `:command_policy` — `%CommandPolicy{}` struct or keyword list for building one.
+      Controls which external commands the session can execute. See `Bash.CommandPolicy`.
+
+          # Block all external commands
+          Bash.Session.new(command_policy: [commands: :no_external])
+
+          # Allow specific commands only
+          Bash.Session.new(command_policy: [commands: [{:allow, ["cat", "grep"]}]])
+
+          # Deny specific commands
+          Bash.Session.new(command_policy: [commands: [{:disallow, ["rm"]}, {:allow, :all}]])
+
+    * `:apis` — list of `Bash.Interop` modules to load at creation
+    * `:aliases` — map of command aliases
+    * `:functions` — map of pre-defined bash functions
+    * `:script_name` — value of `$0` (defaults to `"bash"`)
+    * `:args` — positional parameters (`$1`, `$2`, etc.)
+    * `:call_timeout` — timeout for GenServer calls (defaults to `:infinity`)
   """
   def new(opts \\ []) do
     supervisor = opts[:supervisor] || SessionSupervisor
