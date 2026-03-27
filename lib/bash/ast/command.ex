@@ -771,18 +771,67 @@ defmodule Bash.AST.Command do
     if Path.type(path) == :relative, do: Path.join(working_dir, path), else: path
   end
 
-  # Dispatch order: functions -> elixir interop -> builtins -> policy check -> external
+  # Resolve command category, check policy, then dispatch
   defp resolve_and_execute(command_name, args, session_state, stdin, redirects, meta) do
-    with nil <- try_bash_function(command_name, args, session_state, meta),
-         nil <- try_elixir_interop(command_name, args, stdin, session_state),
-         nil <- try_builtin(command_name, args, stdin, session_state),
-         :ok <- check_command_policy(command_name, session_state) do
-      execute_external_command(command_name, args, session_state, stdin, redirects)
+    {category, payload} = resolve_command(command_name, session_state)
+
+    with :ok <- check_command_policy(command_name, category, session_state) do
+      dispatch(category, payload, command_name, args, session_state, stdin, redirects, meta)
     end
   end
 
-  defp check_command_policy(command_name, session_state) do
-    case CommandPolicy.check_command(CommandPolicy.from_state(session_state), command_name) do
+  defp resolve_command(command_name, session_state) do
+    with nil <- resolve_as_function(command_name, session_state),
+         nil <- resolve_as_interop(command_name, session_state),
+         nil <- resolve_as_builtin(command_name) do
+      {:external, nil}
+    end
+  end
+
+  defp resolve_as_function(command_name, session_state) do
+    case Map.get(session_state.functions, command_name) do
+      %Function{} = func -> {:function, func}
+      nil -> nil
+    end
+  end
+
+  defp resolve_as_interop(command_name, session_state) do
+    case resolve_elixir_function(command_name, session_state) do
+      {:ok, module, function_name} -> {:interop, {module, function_name}}
+      :not_found -> nil
+    end
+  end
+
+  defp resolve_as_builtin(command_name) do
+    case Builtin.get_module(command_name) do
+      nil -> nil
+      module -> {:builtin, module}
+    end
+  end
+
+  defp dispatch(:function, func, _command_name, args, session_state, _stdin, _redirects, meta) do
+    caller_line = if meta, do: meta.line, else: 0
+    Function.call(func, args, session_state, caller_line: caller_line)
+  end
+
+  defp dispatch(:interop, {module, function_name}, _name, args, state, stdin, _redirects, _meta) do
+    call_elixir_function(module, function_name, args, stdin, state)
+  end
+
+  defp dispatch(:builtin, module, _command_name, args, session_state, stdin, _redirects, _meta) do
+    module.execute(args, stdin, session_state)
+  end
+
+  defp dispatch(:external, _payload, command_name, args, session_state, stdin, redirects, _meta) do
+    execute_external_command(command_name, args, session_state, stdin, redirects)
+  end
+
+  defp check_command_policy(command_name, category, session_state) do
+    case CommandPolicy.check_command(
+           CommandPolicy.from_state(session_state),
+           command_name,
+           category
+         ) do
       :ok ->
         :ok
 
@@ -795,34 +844,6 @@ defmodule Bash.AST.Command do
            exit_code: 1,
            error: :command_policy
          }}
-    end
-  end
-
-  defp try_bash_function(command_name, args, session_state, meta) do
-    case Map.get(session_state.functions, command_name) do
-      %Function{} = func ->
-        caller_line = if meta, do: meta.line, else: 0
-        Function.call(func, args, session_state, caller_line: caller_line)
-
-      nil ->
-        nil
-    end
-  end
-
-  defp try_elixir_interop(command_name, args, stdin, session_state) do
-    case resolve_elixir_function(command_name, session_state) do
-      {:ok, module, function_name} ->
-        call_elixir_function(module, function_name, args, stdin, session_state)
-
-      :not_found ->
-        nil
-    end
-  end
-
-  defp try_builtin(command_name, args, stdin, session_state) do
-    case Builtin.get_module(command_name) do
-      nil -> nil
-      module when not is_nil(module) -> module.execute(args, stdin, session_state)
     end
   end
 

@@ -8,19 +8,31 @@ defmodule Bash.CommandPolicy do
 
   ## Fields
 
-    * `:commands` — gates external (OS) command execution. Builtins, shell functions,
-      and Elixir interop calls are never restricted.
+    * `:commands` — gates command execution across all categories: builtins, externals,
+      shell functions, and Elixir interop calls.
 
     * `:paths` — reserved for future filesystem path restrictions (not enforced yet).
 
     * `:files` — reserved for future file access restrictions (not enforced yet).
 
+  ## Command Categories
+
+  Every command resolved by the interpreter falls into one of four categories:
+
+    * `:builtin` — built-in shell commands (`echo`, `cd`, `export`, etc.)
+    * `:external` — external OS commands (`cat`, `grep`, `/usr/bin/sort`, etc.)
+    * `:function` — user-defined shell functions
+    * `:interop` — Elixir interop commands registered via `Bash.Interop`
+
   ## Command Policy Types
 
-    * `:unrestricted` — all external commands are allowed (default).
-    * `:no_external` — block all external command execution.
+    * `:unrestricted` — all commands in all categories are allowed (default).
+    * `:no_external` — block all external command execution; other categories allowed.
     * A list of rules — evaluated in order, first match wins.
-    * A function `(String.t() -> boolean())` — dynamic evaluation per command.
+    * A function `(String.t(), command_category() -> boolean())` — dynamic evaluation
+      per command and category.
+    * A function `(String.t() -> boolean())` — legacy dynamic evaluation, only applied
+      to external commands.
 
   ## Rule Evaluation
 
@@ -28,44 +40,69 @@ defmodule Bash.CommandPolicy do
 
     * `{:allow, items}` — if the command matches any item, it is **allowed**.
     * `{:disallow, items}` — if the command matches any item, it is **denied**.
-    * `fun/1` — if the function returns `true`, the command is **allowed**;
-      `false` continues to the next rule.
+    * `{:allow, :all}` — allows all commands unconditionally.
+    * `{:disallow, :all}` — denies all commands unconditionally.
+    * `fun/2` — receives `(name, category)`, if it returns `true`, the command is
+      **allowed**; `false` continues to the next rule.
+    * `fun/1` — legacy; only evaluated for `:external` commands, skipped for others.
 
-  Items can be strings (exact match or basename match) or `Regex` patterns.
+  Items can be strings (exact or basename match), `Regex` patterns, or category atoms:
+
+    * `:builtins` — matches all commands in the `:builtin` category
+    * `:externals` — matches all commands in the `:external` category
+    * `:functions` — matches all commands in the `:function` category
+    * `:interop` — matches all commands in the `:interop` category
+
   If no rule matches, the command is **denied**.
 
   ## Examples
 
-      # Block all external commands
+      # Block all external commands (shorthand)
       %CommandPolicy{commands: :no_external}
 
-      # Allow only specific commands
-      %CommandPolicy{commands: [{:allow, ["cat", "grep", "sort"]}]}
+      # Allow only builtins and specific externals
+      %CommandPolicy{commands: [{:allow, [:builtins, "cat", "grep"]}]}
 
-      # Deny specific dangerous commands, allow everything else
-      %CommandPolicy{commands: [{:disallow, ["rm", "dd"]}, {:allow, :all}]}
+      # Allow builtins and functions, block everything else
+      %CommandPolicy{commands: [{:allow, [:builtins, :functions]}]}
+
+      # Block eval and source, allow everything else
+      %CommandPolicy{commands: [{:disallow, ["eval", "source"]}, {:allow, :all}]}
 
       # Regex-based rules
       %CommandPolicy{commands: [{:allow, [~r/^git-/]}]}
 
-      # Function-based rules
-      %CommandPolicy{commands: fn cmd -> String.starts_with?(cmd, "safe-") end}
+      # Category-aware function
+      %CommandPolicy{commands: fn _cmd, cat -> cat in [:builtin, :function] end}
   """
 
   defstruct commands: :unrestricted,
             paths: nil,
             files: nil
 
-  @type rule_item :: String.t() | Regex.t()
+  @type command_category :: :builtin | :external | :function | :interop
+
+  @category_atoms [:builtins, :externals, :functions, :interop]
+
+  @category_to_singular %{
+    builtins: :builtin,
+    externals: :external,
+    functions: :function,
+    interop: :interop
+  }
+
+  @type rule_item :: String.t() | Regex.t() | :builtins | :externals | :functions | :interop
 
   @type command_rule ::
           :unrestricted
           | :no_external
           | [
               {:allow, :all | [rule_item()]}
-              | {:disallow, [rule_item()]}
+              | {:disallow, :all | [rule_item()]}
+              | (String.t(), command_category() -> boolean())
               | (String.t() -> boolean())
             ]
+          | (String.t(), command_category() -> boolean())
           | (String.t() -> boolean())
 
   @type path_rule ::
@@ -87,14 +124,14 @@ defmodule Bash.CommandPolicy do
   Builds a `%CommandPolicy{}` from a keyword list, map, or existing struct.
 
   String lists inside `{:allow, list}` and `{:disallow, list}` are partitioned
-  into a `MapSet` (for O(1) string lookup) and a list of non-string matchers
-  (regex, functions).
+  into a `MapSet` (for O(1) string lookup), a list of non-string matchers
+  (regex, functions), and a `MapSet` of category atoms.
 
       iex> CommandPolicy.new(commands: :no_external)
       %CommandPolicy{commands: :no_external}
 
-      iex> CommandPolicy.new(commands: [{:allow, ["cat", ~r/^git-/]}])
-      # strings -> MapSet, regex kept separately
+      iex> CommandPolicy.new(commands: [{:allow, [:builtins, "cat", ~r/^git-/]}])
+      # categories -> MapSet, strings -> MapSet, regex kept separately
   """
   @spec new(keyword() | map() | t()) :: t()
   def new(%__MODULE__{} = policy), do: finalize(policy)
@@ -111,24 +148,45 @@ defmodule Bash.CommandPolicy do
   def from_state(_), do: %__MODULE__{}
 
   @doc """
-  Checks whether the given external command is allowed under the policy.
+  Checks whether the given command is allowed under the policy.
+
+  The `category` argument identifies what kind of command is being checked:
+  `:builtin`, `:external`, `:function`, or `:interop`. Defaults to `:external`
+  for backwards compatibility.
 
   Returns `:ok` or `{:error, message}` with a descriptive error string.
   """
-  @spec check_command(t(), String.t()) :: :ok | {:error, String.t()}
-  def check_command(%__MODULE__{commands: :unrestricted}, _command_name), do: :ok
+  @spec check_command(t(), String.t(), command_category()) :: :ok | {:error, String.t()}
+  def check_command(policy, command_name, category \\ :external)
 
-  def check_command(%__MODULE__{commands: :no_external}, command_name),
+  def check_command(%__MODULE__{commands: :unrestricted}, _command_name, _category), do: :ok
+
+  def check_command(%__MODULE__{commands: :no_external}, command_name, :external),
     do: {:error, "bash: #{command_name}: restricted"}
 
-  def check_command(%__MODULE__{commands: fun}, command_name) when is_function(fun, 1) do
+  def check_command(%__MODULE__{commands: :no_external}, _command_name, _category), do: :ok
+
+  def check_command(%__MODULE__{commands: fun}, command_name, category)
+      when is_function(fun, 2) do
+    if fun.(command_name, category),
+      do: :ok,
+      else: {:error, "bash: #{command_name}: command not allowed"}
+  end
+
+  def check_command(%__MODULE__{commands: fun}, command_name, :external)
+      when is_function(fun, 1) do
     if fun.(command_name),
       do: :ok,
       else: {:error, "bash: #{command_name}: command not allowed"}
   end
 
-  def check_command(%__MODULE__{commands: rules}, command_name) when is_list(rules) do
-    case evaluate_rules(rules, command_name) do
+  def check_command(%__MODULE__{commands: fun}, _command_name, _category)
+      when is_function(fun, 1),
+      do: :ok
+
+  def check_command(%__MODULE__{commands: rules}, command_name, category)
+      when is_list(rules) do
+    case evaluate_rules(rules, command_name, category) do
       :allow -> :ok
       :deny -> {:error, "bash: #{command_name}: command not allowed"}
     end
@@ -137,8 +195,9 @@ defmodule Bash.CommandPolicy do
   @doc """
   Returns `true` if the specific command is allowed under the policy.
   """
-  @spec command_allowed?(t(), String.t()) :: boolean()
-  def command_allowed?(policy, command_name), do: check_command(policy, command_name) == :ok
+  @spec command_allowed?(t(), String.t(), command_category()) :: boolean()
+  def command_allowed?(policy, command_name, category \\ :external),
+    do: check_command(policy, command_name, category) == :ok
 
   @doc """
   Returns `true` if the policy allows any external commands at all.
@@ -152,26 +211,41 @@ defmodule Bash.CommandPolicy do
 
   # -- Rule evaluation engine --
 
-  defp evaluate_rules([], _value), do: :deny
+  defp evaluate_rules([], _value, _category), do: :deny
 
-  defp evaluate_rules([{:allow, :all} | _rest], _value), do: :allow
+  defp evaluate_rules([{:allow, :all} | _rest], _value, _category), do: :allow
 
-  defp evaluate_rules([{:allow, items} | rest], value) do
-    if match_any?(items, value), do: :allow, else: evaluate_rules(rest, value)
+  defp evaluate_rules([{:disallow, :all} | _rest], _value, _category), do: :deny
+
+  defp evaluate_rules([{:allow, items} | rest], value, category) do
+    if match_any?(items, value, category),
+      do: :allow,
+      else: evaluate_rules(rest, value, category)
   end
 
-  defp evaluate_rules([{:disallow, items} | rest], value) do
-    if match_any?(items, value), do: :deny, else: evaluate_rules(rest, value)
+  defp evaluate_rules([{:disallow, items} | rest], value, category) do
+    if match_any?(items, value, category),
+      do: :deny,
+      else: evaluate_rules(rest, value, category)
   end
 
-  defp evaluate_rules([fun | rest], value) when is_function(fun, 1) do
-    if fun.(value), do: :allow, else: evaluate_rules(rest, value)
+  defp evaluate_rules([fun | rest], value, category) when is_function(fun, 2) do
+    if fun.(value, category), do: :allow, else: evaluate_rules(rest, value, category)
   end
 
-  defp match_any?({strings, matchers}, value) do
+  defp evaluate_rules([fun | rest], value, :external = category) when is_function(fun, 1) do
+    if fun.(value), do: :allow, else: evaluate_rules(rest, value, category)
+  end
+
+  defp evaluate_rules([fun | rest], value, category) when is_function(fun, 1) do
+    evaluate_rules(rest, value, category)
+  end
+
+  defp match_any?({strings, matchers, categories}, value, category) do
     base = Path.basename(value)
 
-    MapSet.member?(strings, value) or MapSet.member?(strings, base) or
+    MapSet.member?(categories, category) or
+      MapSet.member?(strings, value) or MapSet.member?(strings, base) or
       Enum.any?(matchers, &match_item?(&1, value))
   end
 
@@ -189,14 +263,23 @@ defmodule Bash.CommandPolicy do
   defp normalize_rule({tag, :all}) when tag in [:allow, :disallow], do: {tag, :all}
 
   defp normalize_rule({tag, items}) when tag in [:allow, :disallow] and is_list(items) do
-    {strings, matchers} =
+    {strings, non_strings} =
       Enum.split_with(items, fn
         item when is_binary(item) -> true
         _ -> false
       end)
 
-    {tag, {MapSet.new(strings), matchers}}
+    {category_atoms, matchers} =
+      Enum.split_with(non_strings, fn
+        item when item in @category_atoms -> true
+        _ -> false
+      end)
+
+    categories = MapSet.new(category_atoms, &Map.fetch!(@category_to_singular, &1))
+
+    {tag, {MapSet.new(strings), matchers, categories}}
   end
 
   defp normalize_rule(fun) when is_function(fun, 1), do: fun
+  defp normalize_rule(fun) when is_function(fun, 2), do: fun
 end

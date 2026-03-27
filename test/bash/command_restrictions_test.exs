@@ -45,7 +45,7 @@ defmodule Bash.CommandRestrictionsTest do
         id: "#{context.test}",
         registry: registry_name,
         supervisor: supervisor_name,
-        command_policy: [commands: [{:allow, ["cat", "echo"]}]]
+        command_policy: [commands: [{:allow, [:builtins, "cat", "echo"]}]]
       )
 
     {:ok, %{session: session}}
@@ -432,13 +432,13 @@ defmodule Bash.CommandRestrictionsTest do
 
   describe "exec respects all policy types" do
     test "exec with allowlist allows listed command" do
-      {:ok, session} = start_session_with_policy(commands: [{:allow, ["cat"]}])
+      {:ok, session} = start_session_with_policy(commands: [{:allow, [:builtins, "cat"]}])
       result = run_script(session, "exec cat /dev/null")
       refute get_stderr(result) =~ "command not allowed"
     end
 
     test "exec with allowlist blocks unlisted command" do
-      {:ok, session} = start_session_with_policy(commands: [{:allow, ["cat"]}])
+      {:ok, session} = start_session_with_policy(commands: [{:allow, [:builtins, "cat"]}])
       result = run_script(session, "exec ls")
       assert get_stderr(result) =~ "command not allowed"
     end
@@ -472,7 +472,7 @@ defmodule Bash.CommandRestrictionsTest do
     end
 
     test "coproc allowed with allowlist when listed" do
-      {:ok, session} = start_session_with_policy(commands: [{:allow, ["cat"]}])
+      {:ok, session} = start_session_with_policy(commands: [{:allow, [:builtins, "cat"]}])
       result = run_script(session, "coproc cat; echo ok")
       refute get_stderr(result) =~ "command not allowed"
     end
@@ -525,7 +525,9 @@ defmodule Bash.CommandRestrictionsTest do
     end
 
     test "pipeline with regex policy allows matching" do
-      {:ok, session} = start_session_with_policy(commands: [{:allow, [~r/^cat$/, ~r/^sort$/]}])
+      {:ok, session} =
+        start_session_with_policy(commands: [{:allow, [:builtins, ~r/^cat$/, ~r/^sort$/]}])
+
       result = run_script(session, "echo hello | cat")
       assert get_stdout(result) =~ "hello"
     end
@@ -606,17 +608,19 @@ defmodule Bash.CommandRestrictionsTest do
 
     test "new/1 normalizes string lists to MapSet" do
       policy = CommandPolicy.new(commands: [{:allow, ["cat", "grep"]}])
-      [{:allow, {strings, matchers}}] = policy.commands
+      [{:allow, {strings, matchers, categories}}] = policy.commands
       assert MapSet.member?(strings, "cat")
       assert MapSet.member?(strings, "grep")
       assert matchers == []
+      assert MapSet.size(categories) == 0
     end
 
     test "new/1 partitions strings and regex" do
       policy = CommandPolicy.new(commands: [{:allow, ["cat", ~r/^git-/]}])
-      [{:allow, {strings, matchers}}] = policy.commands
+      [{:allow, {strings, matchers, categories}}] = policy.commands
       assert MapSet.member?(strings, "cat")
       assert [%Regex{}] = matchers
+      assert MapSet.size(categories) == 0
     end
 
     test "new/1 passes through struct" do
@@ -754,6 +758,184 @@ defmodule Bash.CommandRestrictionsTest do
       policy = %CommandPolicy{commands: fn _cmd -> false end}
       assert {:error, msg} = CommandPolicy.check_command(policy, "anything")
       assert msg =~ "command not allowed"
+    end
+
+    test "new/1 normalizes category atoms to singular form" do
+      policy = CommandPolicy.new(commands: [{:allow, [:builtins, :externals, "cat"]}])
+      [{:allow, {strings, _matchers, categories}}] = policy.commands
+      assert MapSet.member?(strings, "cat")
+      assert MapSet.member?(categories, :builtin)
+      assert MapSet.member?(categories, :external)
+    end
+
+    test "check_command/3 with :no_external allows non-external categories" do
+      policy = %CommandPolicy{commands: :no_external}
+      assert :ok = CommandPolicy.check_command(policy, "echo", :builtin)
+      assert :ok = CommandPolicy.check_command(policy, "myfunc", :function)
+      assert :ok = CommandPolicy.check_command(policy, "mymod.call", :interop)
+      assert {:error, _} = CommandPolicy.check_command(policy, "ls", :external)
+    end
+
+    test "check_command/3 with category allowlist" do
+      policy = CommandPolicy.new(commands: [{:allow, [:builtins]}])
+      assert :ok = CommandPolicy.check_command(policy, "echo", :builtin)
+      assert {:error, _} = CommandPolicy.check_command(policy, "ls", :external)
+      assert {:error, _} = CommandPolicy.check_command(policy, "myfunc", :function)
+      assert {:error, _} = CommandPolicy.check_command(policy, "mymod.call", :interop)
+    end
+
+    test "check_command/3 with mixed category and string items" do
+      policy = CommandPolicy.new(commands: [{:allow, [:builtins, "cat"]}])
+      assert :ok = CommandPolicy.check_command(policy, "echo", :builtin)
+      assert :ok = CommandPolicy.check_command(policy, "cat", :external)
+      assert {:error, _} = CommandPolicy.check_command(policy, "ls", :external)
+    end
+
+    test "check_command/3 with {:disallow, :all}" do
+      policy = CommandPolicy.new(commands: [{:disallow, :all}])
+      assert {:error, _} = CommandPolicy.check_command(policy, "echo", :builtin)
+      assert {:error, _} = CommandPolicy.check_command(policy, "ls", :external)
+      assert {:error, _} = CommandPolicy.check_command(policy, "myfunc", :function)
+    end
+
+    test "check_command/3 disallow category then allow :all" do
+      policy = CommandPolicy.new(commands: [{:disallow, [:externals]}, {:allow, :all}])
+      assert :ok = CommandPolicy.check_command(policy, "echo", :builtin)
+      assert {:error, _} = CommandPolicy.check_command(policy, "ls", :external)
+      assert :ok = CommandPolicy.check_command(policy, "myfunc", :function)
+    end
+
+    test "check_command/3 with fun/2 receives category" do
+      policy = %CommandPolicy{
+        commands: fn _name, category -> category in [:builtin, :function] end
+      }
+
+      assert :ok = CommandPolicy.check_command(policy, "echo", :builtin)
+      assert :ok = CommandPolicy.check_command(policy, "myfunc", :function)
+      assert {:error, _} = CommandPolicy.check_command(policy, "ls", :external)
+      assert {:error, _} = CommandPolicy.check_command(policy, "mymod.call", :interop)
+    end
+
+    test "check_command/3 with fun/1 only fires for :external" do
+      policy = %CommandPolicy{commands: fn _cmd -> false end}
+      assert :ok = CommandPolicy.check_command(policy, "echo", :builtin)
+      assert :ok = CommandPolicy.check_command(policy, "myfunc", :function)
+      assert {:error, _} = CommandPolicy.check_command(policy, "ls", :external)
+    end
+
+    test "fun/1 in rule list only evaluates for :external" do
+      policy = CommandPolicy.new(commands: [fn _cmd -> false end])
+      assert {:error, _} = CommandPolicy.check_command(policy, "ls", :external)
+      # fun/1 is skipped for non-external, falls through to implicit deny
+      assert {:error, _} = CommandPolicy.check_command(policy, "echo", :builtin)
+    end
+
+    test "fun/2 in rule list evaluates for all categories" do
+      policy =
+        CommandPolicy.new(commands: [fn _name, category -> category == :builtin end])
+
+      assert :ok = CommandPolicy.check_command(policy, "echo", :builtin)
+      assert {:error, _} = CommandPolicy.check_command(policy, "ls", :external)
+    end
+
+    test "check_command/2 defaults to :external" do
+      policy = CommandPolicy.new(commands: [{:allow, [:builtins]}])
+      assert {:error, _} = CommandPolicy.check_command(policy, "ls")
+    end
+
+    test "command_allowed?/3 works with category" do
+      policy = CommandPolicy.new(commands: [{:allow, [:builtins]}])
+      assert CommandPolicy.command_allowed?(policy, "echo", :builtin)
+      refute CommandPolicy.command_allowed?(policy, "ls", :external)
+    end
+
+    test "category atoms with :disallow block by category" do
+      policy =
+        CommandPolicy.new(commands: [{:disallow, [:builtins]}, {:allow, :all}])
+
+      assert {:error, _} = CommandPolicy.check_command(policy, "echo", :builtin)
+      assert :ok = CommandPolicy.check_command(policy, "ls", :external)
+    end
+
+    test "multiple categories in one rule" do
+      policy =
+        CommandPolicy.new(commands: [{:allow, [:builtins, :functions, :interop]}])
+
+      assert :ok = CommandPolicy.check_command(policy, "echo", :builtin)
+      assert :ok = CommandPolicy.check_command(policy, "myfunc", :function)
+      assert :ok = CommandPolicy.check_command(policy, "mymod.call", :interop)
+      assert {:error, _} = CommandPolicy.check_command(policy, "ls", :external)
+    end
+  end
+
+  describe "category-aware integration" do
+    test "builtins-only policy allows builtins, blocks externals" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, [:builtins]}])
+      result = run_script(session, "echo hello")
+      assert get_stdout(result) == "hello\n"
+
+      result = run_script(session, "cat /dev/null")
+      assert get_stderr(result) =~ "command not allowed"
+    end
+
+    test "disallow specific builtin by name" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:disallow, ["eval"]}, {:allow, :all}])
+
+      result = run_script(session, "eval 'echo hi'")
+      assert get_stderr(result) =~ "command not allowed"
+
+      result = run_script(session, "echo works")
+      assert get_stdout(result) == "works\n"
+    end
+
+    test "function gating blocks user-defined functions" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, [:builtins]}])
+      result = run_script(session, "greet() { echo hi; }; greet")
+      assert get_stderr(result) =~ "command not allowed"
+    end
+
+    test "function gating allows functions when permitted" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:allow, [:builtins, :functions]}])
+
+      result = run_script(session, "greet() { echo hi; }; greet")
+      assert get_stdout(result) == "hi\n"
+    end
+
+    test "interop gating blocks interop calls" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, [:builtins]}])
+      Session.load_api(session, TestAPI)
+      result = run_script(session, "restrict_test.greet alice")
+      assert get_stderr(result) =~ "command not allowed"
+    end
+
+    test "interop gating allows interop when permitted" do
+      {:ok, session} =
+        start_session_with_policy(commands: [{:allow, [:builtins, :interop]}])
+
+      Session.load_api(session, TestAPI)
+      result = run_script(session, "restrict_test.greet alice")
+      assert get_stdout(result) == "hello alice\n"
+    end
+
+    test "{:disallow, :all} blocks everything" do
+      {:ok, session} = start_session_with_policy(commands: [{:disallow, :all}])
+      result = run_script(session, "echo hello")
+      assert get_stderr(result) =~ "command not allowed"
+    end
+
+    test "category-aware fun/2 policy" do
+      {:ok, session} =
+        start_session_with_policy(
+          commands: fn _name, category -> category in [:builtin, :function] end
+        )
+
+      result = run_script(session, "echo hello")
+      assert get_stdout(result) == "hello\n"
+
+      result = run_script(session, "cat /dev/null")
+      assert get_stderr(result) =~ "command not allowed"
     end
   end
 

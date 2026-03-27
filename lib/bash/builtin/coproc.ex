@@ -125,7 +125,7 @@ defmodule Bash.Builtin.Coproc do
 
   @doc false
   def start_external_coproc(name, command, cmd_args, session_state) do
-    case CommandPolicy.check_command(session_state.command_policy, command) do
+    case CommandPolicy.check_command(session_state.command_policy, command, :external) do
       {:error, message} ->
         Bash.Sink.write_stderr(session_state, message <> "\n")
         {:error, 1}

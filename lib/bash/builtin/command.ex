@@ -205,7 +205,7 @@ defmodule Bash.Builtin.Command do
             :not_found
 
           path ->
-            if CommandPolicy.command_allowed?(state.command_policy, name) do
+            if CommandPolicy.command_allowed?(state.command_policy, name, :external) do
               {:file, path}
             else
               :not_found
@@ -246,7 +246,7 @@ defmodule Bash.Builtin.Command do
             {:ok, 127}
 
           path ->
-            case CommandPolicy.check_command(state.command_policy, command_name) do
+            case CommandPolicy.check_command(state.command_policy, command_name, :external) do
               {:error, message} ->
                 error(message)
                 {:ok, 1}

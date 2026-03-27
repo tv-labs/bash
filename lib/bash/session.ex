@@ -185,13 +185,17 @@ defmodule Bash.Session do
     * `:env_exclude` — list of host env vars to exclude
     * `:options` — shell options map (e.g., `%{hashall: true, braceexpand: true}`)
     * `:command_policy` — `%CommandPolicy{}` struct or keyword list for building one.
-      Controls which external commands the session can execute. See `Bash.CommandPolicy`.
+      Controls which commands the session can execute across all categories (builtins,
+      externals, functions, interop). See `Bash.CommandPolicy`.
 
           # Block all external commands
           Bash.Session.new(command_policy: [commands: :no_external])
 
-          # Allow specific commands only
-          Bash.Session.new(command_policy: [commands: [{:allow, ["cat", "grep"]}]])
+          # Allow only builtins and specific externals
+          Bash.Session.new(command_policy: [commands: [{:allow, [:builtins, "cat", "grep"]}]])
+
+          # Allow builtins and functions, block externals and interop
+          Bash.Session.new(command_policy: [commands: [{:allow, [:builtins, :functions]}]])
 
           # Deny specific commands
           Bash.Session.new(command_policy: [commands: [{:disallow, ["rm"]}, {:allow, :all}]])
@@ -1975,7 +1979,7 @@ defmodule Bash.Session do
           {cmd, cmd_args, build_command_string(foreground_ast)}
       end
 
-    case CommandPolicy.check_command(state.command_policy, command) do
+    case CommandPolicy.check_command(state.command_policy, command, :external) do
       {:error, message} ->
         if state.stderr_sink, do: state.stderr_sink.({:stderr, message <> "\n"})
 
@@ -2076,7 +2080,7 @@ defmodule Bash.Session do
           {cmd, cmd_args, build_command_string(foreground_ast)}
       end
 
-    case CommandPolicy.check_command(current_session_state.command_policy, command) do
+    case CommandPolicy.check_command(current_session_state.command_policy, command, :external) do
       {:error, message} ->
         if current_session_state.stderr_sink do
           current_session_state.stderr_sink.({:stderr, message <> "\n"})

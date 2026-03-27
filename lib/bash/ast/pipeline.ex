@@ -544,7 +544,7 @@ defmodule Bash.AST.Pipeline do
       not has_function?(command_name, session_state) and
         not has_elixir_interop?(command_name, session_state) and
         not Builtin.implemented?(command_name) and
-        CommandPolicy.command_allowed?(session_state.command_policy, command_name)
+        CommandPolicy.command_allowed?(session_state.command_policy, command_name, :external)
     end
   end
 
