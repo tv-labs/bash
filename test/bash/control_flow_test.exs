@@ -279,6 +279,21 @@ defmodule Bash.ControlFlowTest do
     end
 
     @tag :tmp_dir
+    test "reads from file with relative path input redirect", %{
+      session: session,
+      tmp_dir: tmp_dir
+    } do
+      test_file = Path.join(tmp_dir, "input.txt")
+      File.write!(test_file, "alpha\nbeta\n")
+
+      run_script(session, "cd #{tmp_dir}")
+
+      result = run_script(session, ~S'while read line; do echo "got: $line"; done < input.txt')
+      assert result.exit_code == 0
+      assert get_stdout(result) == "got: alpha\ngot: beta\n"
+    end
+
+    @tag :tmp_dir
     test "reads from heredoc redirect", %{session: session} do
       script = ~S"""
       while read line; do

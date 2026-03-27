@@ -398,7 +398,8 @@ defmodule Bash.AST.Command do
 
   @doc false
   def process_input_redirects(redirects, _session_state, default_stdin)
-      when redirects in [nil, []], do: default_stdin
+      when redirects in [nil, []],
+      do: default_stdin
 
   def process_input_redirects(redirects, session_state, default_stdin) do
     redirects

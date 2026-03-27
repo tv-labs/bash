@@ -18,6 +18,8 @@ defmodule Bash.Builtin.Command do
   use Bash.Builtin
 
   alias Bash.Builtin
+  alias Bash.CommandPort
+  alias Bash.Session
   alias Bash.Variable
 
   # Standard utilities path that is guaranteed to find all standard utilities
@@ -282,7 +284,11 @@ defmodule Bash.Builtin.Command do
     ]
 
     try do
-      case System.cmd(path, args, cmd_opts) do
+      case CommandPort.system_cmd(path, args, cmd_opts, Session.restricted?(state)) do
+        {:error, :restricted} ->
+          error("bash: #{path}: restricted")
+          {:ok, 1}
+
         {stdout, exit_code} ->
           write(stdout)
           {:ok, exit_code}

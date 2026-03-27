@@ -23,4 +23,5 @@ erl_crash.dump
 bash-*.tar
 
 .grepai/
+.claude/settings.local.json
 docs/plans

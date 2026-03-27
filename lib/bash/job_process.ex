@@ -3,7 +3,7 @@ defmodule Bash.JobProcess do
   GenServer wrapping a background OS process.
 
   Each background job is managed by a JobProcess GenServer which:
-  - Starts and monitors the OS process via ExCmd
+  - Starts and monitors the OS process via CommandPort
   - Accumulates stdout/stderr output preserving order
   - Notifies the Session on status changes (done, stopped)
   - Supports foregrounding (blocks caller until completion)
@@ -12,7 +12,7 @@ defmodule Bash.JobProcess do
   ## Lifecycle
 
   1. Started by Session via `start_link/1`
-  2. Spawns OS process via ExCmd
+  2. Spawns OS process via CommandPort
   3. Spawns reader tasks for stdout/stderr that send messages back
   4. On process exit, notifies Session and transitions to :done
   5. Can be foregrounded (caller blocks until done)
@@ -30,6 +30,7 @@ defmodule Bash.JobProcess do
     }
   end
 
+  alias Bash.CommandPort
   alias Bash.CommandResult
   alias Bash.Job
 
@@ -138,7 +139,7 @@ defmodule Bash.JobProcess do
 
   @impl true
   def init(opts) do
-    # Trap exits to handle ExCmd.Process exit without crashing
+    # Trap exits to handle linked process exit without crashing
     Process.flag(:trap_exit, true)
 
     job_number = Keyword.fetch!(opts, :job_number)
@@ -408,7 +409,7 @@ defmodule Bash.JobProcess do
   end
 
   def handle_info({:EXIT, _pid, _reason}, state) do
-    # Handle EXIT messages from linked ExCmd.Process - ignore as we get exit via await_exit
+    # Handle EXIT messages from linked process - ignore as we get exit via await_exit
     {:noreply, state}
   end
 
@@ -446,10 +447,10 @@ defmodule Bash.JobProcess do
       stderr: :redirect_to_stdout
     ]
 
-    case ExCmd.Process.start_link(cmd_parts, exec_opts) do
+    case CommandPort.start_link(cmd_parts, exec_opts, false) do
       {:ok, process} ->
         os_pid =
-          case ExCmd.Process.os_pid(process) do
+          case CommandPort.os_pid(process) do
             {:ok, pid} -> pid
             pid when is_integer(pid) -> pid
           end
@@ -457,7 +458,7 @@ defmodule Bash.JobProcess do
         send(parent, {:worker_started, os_pid})
 
         # Close stdin since we don't need it for background jobs
-        ExCmd.Process.close_stdin(process)
+        CommandPort.close_stdin(process)
 
         # Read all output first — ExCmd requires reads from the owner process.
         # read/1 blocks until data is available, returning :eof when the process exits.
@@ -465,7 +466,7 @@ defmodule Bash.JobProcess do
 
         # Now await exit to get the exit code
         exit_result =
-          case ExCmd.Process.await_exit(process, :infinity) do
+          case CommandPort.await_exit(process, :infinity) do
             {:ok, code} -> {:ok, code}
             {:error, :killed} -> :killed
             {:error, other} -> {:error, other}
@@ -479,7 +480,7 @@ defmodule Bash.JobProcess do
   end
 
   defp read_and_forward_output(process, parent) do
-    case ExCmd.Process.read(process) do
+    case CommandPort.read(process) do
       {:ok, data} ->
         send(parent, {:stdout, data})
         read_and_forward_output(process, parent)

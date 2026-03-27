@@ -23,7 +23,9 @@ defmodule Bash.AST.Pipeline do
   alias Bash.AST
   alias Bash.AST.Helpers
   alias Bash.Builtin
+  alias Bash.CommandPort
   alias Bash.Executor
+  alias Bash.Session
   alias Bash.OutputCollector
   alias Bash.Sink
   alias Bash.Variable
@@ -83,7 +85,7 @@ defmodule Bash.AST.Pipeline do
   end
 
   # Execute a mixed pipeline by segmenting into external command runs and non-external commands.
-  # External segments stream via ExCmd. Non-external commands execute individually.
+  # External segments stream via CommandPort. Non-external commands execute individually.
   # Only accumulates at builtin boundaries that require stdin.
   defp execute_mixed(
          %__MODULE__{commands: commands, negate: negate, meta: meta} = pipeline,
@@ -291,8 +293,17 @@ defmodule Bash.AST.Pipeline do
       end
 
     # Extract output from the temporary collector
-    {stdout_iodata, _stderr_iodata} = OutputCollector.flush_split(temp_collector)
+    {stdout_iodata, stderr_iodata} = OutputCollector.flush_split(temp_collector)
     GenServer.stop(temp_collector, :normal)
+
+    stderr_output = IO.iodata_to_binary(stderr_iodata)
+
+    if stderr_output != "" do
+      case Map.get(session_state, :stderr_sink) do
+        sink when is_function(sink) -> sink.({:stderr, stderr_output})
+        _ -> :ok
+      end
+    end
 
     output = IO.iodata_to_binary(stdout_iodata)
     {exit_code, env_updates} = result
@@ -488,8 +499,17 @@ defmodule Bash.AST.Pipeline do
           {result.exit_code || 0, %{}}
       end
 
-    {stdout_iodata, _stderr_iodata} = OutputCollector.flush_split(temp_collector)
+    {stdout_iodata, stderr_iodata} = OutputCollector.flush_split(temp_collector)
     GenServer.stop(temp_collector, :normal)
+
+    stderr_output = IO.iodata_to_binary(stderr_iodata)
+
+    if stderr_output != "" do
+      case Map.get(session_state, :stderr_sink) do
+        sink when is_function(sink) -> sink.({:stderr, stderr_output})
+        _ -> :ok
+      end
+    end
 
     output = IO.iodata_to_binary(stdout_iodata)
     {exit_code, env_updates} = result
@@ -514,6 +534,8 @@ defmodule Bash.AST.Pipeline do
 
   # Check if a single command is external (not a builtin or function) and has no redirects.
   # Commands with redirects need sequential execution to handle the redirect logic.
+  defp external_command?(_command, %{options: %{restricted: true}}), do: false
+
   defp external_command?(%AST.Command{name: name, redirects: redirects}, session_state) do
     # Commands with redirects can't use simple streaming
     if redirects != [] do
@@ -622,16 +644,22 @@ defmodule Bash.AST.Pipeline do
     end
   end
 
-  # Build nested ExCmd.stream calls from innermost (first command) to outermost (last command)
+  # Build nested stream pipeline from innermost (first command) to outermost (last command)
   defp build_stream_pipeline([cmd], stdin, session_state) do
     {name, args, env} = resolve_external_command(cmd, session_state)
+    restricted = Session.restricted?(session_state)
 
-    ExCmd.stream([name | args],
+    opts = [
       input: stdin,
       cd: session_state.working_dir,
       env: env,
       stderr: :redirect_to_stdout
-    )
+    ]
+
+    case CommandPort.stream([name | args], opts, restricted) do
+      {:error, :restricted} -> Stream.map([], & &1)
+      stream -> stream
+    end
   end
 
   defp build_stream_pipeline([cmd | rest], stdin, session_state) do
@@ -639,7 +667,7 @@ defmodule Bash.AST.Pipeline do
     upstream = build_stream_pipeline(rest, stdin, session_state)
 
     # Filter out exit tuples - only pass binary data to downstream command
-    # ExCmd.stream yields {:exit, exit_info} as last element which can't be used as input
+    # CommandPort.stream yields {:exit, exit_info} as last element which can't be used as input
     filtered_upstream =
       Stream.filter(upstream, fn
         {:exit, _} -> false
@@ -648,13 +676,19 @@ defmodule Bash.AST.Pipeline do
       end)
 
     {name, args, env} = resolve_external_command(cmd, session_state)
+    restricted = Session.restricted?(session_state)
 
-    ExCmd.stream([name | args],
+    opts = [
       input: filtered_upstream,
       cd: session_state.working_dir,
       env: env,
       stderr: :redirect_to_stdout
-    )
+    ]
+
+    case CommandPort.stream([name | args], opts, restricted) do
+      {:error, :restricted} -> Stream.map([], & &1)
+      stream -> stream
+    end
   end
 
   # Resolve command name, args, and environment from AST
