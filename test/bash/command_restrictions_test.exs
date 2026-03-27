@@ -430,6 +430,160 @@ defmodule Bash.CommandRestrictionsTest do
     end
   end
 
+  describe "exec respects all policy types" do
+    test "exec with allowlist allows listed command" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, ["cat"]}])
+      result = run_script(session, "exec cat /dev/null")
+      refute get_stderr(result) =~ "command not allowed"
+    end
+
+    test "exec with allowlist blocks unlisted command" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, ["cat"]}])
+      result = run_script(session, "exec ls")
+      assert get_stderr(result) =~ "command not allowed"
+    end
+
+    test "exec with denylist blocks denied command" do
+      {:ok, session} = start_session_with_policy(commands: [{:disallow, ["rm"]}, {:allow, :all}])
+      result = run_script(session, "exec rm /nonexistent")
+      assert get_stderr(result) =~ "command not allowed"
+    end
+
+    test "exec with function policy" do
+      {:ok, session} =
+        start_session_with_policy(commands: fn cmd -> cmd == "cat" end)
+
+      result = run_script(session, "exec ls")
+      assert get_stderr(result) =~ "command not allowed"
+    end
+  end
+
+  describe "coproc respects policy" do
+    test "coproc blocked with :no_external" do
+      {:ok, session} = start_session_with_policy(commands: :no_external)
+      result = run_script(session, "coproc cat")
+      assert get_stderr(result) =~ "restricted"
+    end
+
+    test "coproc blocked with allowlist when not listed" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, ["echo"]}])
+      result = run_script(session, "coproc cat")
+      assert get_stderr(result) =~ "command not allowed"
+    end
+
+    test "coproc allowed with allowlist when listed" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, ["cat"]}])
+      result = run_script(session, "coproc cat; echo ok")
+      refute get_stderr(result) =~ "command not allowed"
+    end
+
+    test "coproc blocked with denylist" do
+      {:ok, session} = start_session_with_policy(commands: [{:disallow, ["cat"]}, {:allow, :all}])
+      result = run_script(session, "coproc cat")
+      assert get_stderr(result) =~ "command not allowed"
+    end
+  end
+
+  describe "background jobs respect all policy types" do
+    test "background job blocked with allowlist" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, ["echo"]}])
+      run_script(session, "ls & wait")
+      {_stdout, stderr} = Session.get_output(session)
+      assert stderr =~ "command not allowed"
+    end
+
+    test "background job blocked with denylist" do
+      {:ok, session} = start_session_with_policy(commands: [{:disallow, ["ls"]}, {:allow, :all}])
+      run_script(session, "ls & wait")
+      {_stdout, stderr} = Session.get_output(session)
+      assert stderr =~ "command not allowed"
+    end
+
+    test "background job blocked with function policy" do
+      {:ok, session} =
+        start_session_with_policy(commands: fn cmd -> cmd == "echo" end)
+
+      run_script(session, "ls & wait")
+      {_stdout, stderr} = Session.get_output(session)
+      assert stderr =~ "command not allowed"
+    end
+  end
+
+  describe "pipeline respects all policy types" do
+    test "pipeline with denylist blocks denied command" do
+      {:ok, session} = start_session_with_policy(commands: [{:disallow, ["cat"]}, {:allow, :all}])
+      result = run_script(session, "echo hello | cat")
+      assert get_stderr(result) =~ "command not allowed"
+    end
+
+    test "pipeline with function policy blocks non-matching" do
+      {:ok, session} =
+        start_session_with_policy(commands: fn cmd -> cmd == "sort" end)
+
+      result = run_script(session, "echo hello | cat")
+      assert get_stderr(result) =~ "command not allowed"
+    end
+
+    test "pipeline with regex policy allows matching" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, [~r/^cat$/, ~r/^sort$/]}])
+      result = run_script(session, "echo hello | cat")
+      assert get_stdout(result) =~ "hello"
+    end
+  end
+
+  describe "command -v respects all policy types" do
+    test "command -v with denylist hides denied command" do
+      {:ok, session} = start_session_with_policy(commands: [{:disallow, ["ls"]}, {:allow, :all}])
+      result = run_script(session, "command -v ls; echo $?")
+      assert get_stdout(result) == "1\n"
+    end
+
+    test "command -v with denylist shows non-denied command" do
+      {:ok, session} = start_session_with_policy(commands: [{:disallow, ["rm"]}, {:allow, :all}])
+      result = run_script(session, "command -v cat")
+      assert get_stdout(result) =~ "cat"
+    end
+
+    test "command -v with function policy" do
+      {:ok, session} =
+        start_session_with_policy(commands: fn cmd -> cmd == "cat" end)
+
+      result = run_script(session, "command -v cat")
+      assert get_stdout(result) =~ "cat"
+    end
+  end
+
+  describe "session inheritance" do
+    test "new_child inherits struct policy" do
+      {:ok, session} = start_session_with_policy(commands: [{:allow, ["echo"]}])
+      state = Session.get_state(session)
+      assert %CommandPolicy{commands: [{:allow, _}]} = state.command_policy
+
+      result = run_script(session, "(ls)")
+      assert get_stderr(result) =~ "command not allowed"
+    end
+
+    test "session accepts pre-built struct" do
+      policy = CommandPolicy.new(commands: :no_external)
+
+      registry_name = :"test_registry_#{System.unique_integer([:positive])}"
+      supervisor_name = :"test_supervisor_#{System.unique_integer([:positive])}"
+      start_supervised!({Registry, keys: :unique, name: registry_name})
+      start_supervised!({DynamicSupervisor, strategy: :one_for_one, name: supervisor_name})
+
+      {:ok, session} =
+        Session.new(
+          id: "test_#{System.unique_integer([:positive])}",
+          registry: registry_name,
+          supervisor: supervisor_name,
+          command_policy: policy
+        )
+
+      result = run_script(session, "ls")
+      assert get_stderr(result) =~ "restricted"
+    end
+  end
+
   describe "unrestricted mode" do
     setup :start_session
 
@@ -542,6 +696,64 @@ defmodule Bash.CommandRestrictionsTest do
         )
 
       assert {:error, _} = CommandPolicy.check_command(policy, "cat")
+    end
+
+    test "empty rule list denies all" do
+      policy = CommandPolicy.new(commands: [])
+      assert {:error, _} = CommandPolicy.check_command(policy, "ls")
+    end
+
+    test "{:allow, []} with empty items skips to next rule" do
+      policy = CommandPolicy.new(commands: [{:allow, []}, {:allow, ["cat"]}])
+      assert :ok = CommandPolicy.check_command(policy, "cat")
+      assert {:error, _} = CommandPolicy.check_command(policy, "ls")
+    end
+
+    test "{:disallow, []} with empty items skips to next rule" do
+      policy = CommandPolicy.new(commands: [{:disallow, []}, {:allow, ["cat"]}])
+      assert :ok = CommandPolicy.check_command(policy, "cat")
+    end
+
+    test "{:allow, :all} as sole policy allows everything" do
+      policy = CommandPolicy.new(commands: [{:allow, :all}])
+      assert :ok = CommandPolicy.check_command(policy, "rm")
+      assert :ok = CommandPolicy.check_command(policy, "anything")
+    end
+
+    test "multiple disallow rules in sequence" do
+      policy =
+        CommandPolicy.new(commands: [{:disallow, ["rm"]}, {:disallow, ["dd"]}, {:allow, :all}])
+
+      assert {:error, _} = CommandPolicy.check_command(policy, "rm")
+      assert {:error, _} = CommandPolicy.check_command(policy, "dd")
+      assert :ok = CommandPolicy.check_command(policy, "ls")
+    end
+
+    test "regex matches full path" do
+      policy = CommandPolicy.new(commands: [{:allow, [~r/^\/usr\/bin\//]}])
+      assert :ok = CommandPolicy.check_command(policy, "/usr/bin/cat")
+      assert {:error, _} = CommandPolicy.check_command(policy, "/usr/local/bin/cat")
+    end
+
+    test "from_state returns default for non-struct command_policy" do
+      assert %CommandPolicy{commands: :unrestricted} =
+               CommandPolicy.from_state(%{command_policy: :stale_atom})
+    end
+
+    test "from_state returns default for nil command_policy" do
+      assert %CommandPolicy{commands: :unrestricted} =
+               CommandPolicy.from_state(%{command_policy: nil})
+    end
+
+    test "new/1 from map" do
+      policy = CommandPolicy.new(%{commands: :no_external})
+      assert %CommandPolicy{commands: :no_external} = policy
+    end
+
+    test "check_command with function that rejects" do
+      policy = %CommandPolicy{commands: fn _cmd -> false end}
+      assert {:error, msg} = CommandPolicy.check_command(policy, "anything")
+      assert msg =~ "command not allowed"
     end
   end
 
