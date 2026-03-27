@@ -70,13 +70,22 @@ defmodule JQ do
       {:error, %JQ.Error.ParseError{}}
   """
   @spec parse(String.t()) :: {:ok, filter()} | {:error, ParseError.t()}
-  defdelegate parse(source), to: Parser
+  def parse(source) when is_binary(source) do
+    with {:ok, tokens} <- JQ.Tokenizer.tokenize(source) do
+      Parser.parse(tokens)
+    end
+  end
 
   @doc """
   Parses a jq filter string into an AST, raising on error.
   """
   @spec parse!(String.t()) :: filter()
-  defdelegate parse!(source), to: Parser
+  def parse!(source) when is_binary(source) do
+    case parse(source) do
+      {:ok, ast} -> ast
+      {:error, error} -> raise error
+    end
+  end
 
   @doc """
   Evaluates a pre-parsed filter AST against an input value.
