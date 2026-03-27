@@ -234,7 +234,7 @@ defmodule Bash.CommandPolicy do
   end
 
   def check_path(%__MODULE__{paths: rules}, path) when is_list(rules) do
-    case evaluate_rules(rules, path) do
+    case evaluate_rules(rules, path, :path) do
       :allow -> :ok
       :deny -> {:error, "bash: #{path}: restricted path"}
     end
