@@ -11,6 +11,7 @@ defmodule Bash.Builtin.Source do
   """
   use Bash.Builtin
 
+  alias Bash.CommandPolicy
   alias Bash.Filesystem
   alias Bash.Parser
   alias Bash.Script
@@ -50,9 +51,12 @@ defmodule Bash.Builtin.Source do
         {:error, "source: #{filename}: No such file or directory"}
 
       path ->
-        case Filesystem.read(Filesystem.from_state(session_state), path) do
-          {:ok, content} ->
-            execute_content(content, args, session_state)
+        with :ok <- CommandPolicy.check_path(CommandPolicy.from_state(session_state), path),
+             {:ok, content} <- Filesystem.read(Filesystem.from_state(session_state), path) do
+          execute_content(content, args, session_state)
+        else
+          {:error, message} when is_binary(message) ->
+            {:error, "source: #{filename}: #{message}"}
 
           {:error, reason} ->
             {:error, "source: #{filename}: #{:file.format_error(reason)}"}

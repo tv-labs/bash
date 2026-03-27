@@ -539,14 +539,22 @@ defmodule Bash.AST.Command do
     file_path = resolve_redirect_path(file_word, session_state)
     append = dir == :append
 
-    fs = Filesystem.from_state(session_state)
+    policy = CommandPolicy.from_state(session_state)
 
-    # Check noclobber (set -C): cannot overwrite existing file with >
-    if noclobber && !append && Filesystem.exists?(fs, file_path) do
-      error_msg = "bash: #{file_path}: cannot overwrite existing file\n"
-      {:error, error_msg, state}
-    else
-      create_file_sink_for_redirect(file_path, append, fd, state, fs)
+    case CommandPolicy.check_path(policy, file_path) do
+      {:error, message} ->
+        {:error, message <> "\n", state}
+
+      :ok ->
+        fs = Filesystem.from_state(session_state)
+
+        # Check noclobber (set -C): cannot overwrite existing file with >
+        if noclobber && !append && Filesystem.exists?(fs, file_path) do
+          error_msg = "bash: #{file_path}: cannot overwrite existing file\n"
+          {:error, error_msg, state}
+        else
+          create_file_sink_for_redirect(file_path, append, fd, state, fs)
+        end
     end
   end
 
@@ -674,14 +682,17 @@ defmodule Bash.AST.Command do
          session_state,
          default_stdin
        ) do
-    fs = Filesystem.from_state(session_state)
+    file_path = resolve_redirect_path(file_word, session_state)
 
-    file_word
-    |> resolve_redirect_path(session_state)
-    |> then(&Filesystem.read(fs, &1))
-    |> case do
-      {:ok, content} -> content
-      {:error, _} -> default_stdin
+    case CommandPolicy.check_path(CommandPolicy.from_state(session_state), file_path) do
+      {:error, _} ->
+        default_stdin
+
+      :ok ->
+        case Filesystem.read(Filesystem.from_state(session_state), file_path) do
+          {:ok, content} -> content
+          {:error, _} -> default_stdin
+        end
     end
   end
 

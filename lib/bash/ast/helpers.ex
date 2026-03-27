@@ -4,6 +4,7 @@ defmodule Bash.AST.Helpers do
   alias Bash.Arithmetic
   alias Bash.AST
   alias Bash.AST.BraceExpand
+  alias Bash.CommandPolicy
   alias Bash.CommandResult
   alias Bash.Executor
   alias Bash.Filesystem
@@ -990,23 +991,31 @@ defmodule Bash.AST.Helpers do
 
     fs = Filesystem.from_state(session_state)
 
+    policy = CommandPolicy.from_state(session_state)
+
     case Filesystem.wildcard(fs, glob_path, match_dot: false) do
       [] ->
         pattern
 
       matches ->
-        if is_absolute do
-          Enum.join(matches, " ")
-        else
-          Enum.map_join(matches, " ", fn match ->
-            relative = Path.relative_to(match, session_state.working_dir)
+        allowed = Enum.filter(matches, &CommandPolicy.path_allowed?(policy, &1))
 
-            if has_dot_prefix do
-              "./" <> relative
-            else
-              relative
-            end
-          end)
+        if allowed == [] do
+          pattern
+        else
+          if is_absolute do
+            Enum.join(allowed, " ")
+          else
+            Enum.map_join(allowed, " ", fn match ->
+              relative = Path.relative_to(match, session_state.working_dir)
+
+              if has_dot_prefix do
+                "./" <> relative
+              else
+                relative
+              end
+            end)
+          end
         end
     end
   end
@@ -1032,12 +1041,15 @@ defmodule Bash.AST.Helpers do
 
         fs = Filesystem.from_state(session_state)
 
+        policy = CommandPolicy.from_state(session_state)
+
         case Filesystem.ls(fs, listing_dir) do
           {:ok, entries} ->
             matches =
               entries
               |> Enum.filter(&Regex.match?(compiled, &1))
               |> Enum.reject(&String.starts_with?(&1, "."))
+              |> Enum.filter(&CommandPolicy.path_allowed?(policy, Path.join(listing_dir, &1)))
               |> Enum.sort()
 
             case matches do

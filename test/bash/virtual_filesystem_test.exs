@@ -349,16 +349,17 @@ defmodule Bash.VirtualFilesystemTest do
         id: supervisor_name
       )
 
-    command_policy = Keyword.get(opts, :command_policy, :unrestricted)
+    command_policy_opt = Keyword.get(opts, :command_policy, nil)
 
-    session_opts = [
-      filesystem: fs,
-      working_dir: working_dir,
-      id: "#{context.test}",
-      registry: registry_name,
-      supervisor: supervisor_name,
-      options: %{command_policy: command_policy}
-    ]
+    session_opts =
+      [
+        filesystem: fs,
+        working_dir: working_dir,
+        id: "#{context.test}",
+        registry: registry_name,
+        supervisor: supervisor_name
+      ] ++
+        if(command_policy_opt, do: [command_policy: command_policy_opt], else: [])
 
     {:ok, session} = Session.new(session_opts)
 
@@ -551,7 +552,7 @@ defmodule Bash.VirtualFilesystemTest do
         start_vfs_session(
           context,
           %{"/workspace/data.txt" => "sandboxed"},
-          command_policy: :disallow_external
+          command_policy: [commands: :no_external]
         )
 
       result = run_script(session, "test -f data.txt && echo yes || echo no")

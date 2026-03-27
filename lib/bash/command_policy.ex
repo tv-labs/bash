@@ -1,6 +1,6 @@
 defmodule Bash.CommandPolicy do
   @moduledoc """
-  Policy engine for controlling command execution and (future) filesystem access.
+  Policy engine for controlling command execution and filesystem access.
 
   A `%CommandPolicy{}` struct is stored as a top-level field on `Bash.Session` state.
   It is immutable once the session is initialized — `set`, `shopt`, and other runtime
@@ -11,9 +11,9 @@ defmodule Bash.CommandPolicy do
     * `:commands` — gates command execution across all categories: builtins, externals,
       shell functions, and Elixir interop calls.
 
-    * `:paths` — reserved for future filesystem path restrictions (not enforced yet).
-
-    * `:files` — reserved for future file access restrictions (not enforced yet).
+    * `:paths` — gates all filesystem access. Every resolved absolute path is checked
+      against these rules before any filesystem operation (cd, source, redirects,
+      test operators, glob expansion).
 
   ## Command Categories
 
@@ -98,8 +98,7 @@ defmodule Bash.CommandPolicy do
   """
 
   defstruct commands: :unrestricted,
-            paths: nil,
-            files: nil
+            paths: nil
 
   @type command_category :: :builtin | :external | :function | :interop
 
@@ -137,8 +136,7 @@ defmodule Bash.CommandPolicy do
 
   @type t :: %__MODULE__{
           commands: command_rule(),
-          paths: path_rule(),
-          files: path_rule()
+          paths: path_rule()
         }
 
   @doc """
@@ -221,6 +219,34 @@ defmodule Bash.CommandPolicy do
     do: check_command(policy, command_name, category) == :ok
 
   @doc """
+  Checks whether access to the given filesystem path is allowed under the policy.
+
+  Returns `:ok` when `paths` is `nil` (no restrictions) or the path passes the rules.
+  Returns `{:error, message}` when the path is denied.
+  """
+  @spec check_path(t(), String.t()) :: :ok | {:error, String.t()}
+  def check_path(%__MODULE__{paths: nil}, _path), do: :ok
+
+  def check_path(%__MODULE__{paths: fun}, path) when is_function(fun, 1) do
+    if fun.(path),
+      do: :ok,
+      else: {:error, "bash: #{path}: restricted path"}
+  end
+
+  def check_path(%__MODULE__{paths: rules}, path) when is_list(rules) do
+    case evaluate_rules(rules, path) do
+      :allow -> :ok
+      :deny -> {:error, "bash: #{path}: restricted path"}
+    end
+  end
+
+  @doc """
+  Returns `true` if the given path is allowed under the policy.
+  """
+  @spec path_allowed?(t(), String.t()) :: boolean()
+  def path_allowed?(policy, path), do: check_path(policy, path) == :ok
+
+  @doc """
   Returns `true` if the policy allows any external commands at all.
 
   Used by pipeline optimization to decide if the streaming path is viable.
@@ -275,11 +301,18 @@ defmodule Bash.CommandPolicy do
 
   # -- Normalization --
 
-  defp finalize(%__MODULE__{commands: rules} = policy) when is_list(rules) do
-    %{policy | commands: Enum.map(rules, &normalize_rule/1)}
+  defp finalize(%__MODULE__{} = policy) do
+    policy
+    |> finalize_field(:commands)
+    |> finalize_field(:paths)
   end
 
-  defp finalize(policy), do: policy
+  defp finalize_field(%__MODULE__{} = policy, field) do
+    case Map.get(policy, field) do
+      rules when is_list(rules) -> Map.put(policy, field, Enum.map(rules, &normalize_rule/1))
+      _ -> policy
+    end
+  end
 
   defp normalize_rule({tag, :all}) when tag in [:allow, :disallow], do: {tag, :all}
 

@@ -21,6 +21,7 @@ defmodule Bash.Builtin.Cd do
   """
   use Bash.Builtin
 
+  alias Bash.CommandPolicy
   alias Bash.Filesystem
   alias Bash.Variable
 
@@ -99,43 +100,36 @@ defmodule Bash.Builtin.Cd do
     # Resolve the path
     resolved_path = resolve_path(expanded_target, session_state, flags)
 
-    # Check if it's a directory and exists
-    case validate_directory(resolved_path, flags, session_state) do
-      :ok ->
-        # Success - prepare state updates
-        old_pwd = session_state.working_dir
+    with :ok <- CommandPolicy.check_path(CommandPolicy.from_state(session_state), resolved_path),
+         :ok <- validate_directory(resolved_path, flags, session_state) do
+      old_pwd = session_state.working_dir
 
-        new_pwd =
-          if flags.physical do
-            # Resolve all symlinks for physical path
-            case resolve_symlinks(Path.expand(resolved_path), session_state) do
-              {:ok, real_path} -> real_path
-              {:error, _} -> Path.expand(resolved_path)
-            end
-          else
-            # Logical path - normalize without resolving symlinks
-            # Path.expand resolves symlinks, so we use our own normalization
-            normalize_logical_path(resolved_path, session_state.working_dir)
+      new_pwd =
+        if flags.physical do
+          case resolve_symlinks(Path.expand(resolved_path), session_state) do
+            {:ok, real_path} -> real_path
+            {:error, _} -> Path.expand(resolved_path)
           end
-
-        # Print new directory if cd -
-        if print_new_dir? do
-          puts(new_pwd)
+        else
+          normalize_logical_path(resolved_path, session_state.working_dir)
         end
 
-        # Update state
-        update_state(
-          working_dir: new_pwd,
-          variables: %{
-            "PWD" => new_pwd,
-            "OLDPWD" => old_pwd
-          }
-        )
+      if print_new_dir? do
+        puts(new_pwd)
+      end
 
-        :ok
+      update_state(
+        working_dir: new_pwd,
+        variables: %{
+          "PWD" => new_pwd,
+          "OLDPWD" => old_pwd
+        }
+      )
 
-      {:error, reason} ->
-        return_error("cd: #{target}: #{reason}")
+      :ok
+    else
+      {:error, message} ->
+        return_error("cd: #{target}: #{message}")
     end
   end
 

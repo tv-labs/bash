@@ -56,6 +56,7 @@ defmodule Bash.Builtin.Test do
 
   import Bitwise
 
+  alias Bash.CommandPolicy
   alias Bash.Filesystem
 
   @doc false
@@ -80,31 +81,39 @@ defmodule Bash.Builtin.Test do
 
   defp fs(state), do: Filesystem.from_state(state)
 
+  defp path_allowed?(full_path, state) do
+    CommandPolicy.path_allowed?(CommandPolicy.from_state(state), full_path)
+  end
+
   @doc false
   def file_exists?(path, state) do
     full_path = resolve_path(path, state.working_dir)
-    Filesystem.exists?(fs(state), full_path)
+    path_allowed?(full_path, state) and Filesystem.exists?(fs(state), full_path)
   end
 
   @doc false
   def file_regular?(path, state) do
     full_path = resolve_path(path, state.working_dir)
-    Filesystem.regular?(fs(state), full_path)
+    path_allowed?(full_path, state) and Filesystem.regular?(fs(state), full_path)
   end
 
   @doc false
   def file_directory?(path, state) do
     full_path = resolve_path(path, state.working_dir)
-    Filesystem.dir?(fs(state), full_path)
+    path_allowed?(full_path, state) and Filesystem.dir?(fs(state), full_path)
   end
 
   @doc false
   def file_symlink?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
-    case Filesystem.lstat(fs(state), full_path) do
-      {:ok, stat} -> stat.type == :symlink
-      _ -> false
+    if path_allowed?(full_path, state) do
+      case Filesystem.lstat(fs(state), full_path) do
+        {:ok, stat} -> stat.type == :symlink
+        _ -> false
+      end
+    else
+      false
     end
   end
 
@@ -112,9 +121,13 @@ defmodule Bash.Builtin.Test do
   def file_readable?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
-    case Filesystem.stat(fs(state), full_path) do
-      {:ok, stat} -> (stat.mode &&& 0o444) != 0
-      _ -> false
+    if path_allowed?(full_path, state) do
+      case Filesystem.stat(fs(state), full_path) do
+        {:ok, stat} -> (stat.mode &&& 0o444) != 0
+        _ -> false
+      end
+    else
+      false
     end
   end
 
@@ -122,9 +135,13 @@ defmodule Bash.Builtin.Test do
   def file_writable?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
-    case Filesystem.stat(fs(state), full_path) do
-      {:ok, stat} -> (stat.mode &&& 0o222) != 0
-      _ -> false
+    if path_allowed?(full_path, state) do
+      case Filesystem.stat(fs(state), full_path) do
+        {:ok, stat} -> (stat.mode &&& 0o222) != 0
+        _ -> false
+      end
+    else
+      false
     end
   end
 
@@ -132,9 +149,13 @@ defmodule Bash.Builtin.Test do
   def file_executable?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
-    case Filesystem.stat(fs(state), full_path) do
-      {:ok, stat} -> (stat.mode &&& 0o111) != 0
-      _ -> false
+    if path_allowed?(full_path, state) do
+      case Filesystem.stat(fs(state), full_path) do
+        {:ok, stat} -> (stat.mode &&& 0o111) != 0
+        _ -> false
+      end
+    else
+      false
     end
   end
 
@@ -142,9 +163,13 @@ defmodule Bash.Builtin.Test do
   def file_not_empty?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
-    case Filesystem.stat(fs(state), full_path) do
-      {:ok, stat} -> stat.size > 0
-      _ -> false
+    if path_allowed?(full_path, state) do
+      case Filesystem.stat(fs(state), full_path) do
+        {:ok, stat} -> stat.size > 0
+        _ -> false
+      end
+    else
+      false
     end
   end
 
@@ -152,9 +177,13 @@ defmodule Bash.Builtin.Test do
   def file_block_special?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
-    case Filesystem.lstat(fs(state), full_path) do
-      {:ok, stat} -> stat.type == :device
-      _ -> false
+    if path_allowed?(full_path, state) do
+      case Filesystem.lstat(fs(state), full_path) do
+        {:ok, stat} -> stat.type == :device
+        _ -> false
+      end
+    else
+      false
     end
   end
 
@@ -162,9 +191,13 @@ defmodule Bash.Builtin.Test do
   def file_char_special?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
-    case Filesystem.lstat(fs(state), full_path) do
-      {:ok, stat} -> stat.type == :device
-      _ -> false
+    if path_allowed?(full_path, state) do
+      case Filesystem.lstat(fs(state), full_path) do
+        {:ok, stat} -> stat.type == :device
+        _ -> false
+      end
+    else
+      false
     end
   end
 
@@ -172,9 +205,13 @@ defmodule Bash.Builtin.Test do
   def file_named_pipe?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
-    case Filesystem.lstat(fs(state), full_path) do
-      {:ok, stat} -> stat.type == :other
-      _ -> false
+    if path_allowed?(full_path, state) do
+      case Filesystem.lstat(fs(state), full_path) do
+        {:ok, stat} -> stat.type == :other
+        _ -> false
+      end
+    else
+      false
     end
   end
 
@@ -182,9 +219,13 @@ defmodule Bash.Builtin.Test do
   def file_socket?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
-    case Filesystem.lstat(fs(state), full_path) do
-      {:ok, stat} -> stat.type == :other
-      _ -> false
+    if path_allowed?(full_path, state) do
+      case Filesystem.lstat(fs(state), full_path) do
+        {:ok, stat} -> stat.type == :other
+        _ -> false
+      end
+    else
+      false
     end
   end
 
@@ -192,9 +233,13 @@ defmodule Bash.Builtin.Test do
   def file_setgid?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
-    case Filesystem.stat(fs(state), full_path) do
-      {:ok, stat} -> (stat.mode &&& 0o2000) != 0
-      _ -> false
+    if path_allowed?(full_path, state) do
+      case Filesystem.stat(fs(state), full_path) do
+        {:ok, stat} -> (stat.mode &&& 0o2000) != 0
+        _ -> false
+      end
+    else
+      false
     end
   end
 
@@ -202,9 +247,13 @@ defmodule Bash.Builtin.Test do
   def file_sticky_bit?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
-    case Filesystem.stat(fs(state), full_path) do
-      {:ok, stat} -> (stat.mode &&& 0o1000) != 0
-      _ -> false
+    if path_allowed?(full_path, state) do
+      case Filesystem.stat(fs(state), full_path) do
+        {:ok, stat} -> (stat.mode &&& 0o1000) != 0
+        _ -> false
+      end
+    else
+      false
     end
   end
 
@@ -212,9 +261,13 @@ defmodule Bash.Builtin.Test do
   def file_setuid?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
-    case Filesystem.stat(fs(state), full_path) do
-      {:ok, stat} -> (stat.mode &&& 0o4000) != 0
-      _ -> false
+    if path_allowed?(full_path, state) do
+      case Filesystem.stat(fs(state), full_path) do
+        {:ok, stat} -> (stat.mode &&& 0o4000) != 0
+        _ -> false
+      end
+    else
+      false
     end
   end
 
@@ -222,9 +275,13 @@ defmodule Bash.Builtin.Test do
   def file_owned_by_user?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
-    case Filesystem.stat(fs(state), full_path) do
-      {:ok, stat} -> stat.uid == "UID" |> System.get_env("0") |> String.to_integer()
-      _ -> false
+    if path_allowed?(full_path, state) do
+      case Filesystem.stat(fs(state), full_path) do
+        {:ok, stat} -> stat.uid == "UID" |> System.get_env("0") |> String.to_integer()
+        _ -> false
+      end
+    else
+      false
     end
   end
 
@@ -232,9 +289,13 @@ defmodule Bash.Builtin.Test do
   def file_owned_by_group?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
-    case Filesystem.stat(fs(state), full_path) do
-      {:ok, stat} -> stat.gid == "GID" |> System.get_env("0") |> String.to_integer()
-      _ -> false
+    if path_allowed?(full_path, state) do
+      case Filesystem.stat(fs(state), full_path) do
+        {:ok, stat} -> stat.gid == "GID" |> System.get_env("0") |> String.to_integer()
+        _ -> false
+      end
+    else
+      false
     end
   end
 
@@ -242,51 +303,70 @@ defmodule Bash.Builtin.Test do
   def file_modified_since_read?(path, state) do
     full_path = resolve_path(path, state.working_dir)
 
-    case Filesystem.stat(fs(state), full_path) do
-      {:ok, stat} -> stat.mtime > stat.atime
-      _ -> false
+    if path_allowed?(full_path, state) do
+      case Filesystem.stat(fs(state), full_path) do
+        {:ok, stat} -> stat.mtime > stat.atime
+        _ -> false
+      end
+    else
+      false
     end
   end
 
   @doc false
   def file_newer_than?(file1, file2, state) do
-    fs = fs(state)
     path1 = resolve_path(file1, state.working_dir)
     path2 = resolve_path(file2, state.working_dir)
 
-    with {:ok, stat1} <- Filesystem.stat(fs, path1),
-         {:ok, stat2} <- Filesystem.stat(fs, path2) do
-      stat1.mtime > stat2.mtime
+    if path_allowed?(path1, state) and path_allowed?(path2, state) do
+      fs = fs(state)
+
+      with {:ok, stat1} <- Filesystem.stat(fs, path1),
+           {:ok, stat2} <- Filesystem.stat(fs, path2) do
+        stat1.mtime > stat2.mtime
+      else
+        _ -> false
+      end
     else
-      _ -> false
+      false
     end
   end
 
   @doc false
   def file_older_than?(file1, file2, state) do
-    fs = fs(state)
     path1 = resolve_path(file1, state.working_dir)
     path2 = resolve_path(file2, state.working_dir)
 
-    with {:ok, stat1} <- Filesystem.stat(fs, path1),
-         {:ok, stat2} <- Filesystem.stat(fs, path2) do
-      stat1.mtime < stat2.mtime
+    if path_allowed?(path1, state) and path_allowed?(path2, state) do
+      fs = fs(state)
+
+      with {:ok, stat1} <- Filesystem.stat(fs, path1),
+           {:ok, stat2} <- Filesystem.stat(fs, path2) do
+        stat1.mtime < stat2.mtime
+      else
+        _ -> false
+      end
     else
-      _ -> false
+      false
     end
   end
 
   @doc false
   def file_same_file?(file1, file2, state) do
-    fs = fs(state)
     path1 = resolve_path(file1, state.working_dir)
     path2 = resolve_path(file2, state.working_dir)
 
-    with {:ok, stat1} <- Filesystem.stat(fs, path1),
-         {:ok, stat2} <- Filesystem.stat(fs, path2) do
-      stat1.inode == stat2.inode and stat1.major_device == stat2.major_device
+    if path_allowed?(path1, state) and path_allowed?(path2, state) do
+      fs = fs(state)
+
+      with {:ok, stat1} <- Filesystem.stat(fs, path1),
+           {:ok, stat2} <- Filesystem.stat(fs, path2) do
+        stat1.inode == stat2.inode and stat1.major_device == stat2.major_device
+      else
+        _ -> false
+      end
     else
-      _ -> false
+      false
     end
   end
 
