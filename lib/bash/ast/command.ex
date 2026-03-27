@@ -782,9 +782,7 @@ defmodule Bash.AST.Command do
   end
 
   defp check_command_policy(command_name, session_state) do
-    policy = CommandPolicy.from_state(session_state)
-
-    case CommandPolicy.check(policy, command_name) do
+    case CommandPolicy.check_command(CommandPolicy.from_state(session_state), command_name) do
       :ok ->
         :ok
 

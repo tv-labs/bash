@@ -436,7 +436,7 @@ defmodule Bash.Builtin.Shopt do
   end
 
   defp get_option_value("restricted_shell", false = _use_set_o, session_state) do
-    CommandPolicy.from_state(session_state) != :unrestricted
+    CommandPolicy.from_state(session_state).commands != :unrestricted
   end
 
   defp get_option_value(optname, false = _use_set_o, session_state) do

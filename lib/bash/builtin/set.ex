@@ -139,13 +139,6 @@ defmodule Bash.Builtin.Set do
           |> Map.merge(Map.new(options_to_set, fn opt -> {opt, true} end))
           |> Map.merge(Map.new(options_to_unset, fn opt -> {opt, false} end))
 
-        # Preserve immutable command_policy from current state
-        new_options =
-          case Map.get(current_options, :command_policy) do
-            nil -> new_options
-            policy -> Map.put(new_options, :command_policy, policy)
-          end
-
         update_state(options: new_options)
 
         # Handle positional parameters if provided after --

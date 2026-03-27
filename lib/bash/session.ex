@@ -112,6 +112,7 @@ defmodule Bash.Session do
     # Timeout for GenServer calls to child processes (coproc, jobs, etc.)
     # Propagated from Session.execute opts. Defaults to :infinity.
     call_timeout: :infinity,
+    command_policy: %CommandPolicy{},
     # Special variables (updated after each command)
     special_vars: %{
       "?" => 0,
@@ -222,6 +223,7 @@ defmodule Bash.Session do
       variables: parent_state.variables,
       functions: parent_state.functions,
       options: parent_state.options,
+      command_policy: parent_state.command_policy,
       # NOT inherited in subshells (bash behavior):
       # - aliases are NOT inherited
       # - hash table is NOT inherited
@@ -978,8 +980,14 @@ defmodule Bash.Session do
     aliases = opts[:aliases] || %{}
     functions = opts[:functions] || %{}
     default_options = %{hashall: true, braceexpand: true}
-    raw_options = Map.merge(default_options, opts[:options] || %{})
-    options = CommandPolicy.normalize_options(raw_options)
+    options = Map.merge(default_options, opts[:options] || %{})
+
+    command_policy =
+      case opts[:command_policy] do
+        nil -> %CommandPolicy{}
+        %CommandPolicy{} = policy -> policy
+        opts_list -> CommandPolicy.new(opts_list)
+      end
 
     {:ok, job_supervisor} = DynamicSupervisor.start_link(strategy: :one_for_one)
     {start_runtime_ms, _} = :erlang.statistics(:runtime)
@@ -1007,6 +1015,7 @@ defmodule Bash.Session do
       aliases: aliases,
       functions: functions,
       options: options,
+      command_policy: command_policy,
       hash: %{},
       jobs: %{},
       next_job_number: 1,
@@ -1938,7 +1947,7 @@ defmodule Bash.Session do
           {cmd, cmd_args, build_command_string(foreground_ast)}
       end
 
-    case CommandPolicy.check(CommandPolicy.from_state(state), command) do
+    case CommandPolicy.check_command(state.command_policy, command) do
       {:error, message} ->
         if state.stderr_sink, do: state.stderr_sink.({:stderr, message <> "\n"})
 
@@ -2039,7 +2048,7 @@ defmodule Bash.Session do
           {cmd, cmd_args, build_command_string(foreground_ast)}
       end
 
-    case CommandPolicy.check(CommandPolicy.from_state(current_session_state), command) do
+    case CommandPolicy.check_command(current_session_state.command_policy, command) do
       {:error, message} ->
         if current_session_state.stderr_sink do
           current_session_state.stderr_sink.({:stderr, message <> "\n"})

@@ -111,7 +111,7 @@ defmodule Bash.Builtin.Exec do
   end
 
   defp execute_command(command, args, opts, session_state) do
-    case CommandPolicy.check(CommandPolicy.from_state(session_state), command) do
+    case CommandPolicy.check_command(session_state.command_policy, command) do
       {:error, message} ->
         error(message)
         {:ok, 1}

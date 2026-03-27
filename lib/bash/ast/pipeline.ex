@@ -540,12 +540,11 @@ defmodule Bash.AST.Pipeline do
       false
     else
       command_name = Helpers.word_to_string(name, session_state)
-      policy = CommandPolicy.from_state(session_state)
 
       not has_function?(command_name, session_state) and
         not has_elixir_interop?(command_name, session_state) and
         not Builtin.implemented?(command_name) and
-        CommandPolicy.allowed?(policy, command_name)
+        CommandPolicy.command_allowed?(session_state.command_policy, command_name)
     end
   end
 
