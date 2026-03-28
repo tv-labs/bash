@@ -961,7 +961,7 @@ defmodule Bash.Parser do
   end
 
   # Reserved words that should be treated as literal words in argument position
-  @reserved_as_arg ~w[done fi esac then do elif else in rbrace]a
+  @reserved_as_arg ~w[if then else elif fi for while until do done case esac in function rbrace]a
 
   # Redirect operator tokens
   @redirect_tokens ~w[less greater dgreater lessand greaterand lessgreat andgreat anddgreat dless dlessdash tless io_number brace_fd]a

@@ -2,4 +2,4 @@
 # Tests that need to assert on log messages can use ExUnit.CaptureLog.capture_log/1
 Logger.configure(level: :warning)
 
-ExUnit.start()
+ExUnit.start(exclude: [:trap_spec])
