@@ -21,6 +21,8 @@ defmodule Bash.Builtin.Cd do
   """
   use Bash.Builtin
 
+  alias Bash.CommandPolicy
+  alias Bash.Filesystem
   alias Bash.Variable
 
   defbash execute(args, state) do
@@ -98,54 +100,49 @@ defmodule Bash.Builtin.Cd do
     # Resolve the path
     resolved_path = resolve_path(expanded_target, session_state, flags)
 
-    # Check if it's a directory and exists
-    case validate_directory(resolved_path, flags) do
-      :ok ->
-        # Success - prepare state updates
-        old_pwd = session_state.working_dir
+    with :ok <- CommandPolicy.check_path(CommandPolicy.from_state(session_state), resolved_path),
+         :ok <- validate_directory(resolved_path, flags, session_state) do
+      old_pwd = session_state.working_dir
 
-        new_pwd =
-          if flags.physical do
-            # Resolve all symlinks for physical path
-            case resolve_symlinks(Path.expand(resolved_path)) do
-              {:ok, real_path} -> real_path
-              {:error, _} -> Path.expand(resolved_path)
-            end
-          else
-            # Logical path - normalize without resolving symlinks
-            # Path.expand resolves symlinks, so we use our own normalization
-            normalize_logical_path(resolved_path, session_state.working_dir)
+      new_pwd =
+        if flags.physical do
+          case resolve_symlinks(Path.expand(resolved_path), session_state) do
+            {:ok, real_path} -> real_path
+            {:error, _} -> Path.expand(resolved_path)
           end
-
-        # Print new directory if cd -
-        if print_new_dir? do
-          puts(new_pwd)
+        else
+          normalize_logical_path(resolved_path, session_state.working_dir)
         end
 
-        # Update state
-        update_state(
-          working_dir: new_pwd,
-          variables: %{
-            "PWD" => new_pwd,
-            "OLDPWD" => old_pwd
-          }
-        )
+      if print_new_dir? do
+        puts(new_pwd)
+      end
 
-        :ok
+      update_state(
+        working_dir: new_pwd,
+        variables: %{
+          "PWD" => new_pwd,
+          "OLDPWD" => old_pwd
+        }
+      )
 
-      {:error, reason} ->
-        return_error("cd: #{target}: #{reason}")
+      :ok
+    else
+      {:error, message} ->
+        return_error("cd: #{target}: #{message}")
     end
   end
 
   # Resolve path based on flags and current state
   defp resolve_path(path, session_state, _flags) do
+    fs = Filesystem.from_state(session_state)
+
     if String.starts_with?(path, "/") do
       path
     else
       candidate = Path.join(session_state.working_dir, path)
 
-      if File.dir?(candidate) do
+      if Filesystem.dir?(fs, candidate) do
         candidate
       else
         # Try CDPATH if not starting with . or /
@@ -169,11 +166,13 @@ defmodule Bash.Builtin.Cd do
       # Split CDPATH and search
       paths = String.split(cdpath, ":", trim: false)
 
+      fs = Filesystem.from_state(session_state)
+
       Enum.find_value(paths, Path.join(session_state.working_dir, dir), fn search_path ->
         search_path = if search_path == "", do: ".", else: search_path
         candidate = Path.join(search_path, dir)
 
-        if File.dir?(candidate) do
+        if Filesystem.dir?(fs, candidate) do
           candidate
         end
       end)
@@ -198,12 +197,14 @@ defmodule Bash.Builtin.Cd do
   defp expand_tilde(path, _session_state), do: path
 
   # Validate that the path is a directory
-  defp validate_directory(path, _flags) do
+  defp validate_directory(path, _flags, session_state) do
+    fs = Filesystem.from_state(session_state)
+
     cond do
-      not File.exists?(path) ->
+      not Filesystem.exists?(fs, path) ->
         {:error, "No such file or directory"}
 
-      not File.dir?(path) ->
+      not Filesystem.dir?(fs, path) ->
         {:error, "Not a directory"}
 
       true ->
@@ -212,10 +213,11 @@ defmodule Bash.Builtin.Cd do
   end
 
   # Resolve symlinks in a path (for -P flag)
-  defp resolve_symlinks(path) do
-    case :file.read_link_all(to_charlist(path)) do
-      {:ok, real_path} -> {:ok, List.to_string(real_path)}
+  defp resolve_symlinks(path, session_state) do
+    case Filesystem.read_link_all(Filesystem.from_state(session_state), path) do
+      {:ok, real_path} -> {:ok, real_path}
       {:error, :einval} -> {:ok, path}
+      {:error, :enotsup} -> {:ok, path}
       {:error, reason} -> {:error, reason}
     end
   end

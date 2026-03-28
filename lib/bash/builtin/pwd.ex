@@ -8,6 +8,8 @@ defmodule Bash.Builtin.Pwd do
   """
   use Bash.Builtin
 
+  alias Bash.Filesystem
+
   defbash execute(args, state) do
     # Get default physical mode from session options (set by `set -P`)
     options = Map.get(state, :options) || %{}
@@ -17,7 +19,7 @@ defmodule Bash.Builtin.Pwd do
     output =
       if flags.physical do
         # Physical mode: resolve symlinks to get real path
-        resolve_physical_path(state.working_dir)
+        resolve_physical_path(state.working_dir, state)
       else
         # Logical mode: return working_dir as-is
         state.working_dir
@@ -65,38 +67,34 @@ defmodule Bash.Builtin.Pwd do
 
   # Resolve symlinks in a path to get the physical path (for -P flag)
   # This resolves the path component by component, following symlinks
-  defp resolve_physical_path(path) do
+  defp resolve_physical_path(path, state) do
     try do
       expanded = Path.expand(path)
-      resolve_path_components(String.split(expanded, "/", trim: true), "/")
+      resolve_path_components(String.split(expanded, "/", trim: true), "/", state)
     rescue
       _ -> path
     end
   end
 
-  # Resolve path component by component, following any symlinks
-  defp resolve_path_components([], acc), do: acc
+  defp resolve_path_components([], acc, _state), do: acc
 
-  defp resolve_path_components([component | rest], acc) do
+  defp resolve_path_components([component | rest], acc, state) do
+    fs = Filesystem.from_state(state)
     current = Path.join(acc, component)
 
-    case :file.read_link(to_charlist(current)) do
+    case Filesystem.read_link(fs, current) do
       {:ok, target} ->
-        # It's a symlink - follow it
-        target_str = List.to_string(target)
-
         resolved =
-          if String.starts_with?(target_str, "/") do
-            target_str
+          if String.starts_with?(target, "/") do
+            target
           else
-            Path.join(acc, target_str) |> Path.expand()
+            Path.join(acc, target) |> Path.expand()
           end
 
-        resolve_path_components(rest, resolved)
+        resolve_path_components(rest, resolved, state)
 
       {:error, _} ->
-        # Not a symlink, continue
-        resolve_path_components(rest, current)
+        resolve_path_components(rest, current, state)
     end
   end
 end

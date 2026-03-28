@@ -24,6 +24,7 @@ defmodule Bash.AST.WhileLoop do
   alias Bash.AST.Redirect
   alias Bash.CommandResult
   alias Bash.Executor
+  alias Bash.Filesystem
   alias Bash.Statement
   alias Bash.Telemetry
   alias Bash.Variable
@@ -400,7 +401,7 @@ defmodule Bash.AST.WhileLoop do
                 else: p
             end)
 
-          case File.read(file_path) do
+          case Filesystem.read(Filesystem.from_state(session_state), file_path) do
             {:ok, content} -> content
             {:error, _} -> nil
           end
