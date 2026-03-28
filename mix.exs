@@ -214,6 +214,7 @@ defmodule Bash.MixProject do
     [
       {:ex_cmd, "~> 0.12"},
       {:telemetry, "~> 1.0"},
+      {:stream_data, "~> 1.0", only: [:test, :dev]},
       {:ex_doc, "~> 0.35", only: :dev, runtime: false, warn_if_outdated: true},
       {:tidewave, "~> 0.5", only: :dev, warn_if_outdated: true},
       {:exsync, "~> 0.4", only: :dev},

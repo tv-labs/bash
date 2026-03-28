@@ -173,6 +173,30 @@ defmodule Bash.SessionCase do
   end
 
   @doc """
+  Wait until a file exists on disk.
+
+  Polls for the file's existence, timing out after `timeout` ms (default 2000).
+  Useful for waiting on a background process to signal readiness.
+  """
+  def await_file(path, timeout \\ 2000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_await_file(path, deadline)
+  end
+
+  defp do_await_file(path, deadline) do
+    if System.monotonic_time(:millisecond) > deadline do
+      raise "Timed out waiting for file #{path}"
+    end
+
+    if File.exists?(path) do
+      :ok
+    else
+      Process.sleep(5)
+      do_await_file(path, deadline)
+    end
+  end
+
+  @doc """
   Create a session state suitable for direct builtin testing.
 
   Returns a state map with sinks configured for output capture.

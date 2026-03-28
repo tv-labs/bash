@@ -159,23 +159,27 @@ defmodule Bash.Tokenizer do
   @spec tokenize(String.t()) ::
           {:ok, [token()]} | {:error, String.t(), pos_integer(), pos_integer()}
   def tokenize(input) when is_binary(input) do
-    # Check for common script issues before tokenizing
-    case check_script_start(input) do
-      {:error, _, _, _} = err ->
-        err
+    if not String.valid?(input) do
+      {:error, "input is not valid UTF-8", 1, 1}
+    else
+      # Check for common script issues before tokenizing
+      case check_script_start(input) do
+        {:error, _, _, _} = err ->
+          err
 
-      :ok ->
-        state = %{
-          input: input,
-          pos: 0,
-          line: 1,
-          column: 1,
-          in_test_expr: false,
-          after_regex_op: false,
-          pending_heredocs: []
-        }
+        :ok ->
+          state = %{
+            input: input,
+            pos: 0,
+            line: 1,
+            column: 1,
+            in_test_expr: false,
+            after_regex_op: false,
+            pending_heredocs: []
+          }
 
-        tokenize_loop(state, [])
+          tokenize_loop(state, [])
+      end
     end
   end
 
@@ -819,8 +823,19 @@ defmodule Bash.Tokenizer do
             bracket_depth
           )
         else
-          {:ok, part, new_state} = read_dollar(state)
-          read_regex_pattern_parts(new_state, [part | acc], start_line, start_col, bracket_depth)
+          case read_dollar(state) do
+            {:ok, part, new_state} ->
+              read_regex_pattern_parts(
+                new_state,
+                [part | acc],
+                start_line,
+                start_col,
+                bracket_depth
+              )
+
+            {:error, _, _, _} = err ->
+              err
+          end
         end
 
       # Single-quoted string - literal, no regex interpretation
@@ -1624,13 +1639,17 @@ defmodule Bash.Tokenizer do
 
       ?[ ->
         # [ starts array subscript in word context - read until matching ]
-        {:ok, part, new_state} = read_array_subscript(state)
-        read_word_parts(new_state, [part | acc])
+        case read_array_subscript(state) do
+          {:ok, part, new_state} -> read_word_parts(new_state, [part | acc])
+          {:error, _, _, _} = err -> err
+        end
 
       ?{ ->
         # { starts brace expansion in word context - read until matching }
-        {:ok, part, new_state} = read_brace_expansion(state)
-        read_word_parts(new_state, [part | acc])
+        case read_brace_expansion(state) do
+          {:ok, part, new_state} -> read_word_parts(new_state, [part | acc])
+          {:error, _, _, _} = err -> err
+        end
 
       ?} ->
         # } ends the word (end of brace expansion context)
@@ -2021,12 +2040,22 @@ defmodule Bash.Tokenizer do
         read_double_quoted_content(new_state, [part | acc], start_line, start_col)
 
       ?$ ->
-        {:ok, part, new_state} = read_dollar(state)
-        read_double_quoted_content(new_state, [part | acc], start_line, start_col)
+        case read_dollar(state) do
+          {:ok, part, new_state} ->
+            read_double_quoted_content(new_state, [part | acc], start_line, start_col)
+
+          {:error, _, _, _} = err ->
+            err
+        end
 
       ?` ->
-        {:ok, part, new_state} = read_backtick(state)
-        read_double_quoted_content(new_state, [part | acc], start_line, start_col)
+        case read_backtick(state) do
+          {:ok, part, new_state} ->
+            read_double_quoted_content(new_state, [part | acc], start_line, start_col)
+
+          {:error, _, _, _} = err ->
+            err
+        end
 
       c ->
         read_double_quoted_content(

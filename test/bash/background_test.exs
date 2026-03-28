@@ -144,12 +144,18 @@ defmodule Bash.BackgroundTest do
       assert result.exit_code == 5
     end
 
-    test "kill sends SIGTERM by default like bash", %{session: session} do
+    test "kill sends SIGTERM by default like bash", %{session: session, tmp_dir: tmp_dir} do
       # In bash, kill without signal sends SIGTERM (15)
-      # Use bash -c with a trap to guarantee signal readiness: the trap is
-      # registered before sleep runs, so SIGTERM is never missed.
-      run_script(session, "bash -c 'trap \"exit 143\" TERM; sleep 10' &")
+      # Use a readiness file so we don't send kill before the trap is installed.
+      ready_file = Path.join(tmp_dir, "ready")
+
+      run_script(
+        session,
+        "bash -c 'trap \"exit 143\" TERM; touch #{ready_file}; sleep 10' &"
+      )
+
       await_job_running(session, 1)
+      await_file(ready_file)
 
       run_script(session, "kill %1")
 
