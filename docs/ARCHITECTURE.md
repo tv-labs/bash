@@ -86,6 +86,7 @@ stateDiagram-v2
 | `current` | Execution.t | Active execution context |
 | `special_vars` | Map | `$?`, `$!`, `$$`, `$0`, `$_` |
 | `positional_params` | list | Function argument stack |
+| `command_policy` | `CommandPolicy.t()` | Controls which external commands are allowed (see `Bash.CommandPolicy`) |
 | `file_descriptors` | Map | FD number to pid or `{:coproc, pid, :read \| :write}` |
 
 **Internal fields (opaque):**

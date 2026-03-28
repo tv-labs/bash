@@ -51,8 +51,9 @@ defmodule Bash.Session do
   alias Bash.AST
   alias Bash.AST.Compound
   alias Bash.AST.Pipeline
-  alias Bash.Executor
+  alias Bash.CommandPolicy
   alias Bash.CommandResult
+  alias Bash.Executor
   alias Bash.Script
   alias Bash.Job
   alias Bash.JobProcess
@@ -111,6 +112,7 @@ defmodule Bash.Session do
     # Timeout for GenServer calls to child processes (coproc, jobs, etc.)
     # Propagated from Session.execute opts. Defaults to :infinity.
     call_timeout: :infinity,
+    command_policy: %CommandPolicy{},
     # Special variables (updated after each command)
     special_vars: %{
       "?" => 0,
@@ -143,11 +145,12 @@ defmodule Bash.Session do
           executions: [Execution.t()],
           current: Execution.t() | nil,
           is_pipeline_tail: boolean(),
-          options: %{String.t() => boolean()},
+          options: %{atom() => boolean()},
           hash: %{String.t() => {pos_integer, String.t()}},
           aliases: %{String.t() => String.t()},
           functions: %{String.t() => Function.t()},
           elixir_modules: %{String.t() => module()},
+          command_policy: CommandPolicy.t(),
           in_function: boolean(),
           in_loop: boolean(),
           call_stack: [
@@ -172,6 +175,37 @@ defmodule Bash.Session do
 
   @doc """
   Creates a new session with default environment.
+
+  ## Options
+
+    * `:id` — unique session identifier (auto-generated if omitted)
+    * `:working_dir` — initial working directory (defaults to `File.cwd!()`)
+    * `:env` — map of environment variables to set (e.g., `%{"HOME" => "/root"}`)
+    * `:env_include` — list of host env vars to include (defaults to all)
+    * `:env_exclude` — list of host env vars to exclude
+    * `:options` — shell options map (e.g., `%{hashall: true, braceexpand: true}`)
+    * `:command_policy` — `%CommandPolicy{}` struct or keyword list for building one.
+      Controls which commands the session can execute across all categories (builtins,
+      externals, functions, interop). See `Bash.CommandPolicy`.
+
+          # Block all external commands
+          Bash.Session.new(command_policy: [commands: :no_external])
+
+          # Allow only builtins and specific externals
+          Bash.Session.new(command_policy: [commands: [{:allow, [:builtins, "cat", "grep"]}]])
+
+          # Allow builtins and functions, block externals and interop
+          Bash.Session.new(command_policy: [commands: [{:allow, [:builtins, :functions]}]])
+
+          # Deny specific commands
+          Bash.Session.new(command_policy: [commands: [{:disallow, ["rm"]}, {:allow, :all}]])
+
+    * `:apis` — list of `Bash.Interop` modules to load at creation
+    * `:aliases` — map of command aliases
+    * `:functions` — map of pre-defined bash functions
+    * `:script_name` — value of `$0` (defaults to `"bash"`)
+    * `:args` — positional parameters (`$1`, `$2`, etc.)
+    * `:call_timeout` — timeout for GenServer calls (defaults to `:infinity`)
   """
   def new(opts \\ []) do
     supervisor = opts[:supervisor] || SessionSupervisor
@@ -221,6 +255,7 @@ defmodule Bash.Session do
       variables: parent_state.variables,
       functions: parent_state.functions,
       options: parent_state.options,
+      command_policy: parent_state.command_policy,
       # NOT inherited in subshells (bash behavior):
       # - aliases are NOT inherited
       # - hash table is NOT inherited
@@ -451,15 +486,6 @@ defmodule Bash.Session do
   def get_state(session) do
     GenServer.call(session, :get_state)
   end
-
-  @doc """
-  Returns whether restricted mode is active for the given session state.
-
-  Safely traverses the nested options map, defaulting to `false` when keys
-  are absent (e.g. bare state maps in tests).
-  """
-  @spec restricted?(map()) :: boolean()
-  def restricted?(state), do: state |> Map.get(:options, %{}) |> Map.get(:restricted, false)
 
   @doc """
   Load an Elixir API module into a session.
@@ -988,6 +1014,13 @@ defmodule Bash.Session do
     default_options = %{hashall: true, braceexpand: true}
     options = Map.merge(default_options, opts[:options] || %{})
 
+    command_policy =
+      case opts[:command_policy] do
+        nil -> %CommandPolicy{}
+        %CommandPolicy{} = policy -> policy
+        opts_list -> CommandPolicy.new(opts_list)
+      end
+
     {:ok, job_supervisor} = DynamicSupervisor.start_link(strategy: :one_for_one)
     {start_runtime_ms, _} = :erlang.statistics(:runtime)
 
@@ -1014,6 +1047,7 @@ defmodule Bash.Session do
       aliases: aliases,
       functions: functions,
       options: options,
+      command_policy: command_policy,
       hash: %{},
       jobs: %{},
       next_job_number: 1,
@@ -1933,22 +1967,36 @@ defmodule Bash.Session do
     %{state | variables: Map.put(state.variables, "PIPESTATUS", pipestatus_var)}
   end
 
-  # Start a background job from a foreground AST (internal helper for handle_call)
   defp do_start_background_job(foreground_ast, state) do
-    # For compound commands, run through bash to preserve && and || logic
     {command, args, command_string} =
       case foreground_ast do
         %Compound{} ->
-          # Compound command - run through bash -c
           script = build_command_string(foreground_ast)
           {"bash", ["-c", script], script}
 
         _ ->
-          # Simple command - extract directly
           {cmd, cmd_args} = extract_command_info(foreground_ast, state)
           {cmd, cmd_args, build_command_string(foreground_ast)}
       end
 
+    case CommandPolicy.check_command(state.command_policy, command, :external) do
+      {:error, message} ->
+        if state.stderr_sink, do: state.stderr_sink.({:stderr, message <> "\n"})
+
+        error_result = %CommandResult{
+          command: command_string,
+          exit_code: 1,
+          error: :command_policy
+        }
+
+        {:reply, {:error, error_result}, state}
+
+      :ok ->
+        do_start_background_job_allowed(command, args, command_string, foreground_ast, state)
+    end
+  end
+
+  defp do_start_background_job_allowed(command, args, command_string, foreground_ast, state) do
     job_opts = [
       job_number: state.next_job_number,
       command: command,
@@ -2021,7 +2069,6 @@ defmodule Bash.Session do
   # This is used by Script executor to get $! immediately when & is encountered
   # Returns {os_pid_string, updated_session_state} or {:error, reason}
   defp start_background_job_sync(foreground_ast, current_session_state, original_state) do
-    # For compound commands, run through bash to preserve && and || logic
     {command, args, _command_string} =
       case foreground_ast do
         %Compound{} ->
@@ -2033,8 +2080,32 @@ defmodule Bash.Session do
           {cmd, cmd_args, build_command_string(foreground_ast)}
       end
 
-    # Use the session state seen by the script (which has accumulated updates from
-    # prior background jobs in the same script) for job numbering
+    case CommandPolicy.check_command(current_session_state.command_policy, command, :external) do
+      {:error, message} ->
+        if current_session_state.stderr_sink do
+          current_session_state.stderr_sink.({:stderr, message <> "\n"})
+        end
+
+        {:error, :command_policy}
+
+      :ok ->
+        do_start_background_job_sync(
+          command,
+          args,
+          foreground_ast,
+          current_session_state,
+          original_state
+        )
+    end
+  end
+
+  defp do_start_background_job_sync(
+         command,
+         args,
+         _foreground_ast,
+         current_session_state,
+         original_state
+       ) do
     job_number =
       case Map.get(current_session_state, :next_job_number) do
         n when is_integer(n) and n > 0 -> n

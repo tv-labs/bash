@@ -26,11 +26,6 @@ defmodule Bash.CommandPort do
 
       stream = CommandPort.stream(["sort"], input: upstream)
 
-  ## Restricted Mode
-
-  All process-spawning functions accept a `restricted` boolean. When `true`,
-  they return `{:error, :restricted}` instead of spawning a process.
-
   Internal plumbing (signal delivery, hostname lookup, named pipe creation)
   is exempt and continues to use `System.cmd` directly.
 
@@ -41,31 +36,17 @@ defmodule Bash.CommandPort do
     CO[Coproc] --> CP
     PL[Pipeline] --> CP
     CM[Command builtin] --> CP
-    CP -->|restricted?| ERR["{:error, :restricted}"]
-    CP -->|allowed| EX[ExCmd / System.cmd]
+    CP --> EX[ExCmd / System.cmd]
   ```
   """
 
   alias Bash.CommandResult
 
-  defguardp is_restricted(restricted) when restricted == true
-
-  # ---------------------------------------------------------------------------
-  # Low-level process API (thin delegates to ExCmd.Process)
-  # ---------------------------------------------------------------------------
-
   @doc """
   Starts an OS process via `ExCmd.Process.start_link/2`.
-
-  Returns `{:error, :restricted}` when `restricted` is `true`.
   """
-  @spec start_link(list(String.t()), keyword(), boolean()) ::
-          {:ok, pid()} | {:error, :restricted} | {:error, term()}
-  def start_link(_cmd_parts, _opts, restricted) when is_restricted(restricted),
-    do: {:error, :restricted}
-
-  def start_link(cmd_parts, opts, _restricted),
-    do: ExCmd.Process.start_link(cmd_parts, opts)
+  @spec start_link(list(String.t()), keyword()) :: {:ok, pid()} | {:error, term()}
+  defdelegate start_link(cmd_parts, opts), to: ExCmd.Process
 
   @doc "Returns the OS PID of the process."
   @spec os_pid(pid()) :: {:ok, non_neg_integer()} | non_neg_integer()
@@ -92,43 +73,18 @@ defmodule Bash.CommandPort do
           {:ok, non_neg_integer()} | {:error, term()}
   defdelegate await_exit(process, timeout), to: ExCmd.Process
 
-  # ---------------------------------------------------------------------------
-  # Streaming API
-  # ---------------------------------------------------------------------------
-
   @doc """
   Creates an OS process stream via `ExCmd.stream/2`.
-
-  Returns `{:error, :restricted}` when `restricted` is `true`.
   """
-  @spec stream(list(String.t()), keyword(), boolean()) ::
-          Enumerable.t() | {:error, :restricted}
-  def stream(_cmd_parts, _opts, restricted) when is_restricted(restricted),
-    do: {:error, :restricted}
-
-  def stream(cmd_parts, opts, _restricted),
-    do: ExCmd.stream(cmd_parts, opts)
-
-  # ---------------------------------------------------------------------------
-  # System.cmd wrapper
-  # ---------------------------------------------------------------------------
+  @spec stream(list(String.t()), keyword()) :: Enumerable.t()
+  defdelegate stream(cmd_parts, opts), to: ExCmd
 
   @doc """
   Executes a command via `System.cmd/3`.
-
-  Returns `{:error, :restricted}` when `restricted` is `true`.
   """
-  @spec system_cmd(String.t(), list(String.t()), keyword(), boolean()) ::
-          {String.t(), non_neg_integer()} | {:error, :restricted}
-  def system_cmd(_path, _args, _opts, restricted) when is_restricted(restricted),
-    do: {:error, :restricted}
-
-  def system_cmd(path, args, opts, _restricted),
-    do: System.cmd(path, args, opts)
-
-  # ---------------------------------------------------------------------------
-  # High-level API
-  # ---------------------------------------------------------------------------
+  @spec system_cmd(String.t(), list(String.t()), keyword()) ::
+          {String.t(), non_neg_integer()}
+  def system_cmd(path, args, opts), do: System.cmd(path, args, opts)
 
   @doc false
   def execute(command_name, args, opts \\ []) do
@@ -137,12 +93,11 @@ defmodule Bash.CommandPort do
     cd = opts[:cd] || File.cwd!()
     env = opts[:env] || []
     sink_opt = opts[:sink]
-    restricted = opts[:restricted] || false
 
-    execute_command(command_name, args, stdin, cd, env, timeout, sink_opt, restricted)
+    execute_command(command_name, args, stdin, cd, env, timeout, sink_opt)
   end
 
-  defp execute_command(command_name, args, stdin, cd, env, timeout, sink_opt, restricted) do
+  defp execute_command(command_name, args, stdin, cd, env, timeout, sink_opt) do
     cmd_parts = [command_name | args]
 
     if System.find_executable(command_name) == nil and
@@ -155,11 +110,11 @@ defmodule Bash.CommandPort do
          error: :command_not_found
        }}
     else
-      execute_with_excmd(cmd_parts, stdin, cd, env, timeout, sink_opt, restricted)
+      execute_with_excmd(cmd_parts, stdin, cd, env, timeout, sink_opt)
     end
   end
 
-  defp execute_with_excmd(cmd_parts, stdin, cd, env, timeout, sink_opt, restricted) do
+  defp execute_with_excmd(cmd_parts, stdin, cd, env, timeout, sink_opt) do
     exec_opts = [
       cd: cd,
       env: normalize_env(env),
@@ -168,18 +123,7 @@ defmodule Bash.CommandPort do
 
     sink = sink_opt || fn _chunk -> :ok end
 
-    case start_link(cmd_parts, exec_opts, restricted) do
-      {:error, :restricted} ->
-        command_name = hd(cmd_parts)
-        sink.({:stderr, "bash: #{command_name}: restricted\n"})
-
-        {:error,
-         %CommandResult{
-           command: Enum.join(cmd_parts, " "),
-           exit_code: 1,
-           error: :restricted
-         }}
-
+    case start_link(cmd_parts, exec_opts) do
       {:ok, process} ->
         write_stdin_then_close(process, stdin)
         stream_to_sink(process, sink)

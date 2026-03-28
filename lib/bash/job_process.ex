@@ -447,7 +447,7 @@ defmodule Bash.JobProcess do
       stderr: :redirect_to_stdout
     ]
 
-    case CommandPort.start_link(cmd_parts, exec_opts, false) do
+    case CommandPort.start_link(cmd_parts, exec_opts) do
       {:ok, process} ->
         os_pid =
           case CommandPort.os_pid(process) do

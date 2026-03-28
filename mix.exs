@@ -120,6 +120,7 @@ defmodule Bash.MixProject do
         ],
         Execution: [
           Bash.Arithmetic,
+          Bash.CommandPolicy,
           Bash.CommandPort,
           Bash.CommandResult,
           Bash.Execution,

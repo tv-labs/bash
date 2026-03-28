@@ -216,6 +216,38 @@ Bash.stdout(result)
 #=> "HELLO\n"
 ```
 
+### Command Policies
+
+Control which external OS commands a session can execute. Builtins, shell functions,
+and Elixir interop calls always work regardless of policy.
+
+```elixir
+# Block all external commands
+{:ok, session} = Bash.Session.new(command_policy: [commands: :no_external])
+
+# Allow only specific commands
+{:ok, session} = Bash.Session.new(
+  command_policy: [commands: [{:allow, ["cat", "grep", "sort"]}]]
+)
+
+# Deny dangerous commands, allow everything else
+{:ok, session} = Bash.Session.new(
+  command_policy: [commands: [{:disallow, ["rm", "dd"]}, {:allow, :all}]]
+)
+
+# Regex-based rules
+{:ok, session} = Bash.Session.new(
+  command_policy: [commands: [{:allow, [~r/^git-/]}]]
+)
+
+# Function-based rules
+{:ok, session} = Bash.Session.new(
+  command_policy: [commands: fn cmd -> String.starts_with?(cmd, "safe-") end]
+)
+```
+
+Rules are evaluated in order — first match wins. See `Bash.CommandPolicy` for details.
+
 ## Supported Features
 
 ### Control Flow
