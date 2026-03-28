@@ -601,8 +601,16 @@ defmodule Bash.Parser do
     {line, col} = current_position(state)
 
     # Collect prefix assignments
-    {assignments, state} = collect_assignments(state, [])
+    case collect_assignments(state, []) do
+      {:error, _, _, _} = err ->
+        err
 
+      {assignments, state} ->
+        parse_simple_command_with_assignments(state, assignments, line, col)
+    end
+  end
+
+  defp parse_simple_command_with_assignments(state, assignments, line, col) do
     # Parse command name (if any)
     case current_token(state) do
       {:word, [{:literal, "coproc"}], _, _} ->
@@ -635,8 +643,32 @@ defmodule Bash.Parser do
                 # Back up and parse as normal command
                 name = build_word([{:literal, name_str}], line, col)
                 # Need to handle the lparen case - for now treat as args
-                {args, redirects, state2} = parse_command_args(state, [], [])
+                case parse_command_args(state, [], []) do
+                  {:error, _, _, _} = err ->
+                    err
 
+                  {args, redirects, state2} ->
+                    cmd = %AST.Command{
+                      meta: AST.meta(line, col),
+                      name: name,
+                      args: args,
+                      redirects: redirects,
+                      env_assignments: assignments
+                    }
+
+                    {:ok, cmd, state2}
+                end
+            end
+
+          _ ->
+            # Normal command
+            name = build_word([{:literal, name_str}], line, col)
+
+            case parse_command_args(state, [], []) do
+              {:error, _, _, _} = err ->
+                err
+
+              {args, redirects, state} ->
                 cmd = %AST.Command{
                   meta: AST.meta(line, col),
                   name: name,
@@ -645,14 +677,20 @@ defmodule Bash.Parser do
                   env_assignments: assignments
                 }
 
-                {:ok, cmd, state2}
+                {:ok, cmd, state}
             end
+        end
 
-          _ ->
-            # Normal command
-            name = build_word([{:literal, name_str}], line, col)
-            {args, redirects, state} = parse_command_args(state, [], [])
+      {:word, parts, _, _} ->
+        name = build_word(parts, line, col)
+        state = advance(state)
 
+        # Parse arguments and redirects
+        case parse_command_args(state, [], []) do
+          {:error, _, _, _} = err ->
+            err
+
+          {args, redirects, state} ->
             cmd = %AST.Command{
               meta: AST.meta(line, col),
               name: name,
@@ -663,23 +701,6 @@ defmodule Bash.Parser do
 
             {:ok, cmd, state}
         end
-
-      {:word, parts, _, _} ->
-        name = build_word(parts, line, col)
-        state = advance(state)
-
-        # Parse arguments and redirects
-        {args, redirects, state} = parse_command_args(state, [], [])
-
-        cmd = %AST.Command{
-          meta: AST.meta(line, col),
-          name: name,
-          args: args,
-          redirects: redirects,
-          env_assignments: assignments
-        }
-
-        {:ok, cmd, state}
 
       # Just assignments, no command
       _ when assignments != [] ->
@@ -2635,15 +2656,20 @@ defmodule Bash.Parser do
 
   defp parse_coproc_simple(state, line, col) do
     name = build_word([{:literal, "coproc"}], line, col)
-    {args, redirects, state} = parse_command_args(state, [], [])
 
-    cmd = %AST.Command{
-      meta: AST.meta(line, col),
-      name: name,
-      args: args,
-      redirects: redirects
-    }
+    case parse_command_args(state, [], []) do
+      {:error, _, _, _} = err ->
+        err
 
-    {:ok, cmd, state}
+      {args, redirects, state} ->
+        cmd = %AST.Command{
+          meta: AST.meta(line, col),
+          name: name,
+          args: args,
+          redirects: redirects
+        }
+
+        {:ok, cmd, state}
+    end
   end
 end

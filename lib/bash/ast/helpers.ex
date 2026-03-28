@@ -987,7 +987,7 @@ defmodule Bash.AST.Helpers do
         {Path.join(session_state.working_dir, pattern), false, has_dot}
       end
 
-    case Path.wildcard(glob_path, match_dot: false) do
+    case try_wildcard(glob_path) do
       [] ->
         pattern
 
@@ -1006,6 +1006,14 @@ defmodule Bash.AST.Helpers do
           end)
         end
     end
+  end
+
+  defp try_wildcard(glob_path) do
+    Path.wildcard(glob_path, match_dot: false)
+  rescue
+    _ -> []
+  catch
+    _, _ -> []
   end
 
   @extglob_prefix_regex ~r/[?*+@!]\(/
@@ -1872,15 +1880,19 @@ defmodule Bash.AST.Helpers do
   defp find_suffix_matches(value, regex) do
     len = String.length(value)
 
-    0..(len - 1)
-    |> Enum.map(fn i -> String.slice(value, i, len) end)
-    |> Enum.filter(fn substring ->
-      case Regex.run(regex, substring) do
-        nil -> false
-        [match] -> match == substring
-        [match | _] -> match == substring
-      end
-    end)
+    if len == 0 do
+      []
+    else
+      0..(len - 1)
+      |> Enum.map(fn i -> String.slice(value, i, len) end)
+      |> Enum.filter(fn substring ->
+        case Regex.run(regex, substring) do
+          nil -> false
+          [match] -> match == substring
+          [match | _] -> match == substring
+        end
+      end)
+    end
   end
 
   # Substitute prefix: ${var/#pattern/replacement}

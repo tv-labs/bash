@@ -135,7 +135,12 @@ defmodule Bash.Sigil do
               List.to_string(charlist)
 
             {_start, _end, tokens} ->
-              {:ok, expr} = :elixir.tokens_to_quoted(tokens, "nofile", [])
+              expr =
+                case :elixir.tokens_to_quoted(tokens, "nofile", []) do
+                  {:ok, expr} -> expr
+                  {:ok, expr, _rest} -> expr
+                end
+
               {{:., [], [Kernel, :to_string]}, [from_interpolation: true], [expr]}
           end)
 

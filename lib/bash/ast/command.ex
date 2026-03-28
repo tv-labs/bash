@@ -753,9 +753,27 @@ defmodule Bash.AST.Command do
 
   defp apply_prefix_assignments(assignments, session_state) do
     updated_vars =
-      Enum.reduce(assignments, session_state.variables, fn {var_name, value_word}, vars ->
-        value = Helpers.word_to_string(value_word, session_state)
-        Map.put(vars, var_name, Variable.new(value))
+      Enum.reduce(assignments, session_state.variables, fn
+        {var_name, value_word}, vars ->
+          value = Helpers.word_to_string(value_word, session_state)
+          Map.put(vars, var_name, Variable.new(value))
+
+        {:scalar_append, var_name, value_word, _line, _col}, vars ->
+          append_value = Helpers.word_to_string(value_word, session_state)
+
+          existing =
+            case Map.get(vars, var_name) do
+              nil -> ""
+              var -> Variable.get(var, nil) || ""
+            end
+
+          Map.put(vars, var_name, Variable.new(existing <> append_value))
+
+        {:indexed_array_assignment, _name, _subscript, _value, _line, _col}, vars ->
+          vars
+
+        {:array_assignment, _name, _elements, _line, _col}, vars ->
+          vars
       end)
 
     %{session_state | variables: updated_vars}
