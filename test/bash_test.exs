@@ -269,7 +269,7 @@ defmodule BashTest do
   describe "error handling" do
     test "syntax error returns error tuple" do
       {:error, result, nil} = Bash.run("if then")
-      assert result.exit_code == 1
+      assert result.exit_code == 2
     end
 
     test "command not found returns exit code 127", %{session: session} do

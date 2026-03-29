@@ -110,6 +110,9 @@ defmodule Bash.Context do
           {:error, cmd_result, state_updates}
         end
 
+      {:return, %CommandResult{} = cmd_result} ->
+        {:return, cmd_result}
+
       {:break, %CommandResult{} = cmd_result, levels} ->
         {:break, cmd_result, levels}
 

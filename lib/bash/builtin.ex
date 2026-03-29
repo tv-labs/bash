@@ -192,6 +192,7 @@ defmodule Bash.Builtin do
     ":" => Builtin.Colon,
     "[" => Builtin.TestCommand,
     "alias" => Builtin.Alias,
+    "argv.py" => Builtin.ArgvPy,
     "bg" => Builtin.Bg,
     "bind" => Builtin.Unsupported,
     "break" => Builtin.Break,

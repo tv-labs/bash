@@ -93,6 +93,9 @@ defmodule Bash.AST.Helpers do
             {:continue, result, levels} ->
               {:halt, {{:continue, result, levels}, {acc_var, acc_working_dir, acc_options}}}
 
+            {:return, result} ->
+              {:halt, {{:return, result}, {acc_var, acc_working_dir, acc_options}}}
+
             {:background, foreground_ast, bg_session_state} ->
               {:halt,
                {{:background, foreground_ast, bg_session_state},
@@ -221,7 +224,17 @@ defmodule Bash.AST.Helpers do
         {[result | results], Map.merge(acc_updates, updates), new_state}
       end)
 
+    {cmd_sub_exit_code, env_updates} = Map.pop(env_updates, :__cmd_sub_exit_code__)
+
     var_updates = Map.new(env_updates, fn {k, v} -> {k, Variable.new(v)} end)
+
+    var_updates =
+      if cmd_sub_exit_code do
+        Map.put(var_updates, :__cmd_sub_exit_code__, cmd_sub_exit_code)
+      else
+        var_updates
+      end
+
     {result_parts |> Enum.reverse() |> Enum.join(""), var_updates}
   end
 
@@ -234,9 +247,9 @@ defmodule Bash.AST.Helpers do
 
   defp apply_env_updates_to_state(session_state, updates) do
     new_vars =
-      Map.new(updates, fn {k, v} ->
-        {k, Variable.new(v)}
-      end)
+      updates
+      |> Map.delete(:__cmd_sub_exit_code__)
+      |> Map.new(fn {k, v} -> {k, Variable.new(v)} end)
 
     %{session_state | variables: Map.merge(session_state.variables, new_vars)}
   end
@@ -251,8 +264,24 @@ defmodule Bash.AST.Helpers do
     expand_variable_with_updates(var, session_state)
   end
 
+  defp expand_part_with_updates({:command_subst, parsed_ast}, session_state) do
+    {output, exit_code} = expand_command_substitution_with_exit(parsed_ast, session_state)
+    {output, %{:__cmd_sub_exit_code__ => exit_code}}
+  end
+
+  defp expand_part_with_updates({tag, command_string}, session_state)
+       when tag in [:backtick, :cmd_subst] do
+    case Parser.parse(command_string) do
+      {:ok, parsed_ast} ->
+        {output, exit_code} = expand_command_substitution_with_exit(parsed_ast, session_state)
+        {output, %{:__cmd_sub_exit_code__ => exit_code}}
+
+      {:error, _, _, _} ->
+        {"", %{:__cmd_sub_exit_code__ => 2}}
+    end
+  end
+
   defp expand_part_with_updates(part, session_state) do
-    # All other parts don't produce env updates
     {expand_part(part, session_state), %{}}
   end
 
@@ -1136,6 +1165,18 @@ defmodule Bash.AST.Helpers do
   end
 
   defp expand_standard_glob(pattern, session_state) do
+    # Only attempt glob expansion when the pattern contains actual Bash glob
+    # metacharacters (* ? [). Without this guard, Path.wildcard interprets
+    # backslashes as escape sequences, producing false matches for literal
+    # backslash text.
+    if String.contains?(pattern, ["*", "?", "["]) do
+      do_standard_glob(pattern, session_state)
+    else
+      pattern
+    end
+  end
+
+  defp do_standard_glob(pattern, session_state) do
     # Escape braces so Path.wildcard doesn't interpret them as alternation.
     # Brace expansion was already handled at the tokenizer level.
     glob_pattern = escape_braces_for_glob(pattern)
@@ -1558,22 +1599,25 @@ defmodule Bash.AST.Helpers do
   # Expand command substitution by executing the parsed AST and capturing stdout
   # Uses a temporary collector to capture output without polluting the session's collector
   defp expand_command_substitution(ast, session_state) do
-    # Create a temporary collector for this command substitution
+    {output, _exit_code} = expand_command_substitution_with_exit(ast, session_state)
+    output
+  end
+
+  defp expand_command_substitution_with_exit(ast, session_state) do
     {:ok, temp_collector} = OutputCollector.start_link()
     temp_stdout_sink = Sink.collector(temp_collector)
     temp_stderr_sink = Sink.collector(temp_collector)
 
-    # Replace session sinks with temporary ones
     subst_session = %{
       session_state
       | stdout_sink: temp_stdout_sink,
         stderr_sink: temp_stderr_sink
     }
 
-    # Execute the AST with the temporary sinks
-    _result = Executor.execute(ast, subst_session, nil)
+    result = Executor.execute(ast, subst_session, nil)
 
-    # Extract stdout from the temporary collector
+    exit_code = extract_exit_code(result)
+
     {stdout_iodata, stderr_iodata} = OutputCollector.flush_split(temp_collector)
     GenServer.stop(temp_collector, :normal)
 
@@ -1586,10 +1630,17 @@ defmodule Bash.AST.Helpers do
       end
     end
 
-    # Convert iodata to string and trim trailing newline (bash behavior)
-    IO.iodata_to_binary(stdout_iodata)
-    |> String.trim_trailing("\n")
+    output =
+      IO.iodata_to_binary(stdout_iodata)
+      |> String.trim_trailing("\n")
+
+    {output, exit_code}
   end
+
+  defp extract_exit_code({:ok, result, _updates}), do: result.exit_code || 0
+  defp extract_exit_code({:error, result, _updates}), do: result.exit_code || 1
+  defp extract_exit_code({:exit, result, _updates}), do: result.exit_code || 0
+  defp extract_exit_code(_), do: 0
 
   # Expand process substitution by starting a background process and returning FIFO path
   # The background process writes to (for input) or reads from (for output) the FIFO.
@@ -1760,7 +1811,7 @@ defmodule Bash.AST.Helpers do
       end)
 
     case result do
-      {expanded, env_updates} -> {expanded, env_updates}
+      {expanded, env_updates} -> {expanded, Map.delete(env_updates, :__cmd_sub_exit_code__)}
     end
   catch
     :brace_expansion_error -> :brace_expansion_error

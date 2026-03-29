@@ -1715,10 +1715,19 @@ defmodule Bash.Tokenizer do
         end
 
       ?$ ->
-        # Variable, command substitution, or arithmetic expansion
-        case read_dollar(state, acc == []) do
-          {:ok, part, new_state} -> read_word_parts(new_state, [part | acc])
-          {:error, _, _, _} = err -> err
+        if peek_next(state) == ?" do
+          # $"..." is a locale-translated string, synonym for "..." in Bash
+          # Skip the $ and read the double-quoted string
+          case read_double_quoted(advance(state)) do
+            {:ok, part, new_state} -> read_word_parts(new_state, [part | acc])
+            {:error, _, _, _} = err -> err
+          end
+        else
+          # Variable, command substitution, or arithmetic expansion
+          case read_dollar(state, acc == []) do
+            {:ok, part, new_state} -> read_word_parts(new_state, [part | acc])
+            {:error, _, _, _} = err -> err
+          end
         end
 
       ?` ->
@@ -2246,6 +2255,10 @@ defmodule Bash.Tokenizer do
         # Line continuation - skip both backslash and newline
         {:ok, {:literal, ""}, advance(state)}
 
+      c when c in [?\s, ?\t] ->
+        # Escaped whitespace — tag as single_quoted to prevent word splitting
+        {:ok, {:single_quoted, <<c>>}, advance(state)}
+
       c ->
         # Escaped character
         {:ok, {:literal, <<c>>}, advance(state)}
@@ -2307,7 +2320,7 @@ defmodule Bash.Tokenizer do
         end
 
       ?` ->
-        case read_backtick(state) do
+        case read_backtick(state, true) do
           {:ok, part, new_state} ->
             read_double_quoted_content(new_state, [part | acc], start_line, start_col)
 
@@ -2348,6 +2361,22 @@ defmodule Bash.Tokenizer do
     end
   end
 
+  defp skip_line_continuations(state) do
+    case peek(state) do
+      ?\\ ->
+        case peek_next(state) do
+          ?\n ->
+            state |> advance() |> advance() |> skip_line_continuations()
+
+          _ ->
+            state
+        end
+
+      _ ->
+        state
+    end
+  end
+
   # Read $... expansion
   # at_word_start: whether the $ appears at the beginning of a word token
   defp read_dollar(state, at_word_start \\ false) do
@@ -2355,6 +2384,9 @@ defmodule Bash.Tokenizer do
     start_col = state.column
     # skip $
     state = advance(state)
+
+    # Skip line continuations (backslash-newline) between $ and the variable name
+    state = skip_line_continuations(state)
 
     case peek(state) do
       nil ->
@@ -3002,46 +3034,90 @@ defmodule Bash.Tokenizer do
   # Recursively tokenize content inside $(...) or <(...) or >(...)
   # Tracks parenthesis depth to find the matching closing )
   # Handles heredocs correctly by consuming them after newlines
+  # Tracks case_depth so that ) inside case patterns is not treated as subshell closer
   defp tokenize_subshell_content(state, acc, paren_depth, start_line, start_col) do
+    tokenize_subshell_content(state, acc, paren_depth, 0, start_line, start_col)
+  end
+
+  defp tokenize_subshell_content(state, acc, paren_depth, case_depth, start_line, start_col) do
     case read_token(state) do
       {:ok, {:rparen, _line, _col}, new_state} ->
-        if paren_depth == 0 do
-          # Found the closing ), we're done
-          # Don't include the ) in the tokens - it's the delimiter
-          {:ok, Enum.reverse(acc), new_state}
-        else
-          # Nested ), continue with decreased depth
-          tokenize_subshell_content(
-            new_state,
-            [{:rparen, state.line, state.column} | acc],
-            paren_depth - 1,
-            start_line,
-            start_col
-          )
+        cond do
+          case_depth > 0 ->
+            tokenize_subshell_content(
+              new_state,
+              [{:rparen, state.line, state.column} | acc],
+              paren_depth,
+              case_depth,
+              start_line,
+              start_col
+            )
+
+          paren_depth == 0 ->
+            {:ok, Enum.reverse(acc), new_state}
+
+          true ->
+            tokenize_subshell_content(
+              new_state,
+              [{:rparen, state.line, state.column} | acc],
+              paren_depth - 1,
+              case_depth,
+              start_line,
+              start_col
+            )
         end
 
       {:ok, {:lparen, line, col}, new_state} ->
-        # Nested (, increase depth
         tokenize_subshell_content(
           new_state,
           [{:lparen, line, col} | acc],
           paren_depth + 1,
+          case_depth,
+          start_line,
+          start_col
+        )
+
+      {:ok, {:case, line, col}, new_state} ->
+        tokenize_subshell_content(
+          new_state,
+          [{:case, line, col} | acc],
+          paren_depth,
+          case_depth + 1,
+          start_line,
+          start_col
+        )
+
+      {:ok, {:esac, line, col}, new_state} ->
+        tokenize_subshell_content(
+          new_state,
+          [{:esac, line, col} | acc],
+          paren_depth,
+          max(case_depth - 1, 0),
+          start_line,
+          start_col
+        )
+
+      {:ok, {:dsemi, line, col}, new_state} ->
+        tokenize_subshell_content(
+          new_state,
+          [{:dsemi, line, col} | acc],
+          paren_depth,
+          case_depth,
           start_line,
           start_col
         )
 
       {:ok, {:eof, _, _}, _state} ->
-        # EOF before finding closing )
         {:error, "(SC1081) Unclosed command substitution - missing )", start_line, start_col}
 
       {:ok, {:newline, _line, _col} = token, new_state} ->
-        # After newline, consume any pending heredocs
         case consume_pending_heredocs(new_state) do
           {:ok, heredoc_tokens, newer_state} ->
             tokenize_subshell_content(
               newer_state,
               heredoc_tokens ++ [token | acc],
               paren_depth,
+              case_depth,
               start_line,
               start_col
             )
@@ -3051,13 +3127,13 @@ defmodule Bash.Tokenizer do
         end
 
       {:ok, token, new_state} ->
-        # Regular token - track heredocs if this is a heredoc delimiter
         new_state = maybe_track_heredoc(token, acc, new_state)
 
         tokenize_subshell_content(
           new_state,
           [token | acc],
           paren_depth,
+          case_depth,
           start_line,
           start_col
         )
@@ -3095,15 +3171,15 @@ defmodule Bash.Tokenizer do
   end
 
   # Read backtick command substitution: `...`
-  defp read_backtick(state) do
+  # in_double_quotes: when true, \\" is also treated as a special escape
+  defp read_backtick(state, in_double_quotes \\ false) do
     start_line = state.line
     start_col = state.column
-    # skip `
     state = advance(state)
-    read_backtick_content(state, [], start_line, start_col)
+    read_backtick_content(state, [], in_double_quotes, start_line, start_col)
   end
 
-  defp read_backtick_content(state, acc, start_line, start_col) do
+  defp read_backtick_content(state, acc, in_dq, start_line, start_col) do
     case peek(state) do
       nil ->
         {:error, "unterminated backtick", start_line, start_col}
@@ -3115,16 +3191,19 @@ defmodule Bash.Tokenizer do
       ?\\ ->
         state2 = advance(state)
 
-        case peek(state2) do
-          c when c in [?$, ?`, ?\\] ->
-            read_backtick_content(advance(state2), [c | acc], start_line, start_col)
+        case {peek(state2), in_dq} do
+          {c, _} when c in [?$, ?`, ?\\, ?\n] ->
+            read_backtick_content(advance(state2), [c | acc], in_dq, start_line, start_col)
+
+          {?", true} ->
+            read_backtick_content(advance(state2), [?" | acc], in_dq, start_line, start_col)
 
           _ ->
-            read_backtick_content(state2, [?\\ | acc], start_line, start_col)
+            read_backtick_content(state2, [?\\ | acc], in_dq, start_line, start_col)
         end
 
       c ->
-        read_backtick_content(advance(state), [c | acc], start_line, start_col)
+        read_backtick_content(advance(state), [c | acc], in_dq, start_line, start_col)
     end
   end
 

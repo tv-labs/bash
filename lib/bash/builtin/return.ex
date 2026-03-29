@@ -9,17 +9,8 @@ defmodule Bash.Builtin.Return do
   """
   use Bash.Builtin
 
-  # Execute the return builtin.
-  #
-  # ## Return Code Behavior
-  #
-  # - Can only be used inside a function or sourced script
-  # - No arguments: Uses the exit code of the last executed command
-  # - Numeric argument: Uses that value wrapped to 0-255 (modulo 256)
-  # - Negative numbers: Wrapped modulo 256 (-1 becomes 255)
-  # - Non-numeric argument: Returns exit code 2 with error message
-  # - Too many arguments: Returns exit code 1 with error message
-  # - Outside function context: Returns exit code 1 with error message
+  alias Bash.CommandResult
+
   @doc false
   defbash execute(args, state) do
     in_function = Map.get(state, :in_function, false)
@@ -28,32 +19,34 @@ defmodule Bash.Builtin.Return do
       error("return: can only `return' from a function or sourced script")
       {:ok, 2}
     else
-      case args do
-        [] ->
-          exit_code = Map.get(state, :last_exit_code, 0)
-          {:ok, exit_code}
+      case parse_return_code(args, state) do
+        {:ok, exit_code} ->
+          {:return, %CommandResult{command: "return", exit_code: exit_code, error: nil}}
 
-        [arg] ->
-          # Trim whitespace from the argument
-          trimmed = String.trim(arg)
-
-          case Integer.parse(trimmed) do
-            {num, ""} ->
-              # Valid integer, wrap to 0-255 range
-              # Handle negative numbers correctly with rem and adjustment
-              exit_code = rem(rem(num, 256) + 256, 256)
-              {:ok, exit_code}
-
-            _ ->
-              error("return: #{arg}: numeric argument required")
-              {:ok, 2}
-          end
-
-        _ ->
-          # Too many arguments
-          error("return: too many arguments")
-          {:ok, 1}
+        {:error, msg, code} ->
+          error(msg)
+          {:ok, code}
       end
     end
+  end
+
+  defp parse_return_code([], state) do
+    {:ok, Map.get(state, :last_exit_code, 0)}
+  end
+
+  defp parse_return_code([arg], _state) do
+    trimmed = String.trim(arg)
+
+    case Integer.parse(trimmed) do
+      {num, ""} ->
+        {:ok, rem(rem(num, 256) + 256, 256)}
+
+      _ ->
+        {:error, "return: #{arg}: numeric argument required", 2}
+    end
+  end
+
+  defp parse_return_code(_, _state) do
+    {:error, "return: too many arguments", 1}
   end
 end

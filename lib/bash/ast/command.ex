@@ -354,6 +354,7 @@ defmodule Bash.AST.Command do
 
   defp get_exit_code({:ok, %{exit_code: code}}), do: code
   defp get_exit_code({:error, %{exit_code: code}}), do: code
+  defp get_exit_code({:return, %{exit_code: code}}), do: code
   defp get_exit_code(_), do: nil
 
   defp handle_execution_result(result, ast, started_at, completed_at, var_updates_from_expansion) do
@@ -376,6 +377,9 @@ defmodule Bash.AST.Command do
       # Control flow with AST wrapping
       {control, command_result, levels} when control in [:break, :continue] ->
         {control, wrap_result(ast, command_result, started_at, completed_at), levels}
+
+      {:return, command_result} ->
+        {:return, wrap_result(ast, command_result, started_at, completed_at)}
 
       {control, command_result} when control in [:exit, :exec] ->
         {control, wrap_result(ast, command_result, started_at, completed_at)}

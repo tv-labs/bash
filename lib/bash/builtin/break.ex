@@ -45,7 +45,7 @@ defmodule Bash.Builtin.Break do
 
         {:error, reason} ->
           error(reason)
-          {:ok, 2}
+          {:exit, %CommandResult{command: "break", exit_code: 128, error: reason}}
       end
     end
   end

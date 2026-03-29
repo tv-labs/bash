@@ -1741,24 +1741,10 @@ defmodule Bash.Parser do
          wline, wcol}
 
       {:word, [{:literal, var_name}], _, _} ->
-        state = state |> advance() |> skip_newlines()
+        parse_for_with_variable(state, var_name, line, col)
 
-        {items, state} =
-          case current_token(state) do
-            {:in, _, _} -> parse_word_list(advance(state), [])
-            _ -> {[], state}
-          end
-
-        with {:ok, body, state} <- state |> skip_separators() |> parse_loop_body("for loop") do
-          for_loop = %AST.ForLoop{
-            meta: AST.meta(line, col),
-            variable: var_name,
-            items: items,
-            body: body
-          }
-
-          {:ok, for_loop, state}
-        end
+      {:in, _iline, _icol} ->
+        parse_for_with_variable(state, "in", line, col)
 
       # SC1137: Single ( after for - missing second ( for C-style loop
       {:lparen, tline, tcol} ->
@@ -1769,6 +1755,32 @@ defmodule Bash.Parser do
       token ->
         {tline, tcol} = token_position(token)
         {:error, "expected variable name after 'for'", tline, tcol}
+    end
+  end
+
+  defp parse_for_with_variable(state, var_name, line, col) do
+    state = state |> advance() |> skip_newlines()
+
+    {items, implicit, state} =
+      case current_token(state) do
+        {:in, _, _} ->
+          {items, state} = parse_word_list(advance(state), [])
+          {items, false, state}
+
+        _ ->
+          {[], true, state}
+      end
+
+    with {:ok, body, state} <- state |> skip_separators() |> parse_loop_body("for loop") do
+      for_loop = %AST.ForLoop{
+        meta: AST.meta(line, col),
+        variable: var_name,
+        items: items,
+        implicit: implicit,
+        body: body
+      }
+
+      {:ok, for_loop, state}
     end
   end
 

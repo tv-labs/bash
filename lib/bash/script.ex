@@ -131,6 +131,12 @@ defmodule Bash.Script do
 
       {:background_job, job_numbers} ->
         {:background_job, job_numbers, executed_script, clean_updates}
+
+      {:break, result, levels} ->
+        {:break, result, levels, executed_script, clean_updates}
+
+      {:continue, result, levels} ->
+        {:continue, result, levels, executed_script, clean_updates}
     end
   end
 
@@ -402,6 +408,22 @@ defmodule Bash.Script do
 
           {Enum.reverse([executed_stmt | executed]) ++ rest, exit_code, new_output, updates,
            :exit}
+
+        {:return, executed_stmt} ->
+          exit_code = Map.get(executed_stmt, :exit_code, 0)
+          {Enum.reverse([executed_stmt | executed]) ++ rest, exit_code, output, updates, :ok}
+
+        {:break, result, levels} ->
+          exit_code = result.exit_code || 0
+
+          {Enum.reverse(executed) ++ [stmt | rest], exit_code, output, updates,
+           {:break, result, levels}}
+
+        {:continue, result, levels} ->
+          exit_code = result.exit_code || 0
+
+          {Enum.reverse(executed) ++ [stmt | rest], exit_code, output, updates,
+           {:continue, result, levels}}
 
         {:exec, executed_stmt} ->
           # Exec control flow - stop execution and return (shell replacement)

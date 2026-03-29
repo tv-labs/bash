@@ -43,6 +43,7 @@ defmodule Bash.AST.ForLoop do
           meta: AST.Meta.t(),
           variable: String.t() | nil,
           items: [AST.Word.t()],
+          implicit: boolean(),
           body: [Statement.t()],
           # C-style for loop fields (optional)
           init: String.t() | nil,
@@ -63,6 +64,7 @@ defmodule Bash.AST.ForLoop do
     init: nil,
     condition: nil,
     update: nil,
+    implicit: false,
     # Execution results
     exit_code: nil,
     state_updates: %{},
@@ -148,14 +150,20 @@ defmodule Bash.AST.ForLoop do
 
   # Traditional for loop: for var in items; do body; done
   def execute(
-        %__MODULE__{variable: var_name, items: items, body: body} = ast,
+        %__MODULE__{variable: var_name, items: items, body: body, implicit: implicit} = ast,
         _stdin,
         session_state
       ) do
     started_at = DateTime.utc_now()
 
-    # Expand items list (handles command substitution, variable expansion, globs)
-    expanded_items = expand_for_loop_items(items, session_state)
+    # When implicit (no `in` keyword), iterate over positional parameters $@
+    expanded_items =
+      if implicit do
+        expand_implicit_items(session_state)
+      else
+        expand_for_loop_items(items, session_state)
+      end
+
     item_count = length(expanded_items)
 
     {final_result, final_env_updates, iteration_count} =
@@ -194,6 +202,9 @@ defmodule Bash.AST.ForLoop do
       {:exit, result} ->
         {:exit, %{executed_ast | exit_code: result.exit_code}}
 
+      {:return, result} ->
+        {:return, result}
+
       {:break, result, levels} ->
         {:break, result, levels}
 
@@ -209,6 +220,7 @@ defmodule Bash.AST.ForLoop do
   defp for_loop_exit_code({:ok, %{exit_code: code}}) when is_integer(code), do: code
   defp for_loop_exit_code({:ok, nil}), do: 0
   defp for_loop_exit_code({:exit, _}), do: 0
+  defp for_loop_exit_code({:return, _}), do: 0
   defp for_loop_exit_code(_), do: 1
 
   defp execute_for_loop(items, var_name, body, session_state, env_acc, count, last_exit \\ 0)
@@ -285,8 +297,11 @@ defmodule Bash.AST.ForLoop do
           {{:ok, result}, merged_env, count + 1}
         end
 
+      {:return, result} ->
+        merged_env = Map.put(env_acc, var_name, item)
+        {{:return, result}, merged_env, count + 1}
+
       {:exit, result, body_env_updates} ->
-        # Exit: terminate the shell
         merged_env =
           env_acc
           |> Map.put(var_name, item)
@@ -366,10 +381,15 @@ defmodule Bash.AST.ForLoop do
         end
 
       {:break, result, levels} ->
-        {:break, %{exit_code: result.exit_code}, levels, env_acc}
+        merged_env = merge_state_updates_to_env(env_acc, result)
+        {:break, %{exit_code: result.exit_code}, levels, merged_env}
 
       {:continue, result, levels} ->
-        {:continue, %{exit_code: result.exit_code}, levels, env_acc}
+        merged_env = merge_state_updates_to_env(env_acc, result)
+        {:continue, %{exit_code: result.exit_code}, levels, merged_env}
+
+      {:return, result} ->
+        {:return, result}
 
       {:exit, result} ->
         {:exit, %{exit_code: result.exit_code}, env_acc}
@@ -379,12 +399,33 @@ defmodule Bash.AST.ForLoop do
     end
   end
 
-  # Expand for loop items (handles command substitution, variables, globs)
+  defp merge_state_updates_to_env(env_acc, result) do
+    case Map.get(result, :state_updates) do
+      %{variables: vars} when is_map(vars) ->
+        var_values =
+          Map.new(vars, fn {k, v} ->
+            val = Variable.get(v, nil)
+            {k, if(is_binary(val), do: val, else: "")}
+          end)
+
+        Map.merge(env_acc, var_values)
+
+      _ ->
+        env_acc
+    end
+  end
+
+  defp expand_implicit_items(session_state) do
+    case Map.get(session_state, :positional_params, []) do
+      [current | _] -> current
+      [] -> []
+    end
+  end
+
   defp expand_for_loop_items(items, session_state) do
     Enum.flat_map(items, fn item ->
       expanded = Helpers.word_to_string(item, session_state)
 
-      # Split on whitespace to get individual items (bash behavior)
       String.split(expanded, ~r/\s+/, trim: true)
     end)
   end

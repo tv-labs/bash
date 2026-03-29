@@ -264,6 +264,9 @@ defmodule Bash.AST.Compound do
       {:error, result} ->
         {:error, result}
 
+      {:return, _result} = ret ->
+        ret
+
       {:break, _result, _levels} = break ->
         break
 
@@ -339,6 +342,9 @@ defmodule Bash.AST.Compound do
           working_dir,
           result
         )
+
+      {:return, _result} = ret ->
+        ret
 
       {:break, _result, _levels} = break ->
         break

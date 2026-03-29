@@ -16,6 +16,8 @@ defmodule Bash.Builtin.Eval do
   """
   use Bash.Builtin
 
+  alias Bash.AST
+  alias Bash.CommandResult
   alias Bash.Parser
   alias Bash.Script
 
@@ -34,18 +36,50 @@ defmodule Bash.Builtin.Eval do
     else
       case execute_string(command_string, state) do
         {:ok, exit_code, updates} ->
-          # Apply updates here while context is still valid
-          Enum.each(updates, fn {key, value} ->
-            update_state([{key, value}])
-          end)
-
+          apply_updates(updates)
           {:ok, exit_code}
+
+        {:return, exit_code, updates} ->
+          apply_updates(updates)
+
+          {:return,
+           %CommandResult{
+             command: "return",
+             exit_code: exit_code,
+             error: nil
+           }}
+
+        {:break, result, levels, updates} ->
+          apply_updates(updates)
+
+          {:break,
+           %CommandResult{
+             command: "break",
+             exit_code: result.exit_code || 0,
+             error: nil
+           }, levels}
+
+        {:continue, result, levels, updates} ->
+          apply_updates(updates)
+
+          {:continue,
+           %CommandResult{
+             command: "continue",
+             exit_code: result.exit_code || 0,
+             error: nil
+           }, levels}
 
         {:error, msg} ->
           error(msg)
           {:ok, 1}
       end
     end
+  end
+
+  defp apply_updates(updates) do
+    Enum.each(updates, fn {key, value} ->
+      update_state([{key, value}])
+    end)
   end
 
   defp execute_string(command_string, session_state) do
@@ -58,19 +92,41 @@ defmodule Bash.Builtin.Eval do
 
         case Script.execute(script, nil, nested_state) do
           {:ok, result, updates} ->
-            {:ok, result.exit_code || 0, updates}
+            if return_terminated?(result) and Map.get(session_state, :in_function, false) do
+              {:return, result.exit_code || 0, updates}
+            else
+              {:ok, result.exit_code || 0, updates}
+            end
 
           {:exit, result, updates} ->
             {:ok, result.exit_code || 0, updates}
 
           {:error, result, updates} ->
             {:ok, result.exit_code || 1, updates}
+
+          {:break, result, levels, _script, updates} ->
+            {:break, result, levels, updates}
+
+          {:continue, result, levels, _script, updates} ->
+            {:continue, result, levels, updates}
         end
 
       {:error, msg, line, _col} ->
         {:error, "eval: line #{line}: #{msg}"}
     end
   end
+
+  defp return_terminated?(%Script{statements: stmts}) do
+    stmts
+    |> Enum.reject(&match?({:separator, _}, &1))
+    |> List.last()
+    |> case do
+      %AST.Command{name: %AST.Word{parts: [{:literal, "return"}]}} -> true
+      _ -> false
+    end
+  end
+
+  defp return_terminated?(_), do: false
 
   # Wrap Parser.parse to catch tokenizer errors that raise exceptions
   defp safe_parse(command_string) do

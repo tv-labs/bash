@@ -168,6 +168,9 @@ defmodule Bash.AST.WhileLoop do
            %{variables: Map.new(env_updates, fn {k, v} -> {k, Variable.new(v)} end)}}
         end
 
+      {:return, result} ->
+        {:return, result}
+
       {:error, result} ->
         executed_ast = %{
           ast
@@ -195,6 +198,10 @@ defmodule Bash.AST.WhileLoop do
 
   defp while_loop_telemetry_metadata({:continue, _result, _levels, _env_updates, iter_count}) do
     {iter_count, 0}
+  end
+
+  defp while_loop_telemetry_metadata({:return, result}) do
+    {0, result.exit_code || 0}
   end
 
   defp while_loop_telemetry_metadata({:error, result}) do
@@ -230,45 +237,104 @@ defmodule Bash.AST.WhileLoop do
 
       condition_state = Helpers.suppress_errexit(stmt_session)
 
-      condition_result =
-        case Executor.execute(condition, condition_state, effective_stdin) do
-          {:ok, result, updates} ->
-            var_from_cond = Map.get(updates, :variables, %{})
+      case Executor.execute(condition, condition_state, effective_stdin) do
+        {:ok, result, updates} ->
+          var_from_cond = Map.get(updates, :variables, %{})
 
-            var_values =
-              Map.new(var_from_cond, fn {k, v} ->
-                val = Variable.get(v, nil)
-                {k, if(is_binary(val), do: val, else: "")}
-              end)
+          var_values =
+            Map.new(var_from_cond, fn {k, v} ->
+              val = Variable.get(v, nil)
+              {k, if(is_binary(val), do: val, else: "")}
+            end)
 
-            merged = Map.merge(env_updates, var_values)
-            {:ok, result.exit_code, merged}
+          merged = Map.merge(env_updates, var_values)
 
-          {:ok, result} ->
-            {:ok, result.exit_code, env_updates}
-
-          {:error, result} ->
-            {:ok, result.exit_code || 1, env_updates}
-        end
-
-      {:ok, exit_code, updated_env} = condition_result
-      # For while: continue if exit_code == 0
-      # For until: continue if exit_code != 0
-      should_continue = if until_mode, do: exit_code != 0, else: exit_code == 0
-
-      if should_continue do
-        # Execute the body
-        body_new_variables =
-          Map.merge(
-            session_state.variables,
-            Map.new(updated_env, fn {k, v} -> {k, Variable.new(v)} end)
+          evaluate_while_condition(
+            result.exit_code,
+            merged,
+            condition,
+            body,
+            until_mode,
+            session_state,
+            iteration,
+            effective_stdin
           )
 
-        body_session = %{session_state | variables: body_new_variables}
+        {:ok, result} ->
+          evaluate_while_condition(
+            result.exit_code,
+            env_updates,
+            condition,
+            body,
+            until_mode,
+            session_state,
+            iteration,
+            effective_stdin
+          )
 
-        case execute_loop_body(body, body_session, updated_env) do
-          {:ok, _result, body_env} ->
-            # Continue looping
+        {:break, result, levels} ->
+          {:break, result, levels, env_updates, iteration}
+
+        {:continue, result, levels} ->
+          {:continue, result, levels, env_updates, iteration}
+
+        {:error, result} ->
+          evaluate_while_condition(
+            result.exit_code || 1,
+            env_updates,
+            condition,
+            body,
+            until_mode,
+            session_state,
+            iteration,
+            effective_stdin
+          )
+      end
+    end
+  end
+
+  defp evaluate_while_condition(
+         exit_code,
+         updated_env,
+         condition,
+         body,
+         until_mode,
+         session_state,
+         iteration,
+         effective_stdin
+       ) do
+    # For while: continue if exit_code == 0
+    # For until: continue if exit_code != 0
+    should_continue = if until_mode, do: exit_code != 0, else: exit_code == 0
+
+    if should_continue do
+      body_new_variables =
+        Map.merge(
+          session_state.variables,
+          Map.new(updated_env, fn {k, v} -> {k, Variable.new(v)} end)
+        )
+
+      body_session = %{session_state | variables: body_new_variables}
+
+      case execute_loop_body(body, body_session, updated_env) do
+        {:ok, _result, body_env} ->
+          execute_while_loop(
+            condition,
+            body,
+            until_mode,
+            session_state,
+            body_env,
+            iteration + 1,
+            effective_stdin
+          )
+
+        {:break, result, levels, body_env} ->
+          {:break, result, levels, body_env, iteration + 1}
+
+        {:continue, result, levels, body_env} ->
+          if levels > 1 do
+            {:continue, result, levels, body_env, iteration + 1}
+          else
             execute_while_loop(
               condition,
               body,
@@ -278,42 +344,19 @@ defmodule Bash.AST.WhileLoop do
               iteration + 1,
               effective_stdin
             )
+          end
 
-          {:break, result, levels, body_env} ->
-            # Break out of loop
-            if levels > 1 do
-              {:break, result, levels - 1, body_env, iteration + 1}
-            else
-              {:ok, %CommandResult{exit_code: 0}, body_env, iteration + 1}
-            end
+        {:return, result} ->
+          {:return, result}
 
-          {:continue, result, levels, body_env} ->
-            # Continue to next iteration
-            if levels > 1 do
-              {:continue, result, levels - 1, body_env, iteration + 1}
-            else
-              execute_while_loop(
-                condition,
-                body,
-                until_mode,
-                session_state,
-                body_env,
-                iteration + 1,
-                effective_stdin
-              )
-            end
+        {:exit, result, body_env} ->
+          {:exit, result, body_env, iteration + 1}
 
-          {:exit, result, body_env} ->
-            {:exit, result, body_env, iteration + 1}
-
-          {:error, result} ->
-            # Body failed - stop loop and return error
-            {:error, result}
-        end
-      else
-        # Loop condition no longer met - return success
-        {:ok, %CommandResult{exit_code: 0}, updated_env, iteration}
+        {:error, result} ->
+          {:error, result}
       end
+    else
+      {:ok, %CommandResult{exit_code: 0}, updated_env, iteration}
     end
   end
 
@@ -362,16 +405,37 @@ defmodule Bash.AST.WhileLoop do
         end
 
       {:break, result, levels} ->
-        {:break, %{exit_code: result.exit_code}, levels, env_acc}
+        merged_env = merge_state_updates_to_env(env_acc, result)
+        {:break, %{exit_code: result.exit_code}, levels, merged_env}
 
       {:continue, result, levels} ->
-        {:continue, %{exit_code: result.exit_code}, levels, env_acc}
+        merged_env = merge_state_updates_to_env(env_acc, result)
+        {:continue, %{exit_code: result.exit_code}, levels, merged_env}
+
+      {:return, result} ->
+        {:return, result}
 
       {:exit, result} ->
         {:exit, %{exit_code: result.exit_code}, env_acc}
 
       {:error, result} ->
         {:error, result}
+    end
+  end
+
+  defp merge_state_updates_to_env(env_acc, result) do
+    case Map.get(result, :state_updates) do
+      %{variables: vars} when is_map(vars) ->
+        var_values =
+          Map.new(vars, fn {k, v} ->
+            val = Variable.get(v, nil)
+            {k, if(is_binary(val), do: val, else: "")}
+          end)
+
+        Map.merge(env_acc, var_values)
+
+      _ ->
+        env_acc
     end
   end
 

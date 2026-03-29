@@ -356,7 +356,7 @@ defmodule Bash.TokenizerTest do
 
       assert [
                {:word, [{:literal, "echo"}], 1, 1},
-               {:word, [{:literal, "hello world"}], 1, 6},
+               {:word, [literal: "hello", single_quoted: " ", literal: "world"], 1, 6},
                {:eof, 1, 18}
              ] = tokens
     end
@@ -403,7 +403,7 @@ defmodule Bash.TokenizerTest do
 
       assert [
                {:word, [{:literal, "echo"}], 1, 1},
-               {:word, [{:literal, "hello world"}], 1, 6},
+               {:word, [literal: "hello", single_quoted: " ", literal: "world"], 1, 6},
                {:eof, 1, 18}
              ] = tokens
     end

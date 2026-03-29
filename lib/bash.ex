@@ -86,7 +86,7 @@ defmodule Bash do
         {:error,
          %__MODULE__.CommandResult{
            command: "parse",
-           exit_code: 1,
+           exit_code: 2,
            error: error.message
          }, nil}
     end
@@ -187,7 +187,7 @@ defmodule Bash do
         {:error,
          %__MODULE__.CommandResult{
            command: "parse",
-           exit_code: 1,
+           exit_code: 2,
            error: error.message
          }, nil}
 

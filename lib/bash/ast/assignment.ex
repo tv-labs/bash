@@ -64,6 +64,10 @@ defmodule Bash.AST.Assignment do
     {expanded_value, value_updates} = Helpers.word_to_string_with_updates(value, session_state)
     completed_at = DateTime.utc_now()
 
+    # Extract command substitution exit code (e.g., x=$(exit 42) should set $? to 42)
+    {cmd_sub_exit_code, value_updates} = Map.pop(value_updates, :__cmd_sub_exit_code__)
+    exit_code = cmd_sub_exit_code || 0
+
     # Resolve the target variable name (follow nameref chain)
     target_name = resolve_nameref_target(session_state, name)
 
@@ -85,9 +89,16 @@ defmodule Bash.AST.Assignment do
     # Merge with any updates from the value expansion (e.g., ${x:=default})
     updates = merge_updates(assignment_updates, value_updates)
 
+    updates =
+      if cmd_sub_exit_code do
+        Map.put(updates, :special_vars_updates, %{"?" => cmd_sub_exit_code})
+      else
+        updates
+      end
+
     executed_ast = %{
       ast
-      | exit_code: 0,
+      | exit_code: exit_code,
         state_updates: updates,
         meta: AST.Meta.mark_evaluated(meta, started_at, completed_at)
     }

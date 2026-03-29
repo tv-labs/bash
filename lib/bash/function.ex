@@ -243,8 +243,13 @@ defmodule Bash.AST.Function do
           execute_body(rest, updated_state, result)
         end
 
+      {:return, result} ->
+        {:return, result.exit_code || 0, state}
+
+      {:return, result, _state_updates} ->
+        {:return, result.exit_code || 0, state}
+
       {:error, result} ->
-        # Error - stop execution
         {:error, result, state}
 
       {:error, result, state_updates} ->

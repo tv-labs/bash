@@ -45,9 +45,19 @@ defmodule Bash.Builtin.Continue do
              error: nil
            }, levels}
 
+        {:error, :too_many_args, reason} ->
+          error(reason)
+          {:exit, %CommandResult{command: "continue", exit_code: 2, error: reason}}
+
         {:error, reason} ->
           error(reason)
-          {:ok, 2}
+
+          {:continue,
+           %CommandResult{
+             command: "continue",
+             exit_code: 1,
+             error: reason
+           }, 1}
       end
     end
   end
@@ -71,6 +81,6 @@ defmodule Bash.Builtin.Continue do
   end
 
   defp parse_level([_ | _], _loop_depth) do
-    {:error, "continue: too many arguments"}
+    {:error, :too_many_args, "continue: too many arguments"}
   end
 end
