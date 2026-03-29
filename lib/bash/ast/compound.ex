@@ -155,6 +155,12 @@ defmodule Bash.AST.Compound do
           {:ok, result, _discarded_env_updates} ->
             {:ok, result}
 
+          {:exit, result, _discarded_env_updates} ->
+            {:error, result}
+
+          {:exit, result} ->
+            {:error, result}
+
           {:exec, _result} = exec ->
             exec
 
@@ -246,10 +252,14 @@ defmodule Bash.AST.Compound do
         wd_from_stmt = Map.get(updates, :working_dir)
         merged_var = Map.merge(var_updates, var_from_stmt)
         final_wd = wd_from_stmt || working_dir
-        build_result({:ok, result}, merged_var, final_wd)
+        # Last command in &&/|| chain: use :ok for success, :error for failure
+        # so the caller can distinguish from short-circuit (which always uses :ok)
+        status = if (result.exit_code || 0) == 0, do: :ok, else: :error
+        build_result({status, result}, merged_var, final_wd)
 
       {:ok, result} ->
-        build_result({:ok, result}, var_updates, working_dir)
+        status = if (result.exit_code || 0) == 0, do: :ok, else: :error
+        build_result({status, result}, var_updates, working_dir)
 
       {:error, result} ->
         {:error, result}
@@ -272,8 +282,10 @@ defmodule Bash.AST.Compound do
          working_dir
        ) do
     updated_session = apply_updates_to_session(session_state, var_updates, working_dir)
+    # Suppress errexit for non-last commands in &&/|| chains (POSIX rule)
+    suppressed_session = Helpers.suppress_errexit(updated_session)
 
-    case Executor.execute(statement, updated_session, nil) do
+    case Executor.execute(statement, suppressed_session, nil) do
       {:ok, result, updates} ->
         var_from_stmt = Map.get(updates, :variables, %{})
         wd_from_stmt = Map.get(updates, :working_dir)

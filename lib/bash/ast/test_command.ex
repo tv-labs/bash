@@ -39,8 +39,13 @@ defmodule Bash.AST.TestCommand do
   ]
 
   def execute(%__MODULE__{args: args}, stdin, session_state) do
-    {expanded_args, _env_updates} = Helpers.expand_word_list(args, session_state)
-    TestCommand.execute(expanded_args, stdin, session_state)
+    case Helpers.expand_word_list(args, session_state) do
+      :brace_expansion_error ->
+        {:error, %Bash.CommandResult{command: "[", exit_code: 2, error: :invalid_range}}
+
+      {expanded_args, _env_updates} ->
+        TestCommand.execute(expanded_args, stdin, session_state)
+    end
   end
 
   defimpl String.Chars do

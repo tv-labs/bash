@@ -31,19 +31,20 @@ defmodule Bash.AST.Helpers do
 
   def execute_body(statements, session_state, var_updates) do
     statements = executable_statements(statements)
-    initial_acc = {var_updates, session_state.working_dir}
+    initial_acc = {var_updates, session_state.working_dir, session_state.options}
 
-    {final_result, {final_var, final_working_dir}} =
+    {final_result, {final_var, final_working_dir, final_options}} =
       Enum.reduce_while(
         statements,
         {{:ok, %CommandResult{exit_code: 0}}, initial_acc},
-        fn stmt, {_last_result, {acc_var, acc_working_dir}} ->
+        fn stmt, {_last_result, {acc_var, acc_working_dir, acc_options}} ->
           stmt_session = %{
             session_state
             | variables:
                 session_state.variables
                 |> Map.merge(acc_var),
-              working_dir: acc_working_dir
+              working_dir: acc_working_dir,
+              options: acc_options
           }
 
           case Executor.execute(stmt, stmt_session, nil) do
@@ -51,35 +52,54 @@ defmodule Bash.AST.Helpers do
               variables_from_stmt = Map.get(updates, :variables, %{})
               merged_var = Map.merge(acc_var, variables_from_stmt)
               new_working_dir = Map.get(updates, :working_dir, acc_working_dir)
-              {:cont, {{:ok, result}, {merged_var, new_working_dir}}}
+              new_options = merge_options(acc_options, updates)
+
+              if errexit_should_halt?(result, new_options, stmt_session, stmt) do
+                {:halt, {{:errexit, result}, {merged_var, new_working_dir, new_options}}}
+              else
+                {:cont, {{:ok, result}, {merged_var, new_working_dir, new_options}}}
+              end
 
             {:ok, result} ->
-              {:cont, {{:ok, result}, {acc_var, acc_working_dir}}}
-
-            {:error, _result} = err ->
-              {:halt, {err, {acc_var, acc_working_dir}}}
+              if errexit_should_halt?(result, acc_options, stmt_session, stmt) do
+                {:halt, {{:errexit, result}, {acc_var, acc_working_dir, acc_options}}}
+              else
+                {:cont, {{:ok, result}, {acc_var, acc_working_dir, acc_options}}}
+              end
 
             {:error, result, updates} ->
               variables_from_stmt = Map.get(updates, :variables, %{})
               merged_var = Map.merge(acc_var, variables_from_stmt)
               new_working_dir = Map.get(updates, :working_dir, acc_working_dir)
-              {:halt, {{:error, result}, {merged_var, new_working_dir}}}
+              new_options = merge_options(acc_options, updates)
+              {:halt, {{:error, result}, {merged_var, new_working_dir, new_options}}}
+
+            {:error, result} ->
+              # Only halt on error when errexit is NOT suppressed.
+              # In suppressed contexts (if conditions, while conditions),
+              # errors should not halt body execution.
+              if Map.get(stmt_session, :errexit_suppressed, 0) > 0 do
+                {:cont, {{:ok, result}, {acc_var, acc_working_dir, acc_options}}}
+              else
+                {:halt, {{:error, result}, {acc_var, acc_working_dir, acc_options}}}
+              end
 
             {:exit, result} ->
-              {:halt, {{:exit, result}, {acc_var, acc_working_dir}}}
+              {:halt, {{:exit, result}, {acc_var, acc_working_dir, acc_options}}}
 
             {:break, result, levels} ->
-              {:halt, {{:break, result, levels}, {acc_var, acc_working_dir}}}
+              {:halt, {{:break, result, levels}, {acc_var, acc_working_dir, acc_options}}}
 
             {:continue, result, levels} ->
-              {:halt, {{:continue, result, levels}, {acc_var, acc_working_dir}}}
+              {:halt, {{:continue, result, levels}, {acc_var, acc_working_dir, acc_options}}}
 
             {:background, foreground_ast, bg_session_state} ->
               {:halt,
-               {{:background, foreground_ast, bg_session_state}, {acc_var, acc_working_dir}}}
+               {{:background, foreground_ast, bg_session_state},
+                {acc_var, acc_working_dir, acc_options}}}
 
             {:exec, _result} = exec ->
-              {:halt, {exec, {acc_var, acc_working_dir}}}
+              {:halt, {exec, {acc_var, acc_working_dir, acc_options}}}
           end
         end
       )
@@ -90,8 +110,31 @@ defmodule Bash.AST.Helpers do
           %{}
           |> maybe_add_variables(final_var)
           |> maybe_add_working_dir(final_working_dir, session_state.working_dir)
+          |> maybe_add_options(final_options, session_state.options)
 
         {:ok, result, state_updates}
+
+      {:errexit, result} ->
+        state_updates =
+          %{}
+          |> maybe_add_variables(final_var)
+          |> maybe_add_working_dir(final_working_dir, session_state.working_dir)
+          |> maybe_add_options(final_options, session_state.options)
+
+        {:exit, %{result | exit_code: result.exit_code || 1}, state_updates}
+
+      {:error, result} ->
+        state_updates =
+          %{}
+          |> maybe_add_variables(final_var)
+          |> maybe_add_working_dir(final_working_dir, session_state.working_dir)
+          |> maybe_add_options(final_options, session_state.options)
+
+        if map_size(state_updates) > 0 do
+          {:error, result, state_updates}
+        else
+          {:error, result}
+        end
 
       other_signal ->
         other_signal
@@ -115,6 +158,44 @@ defmodule Bash.AST.Helpers do
 
   defp maybe_add_working_dir(state_updates, working_dir, _original_working_dir) do
     Map.put(state_updates, :working_dir, working_dir)
+  end
+
+  @doc false
+  def errexit_should_halt?(result, options, session_state) do
+    errexit_should_halt?(result, options, session_state, nil)
+  end
+
+  def errexit_should_halt?(%{exit_code: exit_code}, _options, _session_state, _stmt)
+      when exit_code in [0, nil] do
+    false
+  end
+
+  def errexit_should_halt?(_result, options, session_state, stmt) do
+    errexit_enabled = Map.get(options || %{}, :errexit, false) == true
+    suppressed = Map.get(session_state, :errexit_suppressed, 0) > 0
+    negated = match?(%Bash.AST.Pipeline{negate: true}, stmt)
+    operand = match?(%Bash.AST.Compound{kind: :operand}, stmt)
+    errexit_enabled and not suppressed and not negated and not operand
+  end
+
+  @doc false
+  def suppress_errexit(session_state) do
+    Map.update(session_state, :errexit_suppressed, 1, &(&1 + 1))
+  end
+
+  defp merge_options(_current_options, %{options: new_options}) when is_map(new_options) do
+    new_options
+  end
+
+  defp merge_options(current_options, _updates), do: current_options
+
+  defp maybe_add_options(state_updates, options, original_options)
+       when options == original_options do
+    state_updates
+  end
+
+  defp maybe_add_options(state_updates, options, _original_options) do
+    Map.put(state_updates, :options, options)
   end
 
   # Helper to convert Word to string, expanding variables and command substitution
@@ -221,10 +302,10 @@ defmodule Bash.AST.Helpers do
   end
 
   defp expand_part({:brace_expand, brace_spec}, _session_state) do
-    brace_spec
-    |> to_brace_expand_struct()
-    |> BraceExpand.expand()
-    |> Enum.join(" ")
+    case brace_spec |> to_brace_expand_struct() |> BraceExpand.expand() do
+      {:ok, items} -> Enum.join(items, " ")
+      {:error, _} -> format_brace_literal(brace_spec)
+    end
   end
 
   defp expand_part(other, _session_state), do: inspect(other)
@@ -239,7 +320,7 @@ defmodule Bash.AST.Helpers do
   # expand_word(%Word{parts: [{:literal, "file"}, {:brace_expand, %{type: :list, items: ...}}]}, state)
   # #=> ["file1", "file2", "file3"]
   @doc false
-  @spec expand_word(AST.Word.t(), map()) :: [String.t()]
+  @spec expand_word(AST.Word.t(), map()) :: [String.t()] | :brace_expansion_error
   def expand_word(%AST.Word{parts: parts, quoted: :none}, session_state) do
     # Check if any part is a brace expansion
     if has_brace_expansion?(parts) do
@@ -293,22 +374,78 @@ defmodule Bash.AST.Helpers do
   defp expand_word_with_braces(parts, session_state) do
     # Convert each part to a list of alternatives
     # Brace expansion returns multiple alternatives; everything else is wrapped in [...]
-    alternatives =
-      Enum.map(parts, fn
-        {:brace_expand, brace_spec} ->
-          brace_spec
-          |> to_brace_expand_struct()
-          |> BraceExpand.expand()
+    {alternatives, has_error?} =
+      Enum.map_reduce(parts, false, fn
+        {:brace_expand, brace_spec}, err? ->
+          expand_brace_spec_with_state(brace_spec, session_state, err?)
 
-        part ->
-          [expand_part(part, session_state)]
+        part, err? ->
+          {[expand_part(part, session_state)], err?}
       end)
 
-    # Compute cartesian product and join each combination
+    if has_error? do
+      :brace_expansion_error
+    else
+      # Compute cartesian product and join each combination
+      alternatives
+      |> cartesian_product()
+      |> Enum.map(&Enum.join/1)
+    end
+  end
+
+  defp expand_brace_spec_with_state(brace_spec, session_state, err?) do
+    case brace_spec do
+      %{type: :list, items: items} ->
+        # For list-type brace expansion, expand each item's word parts with session state
+        expanded =
+          Enum.flat_map(items, fn item_parts ->
+            expand_brace_item_parts(item_parts, session_state)
+          end)
+
+        {expanded, err?}
+
+      %{type: :range} ->
+        case brace_spec |> to_brace_expand_struct() |> BraceExpand.expand() do
+          {:ok, items} -> {items, err?}
+          {:error, :invalid_range} -> {[format_brace_literal(brace_spec)], true}
+          {:error, :not_a_range} -> {[format_brace_literal(brace_spec)], err?}
+        end
+    end
+  end
+
+  defp expand_brace_item_parts([], _session_state), do: [""]
+
+  defp expand_brace_item_parts(parts, session_state) do
+    # Each part may produce multiple alternatives (nested brace expansion)
+    alternatives =
+      Enum.map(parts, fn
+        {:brace_expand, nested_spec} ->
+          {items, _err?} = expand_brace_spec_with_state(nested_spec, session_state, false)
+          items
+
+        part ->
+          [expand_part(normalize_brace_part(part), session_state)]
+      end)
+
     alternatives
     |> cartesian_product()
     |> Enum.map(&Enum.join/1)
   end
+
+  # Convert raw tokenizer brace item parts to the format expand_part expects
+  defp normalize_brace_part({:variable, name}) when is_binary(name) do
+    {:variable, %AST.Variable{name: name}}
+  end
+
+  defp normalize_brace_part({:variable_braced, name, _opts}) when is_binary(name) do
+    {:variable, %AST.Variable{name: name}}
+  end
+
+  defp normalize_brace_part({:command_subst, cmd_string}) when is_binary(cmd_string) do
+    {:cmd_subst, cmd_string}
+  end
+
+  defp normalize_brace_part(part), do: part
 
   # Cartesian product of list of lists
   defp cartesian_product([]), do: [[]]
@@ -328,6 +465,26 @@ defmodule Bash.AST.Helpers do
       step: Map.get(spec, :step),
       zero_pad: Map.get(spec, :zero_pad)
     }
+  end
+
+  defp format_brace_literal(%{type: :range} = spec) do
+    step_str = if spec.step, do: "..#{spec.step}", else: ""
+    "{#{spec.range_start}..#{spec.range_end}#{step_str}}"
+  end
+
+  defp format_brace_literal(%{type: :list, items: items}) do
+    inner =
+      items
+      |> Enum.map(fn parts ->
+        Enum.map_join(parts, "", fn
+          {:literal, text} -> text
+          {:brace_expand, bs} -> format_brace_literal(bs)
+          _ -> ""
+        end)
+      end)
+      |> Enum.join(",")
+
+    "{#{inner}}"
   end
 
   # Expand a variable AST to its string value
@@ -979,14 +1136,18 @@ defmodule Bash.AST.Helpers do
   end
 
   defp expand_standard_glob(pattern, session_state) do
+    # Escape braces so Path.wildcard doesn't interpret them as alternation.
+    # Brace expansion was already handled at the tokenizer level.
+    glob_pattern = escape_braces_for_glob(pattern)
+
     # For absolute paths, use them directly; for relative paths, join with working_dir
     {glob_path, is_absolute, has_dot_prefix} =
-      if String.starts_with?(pattern, "/") do
-        {pattern, true, false}
+      if String.starts_with?(glob_pattern, "/") do
+        {glob_pattern, true, false}
       else
         # Track if pattern starts with ./ to preserve it in output
-        has_dot = String.starts_with?(pattern, "./")
-        {Path.join(session_state.working_dir, pattern), false, has_dot}
+        has_dot = String.starts_with?(glob_pattern, "./")
+        {Path.join(session_state.working_dir, glob_pattern), false, has_dot}
       end
 
     fs = Filesystem.from_state(session_state)
@@ -995,6 +1156,7 @@ defmodule Bash.AST.Helpers do
 
     case try_wildcard(fs, glob_path) do
       [] ->
+        # Return original pattern (without brace escaping)
         pattern
 
       matches ->
@@ -1018,6 +1180,12 @@ defmodule Bash.AST.Helpers do
           end
         end
     end
+  end
+
+  defp escape_braces_for_glob(pattern) do
+    pattern
+    |> String.replace("{", "\\{")
+    |> String.replace("}", "\\}")
   end
 
   defp try_wildcard(fs, glob_path) do
@@ -1546,24 +1714,31 @@ defmodule Bash.AST.Helpers do
   # Handles brace expansion which can produce multiple words from a single Word
   # Also collects env_updates from arithmetic expansions like $((n++))
   def expand_word_list(items, session_state) do
-    {expanded, env_updates} =
+    result =
       Enum.flat_map_reduce(items, %{}, fn item, acc_updates ->
         case item do
           %AST.Word{quoted: :none} = word ->
             # Unquoted word - use expand_word_with_updates for brace expansion and updates
             {expanded_words, word_updates} = expand_word_with_updates(word, session_state)
-            merged_updates = Map.merge(acc_updates, word_updates)
 
-            if contains_quoted_parts?(word) do
-              # Word contains double-quoted parts - don't word-split
-              {expanded_words, merged_updates}
-            else
-              # Fully unquoted - expand and split on whitespace (for glob expansion)
-              split_args =
-                expanded_words
-                |> Enum.flat_map(&String.split(&1, ~r/\s+/, trim: true))
+            case expanded_words do
+              :brace_expansion_error ->
+                throw(:brace_expansion_error)
 
-              {split_args, merged_updates}
+              words ->
+                merged_updates = Map.merge(acc_updates, word_updates)
+
+                if contains_quoted_parts?(word) do
+                  # Word contains double-quoted parts - don't word-split
+                  {words, merged_updates}
+                else
+                  # Fully unquoted - expand and split on whitespace (for glob expansion)
+                  split_args =
+                    words
+                    |> Enum.flat_map(&String.split(&1, ~r/\s+/, trim: true))
+
+                  {split_args, merged_updates}
+                end
             end
 
           %AST.Word{} = word ->
@@ -1584,7 +1759,11 @@ defmodule Bash.AST.Helpers do
         end
       end)
 
-    {expanded, env_updates}
+    case result do
+      {expanded, env_updates} -> {expanded, env_updates}
+    end
+  catch
+    :brace_expansion_error -> :brace_expansion_error
   end
 
   # Check if a Word contains any double-quoted parts

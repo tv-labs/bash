@@ -106,17 +106,164 @@ defmodule Bash.Parser do
   end
 
   defp resolve_heredoc_in_stmt(
-         %AST.WhileLoop{redirects: redirects} = while_loop,
+         %AST.Compound{statements: statements, redirects: redirects} = compound,
          content,
          delimiter
        ) do
+    # Try redirects on the compound itself first
     case resolve_heredoc_in_redirects(redirects, content, delimiter) do
-      {:resolved, new_redirects} -> {:resolved, %{while_loop | redirects: new_redirects}}
+      {:resolved, new_redirects} ->
+        {:resolved, %{compound | redirects: new_redirects}}
+
+      :not_found ->
+        # Then try inside its statements (for operand compounds like cmd1 && cmd2)
+        case resolve_heredoc_in_commands(statements, content, delimiter, []) do
+          {:resolved, new_stmts} -> {:resolved, %{compound | statements: new_stmts}}
+          :not_found -> :not_found
+        end
+    end
+  end
+
+  defp resolve_heredoc_in_stmt(
+         %AST.WhileLoop{condition: condition, body: body, redirects: redirects} = while_loop,
+         content,
+         delimiter
+       ) do
+    # Try redirects on the while loop itself first
+    case resolve_heredoc_in_redirects(redirects, content, delimiter) do
+      {:resolved, new_redirects} ->
+        {:resolved, %{while_loop | redirects: new_redirects}}
+
+      :not_found ->
+        # Try inside condition statements
+        condition_stmts = if is_list(condition), do: condition, else: [condition]
+
+        case resolve_heredoc_in_commands(condition_stmts, content, delimiter, []) do
+          {:resolved, new_stmts} ->
+            new_condition =
+              if is_list(condition), do: new_stmts, else: hd(new_stmts)
+
+            {:resolved, %{while_loop | condition: new_condition}}
+
+          :not_found ->
+            # Try inside body statements
+            case resolve_heredoc_in_commands(body, content, delimiter, []) do
+              {:resolved, new_body} -> {:resolved, %{while_loop | body: new_body}}
+              :not_found -> :not_found
+            end
+        end
+    end
+  end
+
+  defp resolve_heredoc_in_stmt(
+         %AST.If{condition: condition, body: body, elif_clauses: elifs, else_body: else_body} =
+           if_node,
+         content,
+         delimiter
+       ) do
+    condition_stmts = if is_list(condition), do: condition, else: [condition]
+
+    case resolve_heredoc_in_commands(condition_stmts, content, delimiter, []) do
+      {:resolved, new_stmts} ->
+        new_condition = if is_list(condition), do: new_stmts, else: hd(new_stmts)
+        {:resolved, %{if_node | condition: new_condition}}
+
+      :not_found ->
+        case resolve_heredoc_in_commands(body, content, delimiter, []) do
+          {:resolved, new_body} ->
+            {:resolved, %{if_node | body: new_body}}
+
+          :not_found ->
+            case resolve_heredoc_in_elif_clauses(elifs, content, delimiter, []) do
+              {:resolved, new_elifs} ->
+                {:resolved, %{if_node | elif_clauses: new_elifs}}
+
+              :not_found ->
+                if else_body do
+                  case resolve_heredoc_in_commands(else_body, content, delimiter, []) do
+                    {:resolved, new_else} -> {:resolved, %{if_node | else_body: new_else}}
+                    :not_found -> :not_found
+                  end
+                else
+                  :not_found
+                end
+            end
+        end
+    end
+  end
+
+  defp resolve_heredoc_in_stmt(
+         %AST.ForLoop{body: body} = for_loop,
+         content,
+         delimiter
+       ) do
+    case resolve_heredoc_in_commands(body, content, delimiter, []) do
+      {:resolved, new_body} -> {:resolved, %{for_loop | body: new_body}}
+      :not_found -> :not_found
+    end
+  end
+
+  defp resolve_heredoc_in_stmt(%Function{} = func, content, delimiter) do
+    case resolve_heredoc_in_commands(func.body, content, delimiter, []) do
+      {:resolved, new_body} -> {:resolved, %{func | body: new_body}}
       :not_found -> :not_found
     end
   end
 
   defp resolve_heredoc_in_stmt(_stmt, _content, _delimiter), do: :not_found
+
+  defp resolve_heredoc_in_elif_clauses([], _content, _delimiter, _resolved), do: :not_found
+
+  defp resolve_heredoc_in_elif_clauses(
+         [{condition, body} | rest],
+         content,
+         delimiter,
+         resolved
+       ) do
+    condition_stmts = if is_list(condition), do: condition, else: [condition]
+
+    case resolve_heredoc_in_commands(condition_stmts, content, delimiter, []) do
+      {:resolved, new_stmts} ->
+        new_condition = if is_list(condition), do: new_stmts, else: hd(new_stmts)
+        {:resolved, Enum.reverse(resolved) ++ [{new_condition, body} | rest]}
+
+      :not_found ->
+        case resolve_heredoc_in_commands(body, content, delimiter, []) do
+          {:resolved, new_body} ->
+            {:resolved, Enum.reverse(resolved) ++ [{condition, new_body} | rest]}
+
+          :not_found ->
+            resolve_heredoc_in_elif_clauses(rest, content, delimiter, [
+              {condition, body} | resolved
+            ])
+        end
+    end
+  end
+
+  # Resolve any heredoc_content tokens that follow against the given statements.
+  # This handles cases where heredocs in condition clauses (if/while/for)
+  # have their content placed after the condition keyword (then/do).
+  defp resolve_pending_heredocs(stmts, state) do
+    # Skip separators (newlines/semicolons) to find heredoc_content tokens
+    skipped_state = skip_separators_only(state)
+
+    case current_token(skipped_state) do
+      {:heredoc_content, content, delimiter, _strip_tabs} ->
+        resolved = resolve_heredoc_in_statements(stmts, content, delimiter)
+        resolve_pending_heredocs(resolved, advance(skipped_state))
+
+      _ ->
+        # No heredoc_content found — return original state (don't consume separators)
+        {stmts, state}
+    end
+  end
+
+  defp skip_separators_only(state) do
+    case current_token(state) do
+      {sep, _, _} when sep in [:newline, :semi] -> skip_separators_only(advance(state))
+      _ -> state
+    end
+  end
 
   defp resolve_heredoc_in_commands([], _content, _delimiter, _resolved), do: :not_found
 
@@ -186,11 +333,34 @@ defmodule Bash.Parser do
     end
   end
 
+  # In heredocs (like double-quoted strings), only \\ \$ \` and \newline are escapes
+  defp parse_heredoc_parts("\\\\" <> rest, acc) do
+    append_literal_to_acc("\\", rest, acc)
+  end
+
+  defp parse_heredoc_parts("\\$" <> rest, acc) do
+    append_literal_to_acc("$", rest, acc)
+  end
+
+  defp parse_heredoc_parts("\\`" <> rest, acc) do
+    append_literal_to_acc("`", rest, acc)
+  end
+
+  defp parse_heredoc_parts("\\\n" <> rest, acc) do
+    # Line continuation - skip the backslash-newline
+    parse_heredoc_parts(rest, acc)
+  end
+
   defp parse_heredoc_parts(<<c::utf8, rest::binary>>, acc) do
-    case acc do
-      [{:literal, s} | tail] -> parse_heredoc_parts(rest, [{:literal, s <> <<c::utf8>>} | tail])
-      _ -> parse_heredoc_parts(rest, [{:literal, <<c::utf8>>} | acc])
-    end
+    append_literal_to_acc(<<c::utf8>>, rest, acc)
+  end
+
+  defp append_literal_to_acc(char, rest, [{:literal, s} | tail]) do
+    parse_heredoc_parts(rest, [{:literal, s <> char} | tail])
+  end
+
+  defp append_literal_to_acc(char, rest, acc) do
+    parse_heredoc_parts(rest, [{:literal, char} | acc])
   end
 
   # Parse a variable reference in heredoc content
@@ -202,6 +372,17 @@ defmodule Bash.Parser do
         {:ok, {:variable, var}, remaining}
 
       _ ->
+        :error
+    end
+  end
+
+  defp parse_variable_in_heredoc("((" <> rest) do
+    # Arithmetic substitution: $((...))
+    case find_matching_double_paren(rest, []) do
+      {:ok, expr, remaining} ->
+        {:ok, {:arith_expand, expr}, remaining}
+
+      :error ->
         :error
     end
   end
@@ -246,6 +427,16 @@ defmodule Bash.Parser do
 
   defp find_matching_paren(<<c::utf8, rest::binary>>, depth, acc) do
     find_matching_paren(rest, depth, [c | acc])
+  end
+
+  defp find_matching_double_paren("", _acc), do: :error
+
+  defp find_matching_double_paren("))" <> rest, acc) do
+    {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), rest}
+  end
+
+  defp find_matching_double_paren(<<c::utf8, rest::binary>>, acc) do
+    find_matching_double_paren(rest, [c | acc])
   end
 
   # Parse a list of tokens into an AST.
@@ -969,6 +1160,9 @@ defmodule Bash.Parser do
   # Check if a token is a redirect operator
   defguardp is_redirect_token(token) when elem(token, 0) in @redirect_tokens
 
+  defp reserved_to_literal(:rbrace), do: "}"
+  defp reserved_to_literal(reserved), do: Atom.to_string(reserved)
+
   defp parse_command_args(state, args, redirects) do
     case current_token(state) do
       {:word, parts, line, col} ->
@@ -977,7 +1171,7 @@ defmodule Bash.Parser do
 
       # Reserved words as arguments - treat as literal words
       {reserved, line, col} when reserved in @reserved_as_arg ->
-        word = build_word([{:literal, Atom.to_string(reserved)}], line, col)
+        word = build_word([{:literal, reserved_to_literal(reserved)}], line, col)
         parse_command_args(advance(state), [word | args], redirects)
 
       # Redirects and file descriptor redirects
@@ -1380,6 +1574,8 @@ defmodule Bash.Parser do
 
     with {:ok, condition_stmts, state} <- parse_statement_list(state, []),
          {:ok, state} <- expect_then(state, "if") do
+      # Resolve heredoc content tokens that follow `then` but belong to condition commands
+      {condition_stmts, state} = resolve_pending_heredocs(condition_stmts, state)
       parse_if_branches(condition_stmts, line, col, state, [])
     end
   end
@@ -1433,39 +1629,42 @@ defmodule Bash.Parser do
 
   defp parse_elif_branch(orig_condition, orig_body, line, col, state, elif_clauses) do
     with {:ok, elif_cond, state} <- parse_statement_list(state, []),
-         {:ok, state} <- expect_then(state, "elif"),
-         {:ok, elif_body, state} <- parse_statement_list(state, []) do
-      new_elif_clauses = [{wrap_condition(elif_cond), elif_body} | elif_clauses]
+         {:ok, state} <- expect_then(state, "elif") do
+      {elif_cond, state} = resolve_pending_heredocs(elif_cond, state)
 
-      case current_token(state) do
-        {:elif, _, _} ->
-          parse_elif_branch(
-            orig_condition,
-            orig_body,
-            line,
-            col,
-            advance(state),
-            new_elif_clauses
-          )
+      with {:ok, elif_body, state} <- parse_statement_list(state, []) do
+        new_elif_clauses = [{wrap_condition(elif_cond), elif_body} | elif_clauses]
 
-        {:else, else_line, else_col} ->
-          parse_else_branch(
-            orig_condition,
-            orig_body,
-            line,
-            col,
-            advance(state),
-            new_elif_clauses,
-            else_line,
-            else_col
-          )
+        case current_token(state) do
+          {:elif, _, _} ->
+            parse_elif_branch(
+              orig_condition,
+              orig_body,
+              line,
+              col,
+              advance(state),
+              new_elif_clauses
+            )
 
-        {:fi, _, _} ->
-          if_node = build_if(orig_condition, orig_body, new_elif_clauses, nil, line, col)
-          {:ok, if_node, advance(state)}
+          {:else, else_line, else_col} ->
+            parse_else_branch(
+              orig_condition,
+              orig_body,
+              line,
+              col,
+              advance(state),
+              new_elif_clauses,
+              else_line,
+              else_col
+            )
 
-        token ->
-          error_at(token, "expected 'elif', 'else', or 'fi'")
+          {:fi, _, _} ->
+            if_node = build_if(orig_condition, orig_body, new_elif_clauses, nil, line, col)
+            {:ok, if_node, advance(state)}
+
+          token ->
+            error_at(token, "expected 'elif', 'else', or 'fi'")
+        end
       end
     end
   end
@@ -1642,7 +1841,8 @@ defmodule Bash.Parser do
     state = advance(state)
 
     with {:ok, condition_stmts, state} <- parse_statement_list(state, []),
-         {:ok, body, redirects, state} <- parse_do_done_body(state, "while loop") do
+         {:ok, condition_stmts, body, redirects, state} <-
+           parse_do_done_body_with_condition(state, "while loop", condition_stmts) do
       while_loop = %AST.WhileLoop{
         meta: AST.meta(line, col),
         until: type == :until,
@@ -1655,10 +1855,16 @@ defmodule Bash.Parser do
     end
   end
 
-  defp parse_do_done_body(state, context) do
-    with {:ok, body, state} <- parse_loop_body(state, context),
-         {:ok, redirects, state} <- parse_trailing_redirects(state, []) do
-      {:ok, body, redirects, state}
+  defp parse_do_done_body_with_condition(state, context, condition_stmts) do
+    with {:ok, state} <- expect_do(state, context) do
+      # Resolve heredoc content tokens that follow `do` but belong to condition commands
+      {resolved_condition, state} = resolve_pending_heredocs(condition_stmts, state)
+
+      with {:ok, body, state} <- parse_statement_list(state, []),
+           {:ok, state} <- expect_done(state, context),
+           {:ok, redirects, state} <- parse_trailing_redirects(state, []) do
+        {:ok, resolved_condition, body, redirects, state}
+      end
     end
   end
 

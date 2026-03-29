@@ -211,12 +211,14 @@ defmodule Bash.AST.ForLoop do
   defp for_loop_exit_code({:exit, _}), do: 0
   defp for_loop_exit_code(_), do: 1
 
-  defp execute_for_loop([], _var_name, _body, _session, env_acc, count) do
-    # No more items - loop completed normally
-    {{:ok, nil}, env_acc, count}
+  defp execute_for_loop(items, var_name, body, session_state, env_acc, count, last_exit \\ 0)
+
+  defp execute_for_loop([], _var_name, _body, _session, env_acc, count, last_exit) do
+    # No more items - loop completed normally with last body exit code
+    {{:ok, %{exit_code: last_exit}}, env_acc, count}
   end
 
-  defp execute_for_loop([item | rest], var_name, body, session_state, env_acc, count) do
+  defp execute_for_loop([item | rest], var_name, body, session_state, env_acc, count, _last_exit) do
     # Set the loop variable in the session state with accumulated updates
     new_variables =
       Map.merge(
@@ -228,7 +230,7 @@ defmodule Bash.AST.ForLoop do
 
     # Execute body and handle control flow
     case execute_loop_body(body, updated_session, %{}) do
-      {:ok, _result, body_env_updates} ->
+      {:ok, result, body_env_updates} ->
         # Normal completion - continue to next iteration
         merged_env =
           env_acc
@@ -241,7 +243,8 @@ defmodule Bash.AST.ForLoop do
           body,
           session_state,
           merged_env,
-          count + 1
+          count + 1,
+          result.exit_code || 0
         )
 
       {:continue, result, levels, body_env_updates} ->
@@ -262,7 +265,8 @@ defmodule Bash.AST.ForLoop do
             body,
             session_state,
             merged_env,
-            count + 1
+            count + 1,
+            result.exit_code || 0
           )
         end
 
@@ -290,7 +294,7 @@ defmodule Bash.AST.ForLoop do
 
         {{:exit, result}, merged_env, count + 1}
 
-      {:error, _result} ->
+      {:error, result} ->
         # Error in body - continue but track error
         merged_env = Map.put(env_acc, var_name, item)
 
@@ -300,16 +304,19 @@ defmodule Bash.AST.ForLoop do
           body,
           session_state,
           merged_env,
-          count + 1
+          count + 1,
+          result.exit_code || 1
         )
     end
   end
 
-  defp execute_loop_body([], _session, env_acc) do
-    {:ok, %{exit_code: 0}, env_acc}
+  defp execute_loop_body(stmts, session_state, env_acc, last_exit \\ 0)
+
+  defp execute_loop_body([], _session, env_acc, last_exit) do
+    {:ok, %{exit_code: last_exit}, env_acc}
   end
 
-  defp execute_loop_body([stmt | rest], session_state, env_acc) do
+  defp execute_loop_body([stmt | rest], session_state, env_acc, _last_exit) do
     env_as_vars = Map.new(env_acc, fn {k, v} -> {k, Variable.new(v)} end)
 
     # Don't overwrite array variables with their flattened scalar from env_acc
@@ -328,9 +335,14 @@ defmodule Bash.AST.ForLoop do
     stmt_session = %{session_state | variables: stmt_new_variables}
 
     case Executor.execute(stmt, stmt_session, nil) do
-      {:ok, _result, updates} ->
+      {:ok, result, updates} ->
         var_updates = Map.get(updates, :variables, %{})
         new_session = %{session_state | variables: Map.merge(stmt_new_variables, var_updates)}
+
+        new_options =
+          if Map.has_key?(updates, :options), do: updates.options, else: session_state.options
+
+        new_session = %{new_session | options: new_options}
 
         var_as_env =
           Map.new(var_updates, fn {k, v} ->
@@ -339,10 +351,19 @@ defmodule Bash.AST.ForLoop do
           end)
 
         new_env = Map.merge(env_acc, var_as_env)
-        execute_loop_body(rest, new_session, new_env)
 
-      {:ok, _result} ->
-        execute_loop_body(rest, session_state, env_acc)
+        if Helpers.errexit_should_halt?(result, new_options, stmt_session, stmt) do
+          {:exit, %{exit_code: result.exit_code}, new_env}
+        else
+          execute_loop_body(rest, new_session, new_env, result.exit_code || 0)
+        end
+
+      {:ok, result} ->
+        if Helpers.errexit_should_halt?(result, session_state.options, stmt_session, stmt) do
+          {:exit, %{exit_code: result.exit_code}, env_acc}
+        else
+          execute_loop_body(rest, session_state, env_acc, result.exit_code || 0)
+        end
 
       {:break, result, levels} ->
         {:break, %{exit_code: result.exit_code}, levels, env_acc}

@@ -12,7 +12,7 @@ defmodule Bash.BraceExpansionTest do
         items: [[{:literal, "a"}], [{:literal, "b"}], [{:literal, "c"}]]
       }
 
-      assert BraceExpand.expand(brace) == ["a", "b", "c"]
+      assert BraceExpand.expand(brace) == {:ok, ["a", "b", "c"]}
     end
 
     test "expands list with empty items" do
@@ -22,7 +22,7 @@ defmodule Bash.BraceExpansionTest do
         items: [[{:literal, "a"}], []]
       }
 
-      assert BraceExpand.expand(brace) == ["a", ""]
+      assert BraceExpand.expand(brace) == {:ok, ["a", ""]}
     end
 
     test "expands nested brace expansions" do
@@ -40,7 +40,7 @@ defmodule Bash.BraceExpansionTest do
         ]
       }
 
-      assert BraceExpand.expand(brace) == ["a", "b1", "b2"]
+      assert BraceExpand.expand(brace) == {:ok, ["a", "b1", "b2"]}
     end
   end
 
@@ -52,7 +52,7 @@ defmodule Bash.BraceExpansionTest do
         range_end: "5"
       }
 
-      assert BraceExpand.expand(brace) == ["1", "2", "3", "4", "5"]
+      assert BraceExpand.expand(brace) == {:ok, ["1", "2", "3", "4", "5"]}
     end
 
     test "expands descending numeric range" do
@@ -62,7 +62,7 @@ defmodule Bash.BraceExpansionTest do
         range_end: "1"
       }
 
-      assert BraceExpand.expand(brace) == ["5", "4", "3", "2", "1"]
+      assert BraceExpand.expand(brace) == {:ok, ["5", "4", "3", "2", "1"]}
     end
 
     test "expands numeric range with step" do
@@ -73,7 +73,7 @@ defmodule Bash.BraceExpansionTest do
         step: 2
       }
 
-      assert BraceExpand.expand(brace) == ["1", "3", "5", "7", "9"]
+      assert BraceExpand.expand(brace) == {:ok, ["1", "3", "5", "7", "9"]}
     end
 
     test "expands zero-padded range" do
@@ -84,7 +84,7 @@ defmodule Bash.BraceExpansionTest do
         zero_pad: 2
       }
 
-      assert BraceExpand.expand(brace) == ["01", "02", "03", "04", "05"]
+      assert BraceExpand.expand(brace) == {:ok, ["01", "02", "03", "04", "05"]}
     end
 
     test "expands alpha range" do
@@ -94,7 +94,7 @@ defmodule Bash.BraceExpansionTest do
         range_end: "e"
       }
 
-      assert BraceExpand.expand(brace) == ["a", "b", "c", "d", "e"]
+      assert BraceExpand.expand(brace) == {:ok, ["a", "b", "c", "d", "e"]}
     end
 
     test "expands descending alpha range" do
@@ -104,7 +104,7 @@ defmodule Bash.BraceExpansionTest do
         range_end: "a"
       }
 
-      assert BraceExpand.expand(brace) == ["e", "d", "c", "b", "a"]
+      assert BraceExpand.expand(brace) == {:ok, ["e", "d", "c", "b", "a"]}
     end
 
     test "expands alpha range with step" do
@@ -115,18 +115,18 @@ defmodule Bash.BraceExpansionTest do
         step: 5
       }
 
-      assert BraceExpand.expand(brace) == ["a", "f", "k", "p", "u", "z"]
+      assert BraceExpand.expand(brace) == {:ok, ["a", "f", "k", "p", "u", "z"]}
     end
 
-    test "invalid range returns literal" do
-      # Mixed types like {1..z} return as literal
+    test "mixed type range returns not_a_range error" do
+      # Mixed types like {1..z} are not valid ranges
       brace = %BraceExpand{
         type: :range,
         range_start: "1",
         range_end: "z"
       }
 
-      assert BraceExpand.expand(brace) == ["{1..z}"]
+      assert BraceExpand.expand(brace) == {:error, :not_a_range}
     end
   end
 

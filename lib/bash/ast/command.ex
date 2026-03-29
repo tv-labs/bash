@@ -104,7 +104,44 @@ defmodule Bash.AST.Command do
     execute_debug_trap(session_state)
 
     command_name = Helpers.word_to_string(name, session_state)
-    {expanded_args, var_updates} = Helpers.expand_word_list(args, session_state)
+
+    case Helpers.expand_word_list(args, session_state) do
+      :brace_expansion_error ->
+        command_name = Helpers.word_to_string(name, session_state)
+
+        Sink.write_stderr(
+          session_state,
+          "#{command_name}: brace expansion: invalid range specification\n"
+        )
+
+        {:error, %CommandResult{command: command_name, exit_code: 2, error: :invalid_range}}
+
+      {expanded_args, var_updates} ->
+        execute_expanded_command(
+          ast,
+          name,
+          command_name,
+          expanded_args,
+          var_updates,
+          redirects,
+          env_assignments,
+          stdin,
+          session_state
+        )
+    end
+  end
+
+  defp execute_expanded_command(
+         ast,
+         _name,
+         command_name,
+         expanded_args,
+         var_updates,
+         redirects,
+         env_assignments,
+         stdin,
+         session_state
+       ) do
     default_stdin = stdin || Map.get(session_state, :pipe_stdin)
     effective_stdin = process_input_redirects(redirects, session_state, default_stdin)
 

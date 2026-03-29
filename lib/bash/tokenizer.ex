@@ -1303,7 +1303,8 @@ defmodule Bash.Tokenizer do
           end
 
         # Continue reading more word parts after the brace (e.g., {a,b}{1,2} or {a,b}suffix)
-        case read_word_parts(new_state, [first_part]) do
+        # Treat } as literal suffix, not as a word terminator
+        case read_word_parts_after_brace(new_state, [first_part]) do
           {:ok, parts, final_state} ->
             {:ok, {:word, parts, start_line, start_col}, final_state}
 
@@ -1317,7 +1318,7 @@ defmodule Bash.Tokenizer do
         first_part = {:literal, "{" <> content <> "}"}
 
         # Continue reading more word parts after the brace
-        case read_word_parts(new_state, [first_part]) do
+        case read_word_parts_after_brace(new_state, [first_part]) do
           {:ok, parts, final_state} ->
             {:ok, {:word, parts, start_line, start_col}, final_state}
 
@@ -1328,15 +1329,15 @@ defmodule Bash.Tokenizer do
       :not_brace_expansion ->
         state1 = advance(state)
 
-        # SC1054: { must be followed by whitespace to start a command group
         case peek(state1) do
+          # { followed by whitespace, EOF, }, or # -> command group delimiter
+          c when c in [nil, ?}, ?#] or c in @metacharacters ->
+            {:ok, {:lbrace, start_line, start_col}, state1}
+
           c when c not in [nil | @metacharacters] and c not in [?}, ?#] ->
             {:error,
              "(SC1054) `{` is only a reserved word when followed by whitespace. Use `{ #{<<c>>}...` instead of `{#{<<c>>}...`",
              start_line, start_col}
-
-          _ ->
-            {:ok, {:lbrace, start_line, start_col}, state1}
         end
     end
   end
@@ -1395,6 +1396,35 @@ defmodule Bash.Tokenizer do
       ?{ ->
         scan_for_closing_brace(input, pos + 1, len, has_dots, has_comma, depth + 1)
 
+      # Dollar sign - skip over $(...), $((...)), ${...}, $var
+      ?$ ->
+        skip_pos = skip_dollar_in_brace_scan(input, pos + 1, len)
+        scan_for_closing_brace(input, skip_pos, len, has_dots, has_comma, depth)
+
+      # Single quote - skip to matching quote
+      ?' ->
+        case skip_single_quoted(input, pos + 1, len) do
+          {:ok, new_pos} ->
+            scan_for_closing_brace(input, new_pos, len, has_dots, has_comma, depth)
+
+          :not_found ->
+            :not_found
+        end
+
+      # Double quote - skip to matching quote
+      ?" ->
+        case skip_double_quoted(input, pos + 1, len) do
+          {:ok, new_pos} ->
+            scan_for_closing_brace(input, new_pos, len, has_dots, has_comma, depth)
+
+          :not_found ->
+            :not_found
+        end
+
+      # Backslash escape - skip next char
+      ?\\ when pos + 1 < len ->
+        scan_for_closing_brace(input, pos + 2, len, has_dots, has_comma, depth)
+
       # Any other character, continue scanning
       _ ->
         scan_for_closing_brace(input, pos + 1, len, has_dots, has_comma, depth)
@@ -1402,6 +1432,71 @@ defmodule Bash.Tokenizer do
   end
 
   defp scan_for_closing_brace(_input, _pos, _len, _has_dots, _has_comma, _depth), do: :not_found
+
+  defp skip_dollar_in_brace_scan(input, pos, len) when pos < len do
+    case :binary.at(input, pos) do
+      ?( ->
+        # $( or $(( - skip to matching paren
+        if pos + 1 < len and :binary.at(input, pos + 1) == ?( do
+          # $(( arithmetic - skip to matching ))
+          skip_nested_parens(input, pos + 2, len, 2)
+        else
+          # $( command sub - skip to matching )
+          skip_nested_parens(input, pos + 1, len, 1)
+        end
+
+      ?{ ->
+        # ${...} - skip to matching }
+        skip_to_char(input, pos + 1, len, ?})
+
+      _ ->
+        # $var - just continue (the var name chars are not special)
+        pos
+    end
+  end
+
+  defp skip_dollar_in_brace_scan(_input, pos, _len), do: pos
+
+  defp skip_nested_parens(_input, pos, len, _depth) when pos >= len, do: pos
+
+  defp skip_nested_parens(input, pos, len, depth) do
+    case :binary.at(input, pos) do
+      ?) when depth == 1 -> pos + 1
+      ?) -> skip_nested_parens(input, pos + 1, len, depth - 1)
+      ?( -> skip_nested_parens(input, pos + 1, len, depth + 1)
+      _ -> skip_nested_parens(input, pos + 1, len, depth)
+    end
+  end
+
+  defp skip_to_char(_input, pos, len, _char) when pos >= len, do: pos
+
+  defp skip_to_char(input, pos, len, char) do
+    if :binary.at(input, pos) == char do
+      pos + 1
+    else
+      skip_to_char(input, pos + 1, len, char)
+    end
+  end
+
+  defp skip_single_quoted(_input, pos, len) when pos >= len, do: :not_found
+
+  defp skip_single_quoted(input, pos, len) do
+    if :binary.at(input, pos) == ?' do
+      {:ok, pos + 1}
+    else
+      skip_single_quoted(input, pos + 1, len)
+    end
+  end
+
+  defp skip_double_quoted(_input, pos, len) when pos >= len, do: :not_found
+
+  defp skip_double_quoted(input, pos, len) do
+    case :binary.at(input, pos) do
+      ?" -> {:ok, pos + 1}
+      ?\\ when pos + 1 < len -> skip_double_quoted(input, pos + 2, len)
+      _ -> skip_double_quoted(input, pos + 1, len)
+    end
+  end
 
   # < or << or <<- or <<< or <& or <>
   defp read_less(state) do
@@ -1621,7 +1716,7 @@ defmodule Bash.Tokenizer do
 
       ?$ ->
         # Variable, command substitution, or arithmetic expansion
-        case read_dollar(state) do
+        case read_dollar(state, acc == []) do
           {:ok, part, new_state} -> read_word_parts(new_state, [part | acc])
           {:error, _, _, _} = err -> err
         end
@@ -1661,6 +1756,18 @@ defmodule Bash.Tokenizer do
           {:ok, part, new_state} -> read_word_parts(new_state, [part | acc])
           {:error, _, _, _} = err -> err
         end
+    end
+  end
+
+  # Like read_word_parts but treats } as a literal character (used after top-level brace expansion)
+  defp read_word_parts_after_brace(state, acc) do
+    case peek(state) do
+      ?} ->
+        # Treat } as literal suffix, then continue with normal word parts
+        read_word_parts(advance(state), [{:literal, "}"} | acc])
+
+      _ ->
+        read_word_parts(state, acc)
     end
   end
 
@@ -1778,7 +1885,8 @@ defmodule Bash.Tokenizer do
         end
 
       _ ->
-        {:error, "unterminated brace expansion", state.line, state.column}
+        # No closing brace found - treat { as a literal character
+        {:ok, {:literal, "{"}, advance(start_state)}
     end
   end
 
@@ -1853,15 +1961,24 @@ defmodule Bash.Tokenizer do
     end
   end
 
-  # Detect zero-padding from start value like "01" or "001"
+  # Detect zero-padding from start or end value like "01" or "001"
+  # Uses the max width of either value when zero-padded (bash behavior)
   defp detect_zero_padding(start_str, end_str) do
     start_pad = count_leading_zeros(start_str)
     end_pad = count_leading_zeros(end_str)
 
     cond do
-      start_pad > 0 -> String.length(start_str)
-      end_pad > 0 -> String.length(end_str)
-      true -> nil
+      start_pad > 0 and end_pad > 0 ->
+        max(String.length(start_str), String.length(end_str))
+
+      start_pad > 0 ->
+        max(String.length(start_str), String.length(end_str))
+
+      end_pad > 0 ->
+        max(String.length(start_str), String.length(end_str))
+
+      true ->
+        nil
     end
   end
 
@@ -1883,7 +2000,7 @@ defmodule Bash.Tokenizer do
     {:ok, %{type: :list, items: parsed_items}}
   end
 
-  # Split on commas, respecting nested braces
+  # Split on commas, respecting nested braces, quotes, escapes, and $-expressions
   defp split_brace_items(content) do
     split_brace_items(content, 0, [], [])
   end
@@ -1906,12 +2023,42 @@ defmodule Bash.Tokenizer do
     split_brace_items(rest, depth - 1, [?} | current], acc)
   end
 
+  defp split_brace_items(<<?\\, c, rest::binary>>, depth, current, acc) do
+    split_brace_items(rest, depth, [c, ?\\ | current], acc)
+  end
+
+  defp split_brace_items(<<?\', rest::binary>>, depth, current, acc) do
+    {quoted, remaining} = take_until_single_quote(rest, [?\' | current])
+    split_brace_items(remaining, depth, quoted, acc)
+  end
+
+  defp split_brace_items(<<?\", rest::binary>>, depth, current, acc) do
+    {quoted, remaining} = take_until_double_quote(rest, [?\" | current])
+    split_brace_items(remaining, depth, quoted, acc)
+  end
+
   defp split_brace_items(<<c, rest::binary>>, depth, current, acc) do
     split_brace_items(rest, depth, [c | current], acc)
   end
 
+  defp take_until_single_quote("", acc), do: {acc, ""}
+  defp take_until_single_quote(<<?\', rest::binary>>, acc), do: {[?\' | acc], rest}
+
+  defp take_until_single_quote(<<c, rest::binary>>, acc),
+    do: take_until_single_quote(rest, [c | acc])
+
+  defp take_until_double_quote("", acc), do: {acc, ""}
+
+  defp take_until_double_quote(<<?\\, c, rest::binary>>, acc),
+    do: take_until_double_quote(rest, [c, ?\\ | acc])
+
+  defp take_until_double_quote(<<?\", rest::binary>>, acc), do: {[?\" | acc], rest}
+
+  defp take_until_double_quote(<<c, rest::binary>>, acc),
+    do: take_until_double_quote(rest, [c | acc])
+
   # Parse a single brace item into word parts
-  # This handles nested braces like "b{1,2}" -> [{:literal, "b"}, {:brace_expand, ...}]
+  # Handles nested braces, variables, quotes, escapes, command/arith substitutions
   defp parse_brace_item(item) do
     parse_brace_item_parts(item, [])
   end
@@ -1919,28 +2066,64 @@ defmodule Bash.Tokenizer do
   defp parse_brace_item_parts("", acc), do: Enum.reverse(acc)
 
   defp parse_brace_item_parts(<<?\{, rest::binary>>, acc) do
-    # Find matching close brace
     case extract_nested_brace(rest, [], 1) do
       {:ok, inner, remaining} ->
-        # Recursively parse the nested brace content
         case parse_brace_content(inner, nil) do
           {:ok, brace_spec} ->
             parse_brace_item_parts(remaining, [{:brace_expand, brace_spec} | acc])
 
           :not_expansion ->
-            # Keep as literal
             parse_brace_item_parts(remaining, [{:literal, "{" <> inner <> "}"} | acc])
         end
 
       :error ->
-        # Unmatched brace, treat rest as literal
         [{:literal, "{" <> rest} | acc] |> Enum.reverse()
     end
   end
 
+  defp parse_brace_item_parts(<<?\\, c, rest::binary>>, acc) do
+    parse_brace_item_parts(rest, [{:literal, <<c>>} | acc])
+  end
+
+  defp parse_brace_item_parts(<<?\', rest::binary>>, acc) do
+    {content, remaining} = extract_single_quoted_in_brace(rest, [])
+    parse_brace_item_parts(remaining, [{:single_quoted, content} | acc])
+  end
+
+  defp parse_brace_item_parts(<<?\", rest::binary>>, acc) do
+    {content, remaining} = extract_double_quoted_in_brace(rest, [])
+    parse_brace_item_parts(remaining, [{:double_quoted, [{:literal, content}]} | acc])
+  end
+
+  defp parse_brace_item_parts(<<"$((", rest::binary>>, acc) do
+    {expr, remaining} = extract_arith_in_brace(rest, [], 0)
+    parse_brace_item_parts(remaining, [{:arith_expand, expr} | acc])
+  end
+
+  defp parse_brace_item_parts(<<"$(", rest::binary>>, acc) do
+    {cmd, remaining} = extract_cmd_subst_in_brace(rest, [], 0)
+    parse_brace_item_parts(remaining, [{:command_subst, cmd} | acc])
+  end
+
+  defp parse_brace_item_parts(<<"${", rest::binary>>, acc) do
+    {var_name, remaining} = extract_braced_var_in_brace(rest, [])
+    parse_brace_item_parts(remaining, [{:variable_braced, var_name, []} | acc])
+  end
+
+  defp parse_brace_item_parts(<<?\$, c, rest::binary>>, acc)
+       when c in ?a..?z or c in ?A..?Z or c == ?_ do
+    {var_name, remaining} = extract_var_name_in_brace(rest, [c])
+    name = var_name |> Enum.reverse() |> IO.iodata_to_binary()
+    parse_brace_item_parts(remaining, [{:variable, name} | acc])
+  end
+
+  defp parse_brace_item_parts(<<?\$, c, rest::binary>>, acc)
+       when c in [??, ?$, ?!, ?#, ?@, ?*, ?-, ?0, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9] do
+    parse_brace_item_parts(rest, [{:variable, <<c>>} | acc])
+  end
+
   defp parse_brace_item_parts(str, acc) do
-    # Read literal until we hit a brace or end
-    {literal, rest} = take_until_brace(str, [])
+    {literal, rest} = take_until_special_in_brace(str, [])
 
     if literal == "" do
       Enum.reverse(acc)
@@ -1949,12 +2132,87 @@ defmodule Bash.Tokenizer do
     end
   end
 
-  defp take_until_brace("", acc), do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), ""}
+  defp take_until_special_in_brace("", acc) do
+    {acc |> Enum.reverse() |> IO.iodata_to_binary(), ""}
+  end
 
-  defp take_until_brace(<<?\{, _::binary>> = rest, acc),
+  defp take_until_special_in_brace(<<c, _::binary>> = rest, acc)
+       when c in [?\{, ?\\, ?\', ?\", ?$] do
+    {acc |> Enum.reverse() |> IO.iodata_to_binary(), rest}
+  end
+
+  defp take_until_special_in_brace(<<c, rest::binary>>, acc) do
+    take_until_special_in_brace(rest, [c | acc])
+  end
+
+  defp extract_single_quoted_in_brace("", acc),
+    do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), ""}
+
+  defp extract_single_quoted_in_brace(<<?\', rest::binary>>, acc),
     do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), rest}
 
-  defp take_until_brace(<<c, rest::binary>>, acc), do: take_until_brace(rest, [c | acc])
+  defp extract_single_quoted_in_brace(<<c, rest::binary>>, acc),
+    do: extract_single_quoted_in_brace(rest, [c | acc])
+
+  defp extract_double_quoted_in_brace("", acc),
+    do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), ""}
+
+  defp extract_double_quoted_in_brace(<<?\", rest::binary>>, acc),
+    do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), rest}
+
+  defp extract_double_quoted_in_brace(<<?\\, c, rest::binary>>, acc),
+    do: extract_double_quoted_in_brace(rest, [c, ?\\ | acc])
+
+  defp extract_double_quoted_in_brace(<<c, rest::binary>>, acc),
+    do: extract_double_quoted_in_brace(rest, [c | acc])
+
+  defp extract_arith_in_brace("", acc, _depth),
+    do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), ""}
+
+  defp extract_arith_in_brace(<<"))", rest::binary>>, acc, 0),
+    do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), rest}
+
+  defp extract_arith_in_brace(<<")", rest::binary>>, acc, depth) when depth > 0,
+    do: extract_arith_in_brace(rest, [?) | acc], depth - 1)
+
+  defp extract_arith_in_brace(<<"(", rest::binary>>, acc, depth),
+    do: extract_arith_in_brace(rest, [?( | acc], depth + 1)
+
+  defp extract_arith_in_brace(<<c, rest::binary>>, acc, depth),
+    do: extract_arith_in_brace(rest, [c | acc], depth)
+
+  defp extract_cmd_subst_in_brace("", acc, _depth),
+    do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), ""}
+
+  defp extract_cmd_subst_in_brace(<<")", rest::binary>>, acc, 0),
+    do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), rest}
+
+  defp extract_cmd_subst_in_brace(<<")", rest::binary>>, acc, depth),
+    do: extract_cmd_subst_in_brace(rest, [?) | acc], depth - 1)
+
+  defp extract_cmd_subst_in_brace(<<"(", rest::binary>>, acc, depth),
+    do: extract_cmd_subst_in_brace(rest, [?( | acc], depth + 1)
+
+  defp extract_cmd_subst_in_brace(<<c, rest::binary>>, acc, depth),
+    do: extract_cmd_subst_in_brace(rest, [c | acc], depth)
+
+  defp extract_braced_var_in_brace("", acc),
+    do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), ""}
+
+  defp extract_braced_var_in_brace(<<"}", rest::binary>>, acc),
+    do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), rest}
+
+  defp extract_braced_var_in_brace(<<c, rest::binary>>, acc),
+    do: extract_braced_var_in_brace(rest, [c | acc])
+
+  defp extract_var_name_in_brace("", acc), do: {acc, ""}
+
+  defp extract_var_name_in_brace(<<c, rest::binary>>, acc)
+       when c in ?a..?z or c in ?A..?Z or c in ?0..?9 or c == ?_ do
+    extract_var_name_in_brace(rest, [c | acc])
+  end
+
+  defp extract_var_name_in_brace(rest, acc), do: {acc, rest}
 
   defp extract_nested_brace("", _acc, _depth), do: :error
 
@@ -2091,7 +2349,8 @@ defmodule Bash.Tokenizer do
   end
 
   # Read $... expansion
-  defp read_dollar(state) do
+  # at_word_start: whether the $ appears at the beginning of a word token
+  defp read_dollar(state, at_word_start \\ false) do
     start_line = state.line
     start_col = state.column
     # skip $
@@ -2116,7 +2375,7 @@ defmodule Bash.Tokenizer do
         end
 
       c when c in [??, ?$, ?!, ?_, ?#, ?@, ?*, ?-] or c in ?0..?9 or c in ?a..?z or c in ?A..?Z ->
-        read_simple_variable(state, start_line, start_col)
+        read_simple_variable(state, start_line, start_col, at_word_start)
 
       ?' ->
         read_ansi_c_quoted(state, start_line, start_col)
@@ -2127,7 +2386,7 @@ defmodule Bash.Tokenizer do
   end
 
   # Read simple variable: $VAR, $?, $$, $1, $-, etc.
-  defp read_simple_variable(state, start_line, start_col) do
+  defp read_simple_variable(state, start_line, start_col, at_word_start \\ false) do
     case peek(state) do
       c when c in [??, ?$, ?!, ?#, ?@, ?*, ?_, ?-] ->
         {:ok, {:variable, <<c>>}, advance(state)}
@@ -2155,8 +2414,9 @@ defmodule Bash.Tokenizer do
         {name, new_state} = read_var_name(state, [])
 
         # Check for $VAR= pattern (SC1066) and $arr[0] pattern (SC1087)
+        # SC1066 only applies when $VAR= is at word start (not mid-word like =$VAR=)
         case peek(new_state) do
-          ?= ->
+          ?= when at_word_start ->
             {:error,
              "(SC1066) Don't use $ on the left side of assignments - use #{name}=value instead of $#{name}=value",
              start_line, start_col}

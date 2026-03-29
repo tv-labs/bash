@@ -76,6 +76,9 @@ defmodule Bash.AST.TestExpression do
   @doc false
   def execute(%__MODULE__{expression: expression}, _stdin, session_state) do
     case Helpers.expand_word_list(expression, session_state) do
+      :brace_expansion_error ->
+        {:error, %Bash.CommandResult{command: "[[", exit_code: 2, error: :invalid_range}}
+
       {[], _} ->
         {:ok, %CommandResult{command: "[[", exit_code: 1, error: nil}}
 

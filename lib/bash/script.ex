@@ -333,7 +333,8 @@ defmodule Bash.Script do
               {Enum.reverse([executed_stmt | executed]) ++ rest, exit_code, new_output,
                new_updates, :ok}
 
-            errexit_triggered?(exit_code, new_updates, updated_session) ->
+            errexit_triggered?(exit_code, new_updates, updated_session, stmt) and
+                not errexit_checked_internally?(stmt) ->
               {Enum.reverse([executed_stmt | executed]) ++ rest, exit_code, new_output,
                new_updates, :exit}
 
@@ -365,7 +366,8 @@ defmodule Bash.Script do
               {Enum.reverse([executed_stmt | executed]) ++ rest, exit_code, new_output,
                new_updates, :ok}
 
-            errexit_triggered?(exit_code, new_updates, updated_session) ->
+            errexit_triggered?(exit_code, new_updates, updated_session, stmt) and
+                not errexit_checked_internally?(stmt) ->
               {Enum.reverse([executed_stmt | executed]) ++ rest, exit_code, new_output,
                new_updates, :exit}
 
@@ -383,6 +385,15 @@ defmodule Bash.Script do
                 new_updates
               )
           end
+
+        {:exit, executed_stmt, stmt_updates} ->
+          # Exit control flow with state updates - stop execution and return
+          new_output = output ++ extract_output(executed_stmt)
+          new_updates = merge_state_updates(updates, stmt_updates)
+          exit_code = Map.get(executed_stmt, :exit_code, 0)
+
+          {Enum.reverse([executed_stmt | executed]) ++ rest, exit_code, new_output, new_updates,
+           :exit}
 
         {:exit, executed_stmt} ->
           # Exit control flow - stop execution and return
@@ -408,7 +419,7 @@ defmodule Bash.Script do
           new_updates = add_exit_code_update(updates, exit_code)
 
           cond do
-            errexit_triggered?(exit_code, new_updates, updated_session) ->
+            errexit_triggered?(exit_code, new_updates, updated_session, stmt) ->
               {Enum.reverse([executed_stmt | executed]) ++ rest, exit_code, new_output,
                new_updates, :exit}
 
@@ -435,7 +446,7 @@ defmodule Bash.Script do
           new_updates = add_exit_code_update(new_updates, exit_code)
 
           cond do
-            errexit_triggered?(exit_code, new_updates, updated_session) ->
+            errexit_triggered?(exit_code, new_updates, updated_session, stmt) ->
               {Enum.reverse([executed_stmt | executed]) ++ rest, exit_code, new_output,
                new_updates, :exit}
 
@@ -629,14 +640,35 @@ defmodule Bash.Script do
   end
 
   # Check if errexit should trigger based on exit code and options
-  defp errexit_triggered?(0, _updates, _state), do: false
+  defp errexit_triggered?(exit_code, updates, state, stmt \\ nil)
+  defp errexit_triggered?(0, _updates, _state, _stmt), do: false
 
-  defp errexit_triggered?(exit_code, updates, state) when exit_code != 0 do
+  defp errexit_triggered?(exit_code, updates, state, stmt) when exit_code != 0 do
     # errexit only triggers on non-zero exit codes
     # Merge options from updates (more recent) with session state
     merged_options = Map.merge(Map.get(state, :options, %{}), updates[:options] || %{})
+    errexit_enabled = Map.get(merged_options, :errexit, false) == true
 
-    Map.get(merged_options, :errexit, false) == true
+    # Per POSIX: errexit is suppressed for negated pipelines
+    negated = match?(%Bash.AST.Pipeline{negate: true}, stmt)
+
+    errexit_enabled and not negated
+  end
+
+  # Check if an {:ok, ...} result from this statement should be exempt from
+  # Script-level errexit checking. Compound statements (groups, subshells,
+  # operand chains, loops, if/case) handle errexit internally via execute_body.
+  # If they return {:ok, ...} with non-zero exit, it means the exit code
+  # came from a checked context and should not trigger errexit again.
+  defp errexit_checked_internally?(stmt) do
+    case stmt do
+      %Bash.AST.Compound{} -> true
+      %Bash.AST.ForLoop{} -> true
+      %Bash.AST.WhileLoop{} -> true
+      %Bash.AST.If{} -> true
+      %Bash.AST.Case{} -> true
+      _ -> false
+    end
   end
 
   # Check if onecmd (-t) should trigger exit after this command

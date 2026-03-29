@@ -71,7 +71,8 @@ defmodule Bash.Builtin.Printf do
     {segments, spec_count} = parse_format(format)
 
     if spec_count == 0 do
-      {:ok, format, false}
+      {output, has_invalid} = render_segments(segments)
+      {:ok, output, has_invalid}
     else
       format_with_args(segments, arguments, spec_count, [], false)
     end
@@ -143,8 +144,8 @@ defmodule Bash.Builtin.Printf do
       {:ok, spec, remaining} ->
         parse_format(remaining, [{:spec, spec} | acc], count + 1)
 
-      :error ->
-        parse_format(rest, [{:literal, "%"} | acc], count)
+      {:error, remaining} ->
+        parse_format(remaining, [{:invalid_spec} | acc], count)
     end
   end
 
@@ -179,7 +180,14 @@ defmodule Bash.Builtin.Printf do
          remaining}
 
       :error ->
-        :error
+        # Skip past the invalid specifier character
+        remaining =
+          case rest do
+            <<_::utf8, r::binary>> -> r
+            _ -> rest
+          end
+
+        {:error, remaining}
     end
   end
 
@@ -229,6 +237,14 @@ defmodule Bash.Builtin.Printf do
   defp parse_specifier("q" <> rest), do: {:ok, :quoted, rest}
   defp parse_specifier(_), do: :error
 
+  defp render_segments(segments) do
+    Enum.reduce(segments, {"", false}, fn
+      {:literal, str}, {acc, err} -> {acc <> str, err}
+      {:invalid_spec}, {acc, _err} -> {acc, true}
+      {:spec, _}, {acc, err} -> {acc, err}
+    end)
+  end
+
   defp format_with_args(_segments, [], _spec_count, acc, had_error) do
     {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), had_error}
   end
@@ -257,15 +273,63 @@ defmodule Bash.Builtin.Printf do
     format_once(rest, args, [str | acc], had_error)
   end
 
+  defp format_once([{:invalid_spec} | rest], args, acc, _had_error) do
+    format_once(rest, args, acc, true)
+  end
+
   defp format_once([{:spec, spec} | rest], args, acc, had_error) do
+    {spec, args} = resolve_dynamic_width_precision(spec, args)
+
     {arg, remaining_args} =
       case args do
         [a | r] -> {a, r}
         [] -> {default_for_spec(spec.specifier), []}
       end
 
-    {formatted, arg_error} = format_arg(spec, arg)
-    format_once(rest, remaining_args, [formatted | acc], had_error or arg_error)
+    case format_arg(spec, arg) do
+      {:stop, partial} ->
+        {acc |> Enum.reverse() |> IO.iodata_to_binary() |> Kernel.<>(partial), [], had_error}
+
+      {formatted, arg_error} ->
+        format_once(rest, remaining_args, [formatted | acc], had_error or arg_error)
+    end
+  end
+
+  defp resolve_dynamic_width_precision(spec, args) do
+    {width, args} =
+      case spec.width do
+        :dynamic ->
+          case args do
+            [w | rest] -> {parse_int_arg(w), rest}
+            [] -> {0, []}
+          end
+
+        w ->
+          {w, args}
+      end
+
+    {precision, args} =
+      case spec.precision do
+        :dynamic ->
+          case args do
+            [p | rest] -> {parse_int_arg(p), rest}
+            [] -> {0, []}
+          end
+
+        p ->
+          {p, args}
+      end
+
+    {%{spec | width: width, precision: precision}, args}
+  end
+
+  defp parse_int_arg(arg) when is_integer(arg), do: arg
+
+  defp parse_int_arg(arg) do
+    case Integer.parse(to_string(arg)) do
+      {n, _} -> n
+      :error -> 0
+    end
   end
 
   defp default_for_spec(spec) when spec in [:string, :escape_string, :quoted, :char], do: ""
@@ -334,14 +398,14 @@ defmodule Bash.Builtin.Printf do
   defp format_arg(%{specifier: :scientific_lower} = spec, arg) do
     num = parse_float(arg)
     precision = spec.precision || 6
-    str = format_scientific(num * 1.0, precision) |> String.downcase()
+    str = format_scientific(num * 1.0, precision + 1) |> String.downcase()
     {apply_numeric_format(str, num, spec), false}
   end
 
   defp format_arg(%{specifier: :scientific_upper} = spec, arg) do
     num = parse_float(arg)
     precision = spec.precision || 6
-    str = format_scientific(num * 1.0, precision) |> String.upcase()
+    str = format_scientific(num * 1.0, precision + 1) |> String.upcase()
     {apply_numeric_format(str, num, spec), false}
   end
 
@@ -372,8 +436,10 @@ defmodule Bash.Builtin.Printf do
   end
 
   defp format_arg(%{specifier: :escape_string} = spec, arg) do
-    str = to_string(arg) |> process_b_escapes()
-    {apply_width_precision(str, spec), false}
+    case to_string(arg) |> process_b_escapes() do
+      {:stop, str} -> {:stop, apply_width_precision(str, spec)}
+      str -> {apply_width_precision(str, spec), false}
+    end
   end
 
   defp format_arg(%{specifier: :quoted} = spec, arg) do
@@ -462,6 +528,16 @@ defmodule Bash.Builtin.Printf do
         true -> str
       end
 
+    zero_pad_allowed =
+      spec.specifier in [
+        :float,
+        :scientific_lower,
+        :scientific_upper,
+        :general_lower,
+        :general_upper
+      ] or
+        spec.precision == nil
+
     case spec.width do
       nil ->
         str
@@ -475,7 +551,7 @@ defmodule Bash.Builtin.Printf do
         if len >= width do
           str
         else
-          if :zero in spec.flags and :minus not in spec.flags and spec.precision == nil do
+          if :zero in spec.flags and :minus not in spec.flags and zero_pad_allowed do
             {sign, rest} =
               case str do
                 "+" <> r -> {"+", r}
@@ -493,7 +569,16 @@ defmodule Bash.Builtin.Printf do
   end
 
   defp format_scientific(num, precision) do
-    :io_lib.format("~.*e", [precision, num]) |> IO.iodata_to_binary()
+    raw = :io_lib.format("~.*e", [precision, num]) |> IO.iodata_to_binary()
+    normalize_scientific_exponent(raw)
+  end
+
+  defp normalize_scientific_exponent(str) do
+    Regex.replace(~r/([eE])([+-]?)(\d+)$/, str, fn _, e, sign, digits ->
+      sign = if sign == "", do: "+", else: sign
+      padded = String.pad_leading(digits, 2, "0")
+      e <> sign <> padded
+    end)
   end
 
   defp format_general(num, precision, hash_flag) do
@@ -584,7 +669,7 @@ defmodule Bash.Builtin.Printf do
   end
 
   defp has_trailing_content?(rest) do
-    String.trim(rest) != ""
+    rest != ""
   end
 
   defp parse_char_code("") do
@@ -620,27 +705,34 @@ defmodule Bash.Builtin.Printf do
     if String.match?(str, ~r/^[a-zA-Z0-9@%_+=:,.\/-]+$/) do
       str
     else
-      "$'" <> escape_for_dollar_single_quote(str) <> "'"
+      bash_backslash_quote(str)
     end
   end
 
-  defp escape_for_dollar_single_quote(str) do
+  defp bash_backslash_quote(str) do
     str
-    |> String.to_charlist()
-    |> Enum.map(fn
-      ?\\ -> "\\\\"
-      ?' -> "\\'"
-      ?\n -> "\\n"
-      ?\t -> "\\t"
-      ?\r -> "\\r"
-      ?\a -> "\\a"
-      ?\b -> "\\b"
-      ?\f -> "\\f"
-      ?\v -> "\\v"
-      ?\e -> "\\E"
-      c when c >= 0x20 and c <= 0x7E -> <<c>>
-      c when c > 0x7E -> <<c::utf8>>
-      c -> "\\x" <> String.pad_leading(Integer.to_string(c, 16), 2, "0")
+    |> String.graphemes()
+    |> Enum.map(fn char ->
+      case char do
+        " " ->
+          "\\ "
+
+        "\t" ->
+          "$'\\t'"
+
+        "\n" ->
+          "$'\\n'"
+
+        "\r" ->
+          "$'\\r'"
+
+        c ->
+          if String.match?(c, ~r/^[a-zA-Z0-9@%_+=:,.\/-]$/) do
+            c
+          else
+            "\\" <> c
+          end
+      end
     end)
     |> IO.iodata_to_binary()
   end
@@ -654,7 +746,7 @@ defmodule Bash.Builtin.Printf do
   end
 
   defp process_b_escapes("\\c" <> _rest, acc) do
-    acc |> Enum.reverse() |> IO.iodata_to_binary()
+    {:stop, acc |> Enum.reverse() |> IO.iodata_to_binary()}
   end
 
   defp process_b_escapes("\\\\" <> rest, acc) do

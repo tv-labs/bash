@@ -41,7 +41,9 @@ defmodule Bash.SyntaxError do
 
   @impl true
   def message(%__MODULE__{code: code, script: script, line: line, column: col, hint: hint}) do
-    lines = String.split(script, "\n")
+    line = if is_integer(line), do: line, else: 1
+    col = if is_integer(col), do: col, else: 0
+    lines = String.split(script || "", "\n")
     script_line = Enum.at(lines, line - 1, "")
     line_len = String.length(script_line)
 

@@ -105,44 +105,78 @@ defmodule Bash.AST.If do
         _stdin,
         session_state
       ) do
-    # Execute the condition
-    case Executor.execute(condition, session_state, nil) do
-      {:ok, result, updates} ->
-        var_updates = Map.get(updates, :variables, %{})
-        new_variables = Map.merge(session_state.variables, var_updates)
-        session_state = %{session_state | variables: new_variables}
+    # Execute the condition with errexit suppressed (POSIX: errexit is ignored
+    # for the compound list following if/elif)
+    original_options = session_state.options
+    condition_state = Helpers.suppress_errexit(session_state)
 
-        execute_if_branch(
-          result.exit_code,
-          body,
-          elif_clauses,
-          else_body,
-          session_state,
-          var_updates
-        )
+    {condition_options, condition_vars, exit_code} =
+      case Executor.execute(condition, condition_state, nil) do
+        {:ok, result, updates} ->
+          vars = Map.get(updates, :variables, %{})
+          opts = Map.get(updates, :options, session_state.options)
+          {opts, vars, result.exit_code}
 
-      {:ok, result} ->
-        execute_if_branch(
-          result.exit_code,
-          body,
-          elif_clauses,
-          else_body,
-          session_state,
-          %{}
-        )
+        {:ok, result} ->
+          {session_state.options, %{}, result.exit_code}
 
-      {:error, result} ->
-        # Condition failed (non-zero exit) - try elif or else
-        execute_if_branch(
-          result.exit_code || 1,
-          body,
-          elif_clauses,
-          else_body,
-          session_state,
-          %{}
-        )
+        {:error, result, updates} ->
+          vars = Map.get(updates, :variables, %{})
+          opts = Map.get(updates, :options, session_state.options)
+          {opts, vars, result.exit_code || 1}
+
+        {:error, result} ->
+          {session_state.options, %{}, result.exit_code || 1}
+      end
+
+    # Apply condition's variable and option changes for the branch body
+    new_variables = Map.merge(session_state.variables, condition_vars)
+    branch_session = %{session_state | variables: new_variables, options: condition_options}
+
+    branch_result =
+      execute_if_branch(
+        exit_code,
+        body,
+        elif_clauses,
+        else_body,
+        branch_session,
+        condition_vars
+      )
+
+    # Ensure options changes from condition propagate to caller
+    ensure_options_propagated(branch_result, original_options, condition_options)
+  end
+
+  defp ensure_options_propagated(
+         {status, result, state_updates},
+         original_options,
+         condition_options
+       )
+       when status in [:ok, :error] do
+    final_options = Map.get(state_updates, :options, condition_options)
+
+    if final_options != original_options do
+      {status, result, Map.put(state_updates, :options, final_options)}
+    else
+      {status, result, Map.delete(state_updates, :options)}
     end
   end
+
+  defp ensure_options_propagated(
+         {:exit, result, state_updates},
+         original_options,
+         condition_options
+       ) do
+    final_options = Map.get(state_updates, :options, condition_options)
+
+    if final_options != original_options do
+      {:exit, result, Map.put(state_updates, :options, final_options)}
+    else
+      {:exit, result, state_updates}
+    end
+  end
+
+  defp ensure_options_propagated(other, _original_options, _condition_options), do: other
 
   # Helper for if statement branch selection
   defp execute_if_branch(0, body, _elif_clauses, _else_body, session_state, env_updates) do
@@ -170,7 +204,9 @@ defmodule Bash.AST.If do
   defp try_elif_clauses([], _session_state, _env_updates), do: :not_executed
 
   defp try_elif_clauses([{condition, body} | rest], session_state, env_updates) do
-    case Executor.execute(condition, session_state, nil) do
+    condition_state = Helpers.suppress_errexit(session_state)
+
+    case Executor.execute(condition, condition_state, nil) do
       {:ok, result, updates} ->
         merged_vars = Map.merge(env_updates, Map.get(updates, :variables, %{}))
         new_variables = Map.merge(session_state.variables, merged_vars)

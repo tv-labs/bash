@@ -228,8 +228,10 @@ defmodule Bash.AST.WhileLoop do
 
       stmt_session = %{session_state | variables: stmt_new_variables}
 
+      condition_state = Helpers.suppress_errexit(stmt_session)
+
       condition_result =
-        case Executor.execute(condition, stmt_session, effective_stdin) do
+        case Executor.execute(condition, condition_state, effective_stdin) do
           {:ok, result, updates} ->
             var_from_cond = Map.get(updates, :variables, %{})
 
@@ -315,11 +317,13 @@ defmodule Bash.AST.WhileLoop do
     end
   end
 
-  defp execute_loop_body([], _session, env_acc) do
-    {:ok, %{exit_code: 0}, env_acc}
+  defp execute_loop_body(stmts, session_state, env_acc, last_exit \\ 0)
+
+  defp execute_loop_body([], _session, env_acc, last_exit) do
+    {:ok, %{exit_code: last_exit}, env_acc}
   end
 
-  defp execute_loop_body([stmt | rest], session_state, env_acc) do
+  defp execute_loop_body([stmt | rest], session_state, env_acc, _last_exit) do
     stmt_new_variables =
       Map.merge(
         session_state.variables,
@@ -329,8 +333,11 @@ defmodule Bash.AST.WhileLoop do
     stmt_session = %{session_state | variables: stmt_new_variables}
 
     case Executor.execute(stmt, stmt_session, nil) do
-      {:ok, _result, updates} ->
+      {:ok, result, updates} ->
         var_updates = Map.get(updates, :variables, %{})
+
+        new_options =
+          if Map.has_key?(updates, :options), do: updates.options, else: session_state.options
 
         var_values =
           Map.new(var_updates, fn {k, v} ->
@@ -339,10 +346,20 @@ defmodule Bash.AST.WhileLoop do
           end)
 
         new_env = Map.merge(env_acc, var_values)
-        execute_loop_body(rest, session_state, new_env)
 
-      {:ok, _result} ->
-        execute_loop_body(rest, session_state, env_acc)
+        if Helpers.errexit_should_halt?(result, new_options, stmt_session, stmt) do
+          {:exit, %{exit_code: result.exit_code}, new_env}
+        else
+          new_session = %{session_state | options: new_options}
+          execute_loop_body(rest, new_session, new_env, result.exit_code || 0)
+        end
+
+      {:ok, result} ->
+        if Helpers.errexit_should_halt?(result, session_state.options, stmt_session, stmt) do
+          {:exit, %{exit_code: result.exit_code}, env_acc}
+        else
+          execute_loop_body(rest, session_state, env_acc, result.exit_code || 0)
+        end
 
       {:break, result, levels} ->
         {:break, %{exit_code: result.exit_code}, levels, env_acc}
