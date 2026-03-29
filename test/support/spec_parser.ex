@@ -198,8 +198,8 @@ defmodule Bash.SpecParser do
     end
   end
 
-  defp parse_inline_stdout_for_bash_in_list(lines, acc) do
-    case find_bash_in_list_value(lines, "stdout: ") do
+  defp parse_inline_stdout_for_bash_in_list(lines, acc, prefix \\ "## OK ") do
+    case find_bash_in_list_value(lines, "stdout: ", prefix) do
       nil -> acc
       value -> Map.put(acc, :stdout, value <> "\n")
     end
@@ -212,8 +212,8 @@ defmodule Bash.SpecParser do
     end
   end
 
-  defp parse_stdout_json_for_bash_in_list(lines, acc) do
-    case find_bash_in_list_value(lines, "stdout-json: ") do
+  defp parse_stdout_json_for_bash_in_list(lines, acc, prefix \\ "## OK ") do
+    case find_bash_in_list_value(lines, "stdout-json: ", prefix) do
       nil -> acc
       json_str -> Map.put(acc, :stdout, JSON.decode!(json_str))
     end
@@ -226,13 +226,12 @@ defmodule Bash.SpecParser do
     end
   end
 
-  defp parse_multiline_stdout_for_bash_in_list(lines, acc) do
-    # Look for patterns like "## OK bash/zsh STDOUT:" or "## OK zsh/bash STDOUT:"
+  defp parse_multiline_stdout_for_bash_in_list(lines, acc, prefix \\ "## OK ") do
     marker =
       Enum.find(lines, fn line ->
-        String.starts_with?(line, "## OK ") &&
+        String.starts_with?(line, prefix) &&
           String.ends_with?(line, "STDOUT:") &&
-          bash_in_ok_shell_list?(line)
+          bash_in_shell_list_line?(line, prefix)
       end)
 
     case marker do
@@ -248,8 +247,8 @@ defmodule Bash.SpecParser do
     end
   end
 
-  defp parse_status_for_bash_in_list(lines, acc) do
-    case find_bash_in_list_value(lines, "status: ") do
+  defp parse_status_for_bash_in_list(lines, acc, prefix \\ "## OK ") do
+    case find_bash_in_list_value(lines, "status: ", prefix) do
       nil -> acc
       value -> Map.put(acc, :status, String.to_integer(value))
     end
@@ -264,10 +263,11 @@ defmodule Bash.SpecParser do
     end)
   end
 
-  defp find_bash_in_list_value(lines, suffix) do
-    # Match patterns like "## OK bash/zsh stdout: value" or "## OK zsh/bash stdout: value"
+  defp find_bash_in_list_value(lines, suffix, prefix \\ "## OK ") do
+    # Match patterns like "## OK bash/zsh stdout: value" or "## BUG bash/zsh stdout: value"
     Enum.find_value(lines, fn line ->
-      with "## OK " <> rest <- line,
+      with true <- String.starts_with?(line, prefix),
+           rest = String.trim_leading(line, prefix),
            [shells, directive_rest] <- String.split(rest, " ", parts: 2),
            true <- String.contains?(shells, "/"),
            true <- "bash" in String.split(shells, "/"),
@@ -280,8 +280,17 @@ defmodule Bash.SpecParser do
   end
 
   defp bash_in_ok_shell_list?(line) do
-    case Regex.run(~r/^## OK ([a-z\/]+) STDOUT:$/, line) do
-      [_, shells] -> "bash" in String.split(shells, "/")
+    bash_in_shell_list_line?(line, "## OK ")
+  end
+
+  defp bash_in_shell_list_line?(line, prefix) do
+    with true <- String.starts_with?(line, prefix),
+         rest = String.trim_leading(line, prefix),
+         true <- String.ends_with?(rest, "STDOUT:"),
+         [shells | _] <- String.split(rest, " ", parts: 2),
+         true <- "bash" in String.split(shells, "/") do
+      true
+    else
       _ -> false
     end
   end
@@ -291,7 +300,7 @@ defmodule Bash.SpecParser do
            Enum.find_index(lines, &(&1 == marker)),
          rest = Enum.drop(lines, start_idx + 1),
          end_idx when not is_nil(end_idx) <-
-           Enum.find_index(rest, &(&1 == "## END")) do
+           find_block_end(rest) do
       rest
       |> Enum.take(end_idx)
       |> Enum.join("\n")
@@ -299,5 +308,15 @@ defmodule Bash.SpecParser do
     else
       _ -> nil
     end
+  end
+
+  defp find_block_end(lines) do
+    Enum.find_index(lines, fn line ->
+      line == "## END" or
+        (String.starts_with?(line, "## ") and line != "## END" and
+           (String.starts_with?(line, "## OK ") or
+              String.starts_with?(line, "## BUG ") or
+              String.starts_with?(line, "## N-I ")))
+    end)
   end
 end
