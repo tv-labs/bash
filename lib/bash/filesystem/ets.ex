@@ -68,19 +68,17 @@ defmodule Bash.Filesystem.ETS do
   def new(seed) when is_map(seed) do
     tid = :ets.new(:bash_filesystem, [:set, :public, {:keypos, 1}])
 
-    for path <- @posix_skeleton do
-      insert_dir(tid, path, 0o755)
-    end
+    Enum.each(@posix_skeleton, &insert_dir(tid, &1, 0o755))
 
-    for {path, value} <- seed do
-      for parent <- parent_paths(path) do
+    Enum.each(seed, fn {path, value} ->
+      Enum.each(parent_paths(path), fn parent ->
         unless :ets.member(tid, parent) do
           insert_dir(tid, parent, 0o755)
         end
-      end
+      end)
 
       insert_seed(tid, path, value)
-    end
+    end)
 
     tid
   end
@@ -232,15 +230,18 @@ defmodule Bash.Filesystem.ETS do
     parents =
       parts
       |> Enum.drop(-1)
-      |> Enum.scan([], fn part, acc -> acc ++ [part] end)
-      |> Enum.map(&Path.join/1)
+      |> Enum.scan([], fn part, acc -> [part | acc] end)
+      |> Enum.map(fn reversed -> reversed |> Enum.reverse() |> Path.join() end)
 
     case parents do
       [] ->
         ["/"]
 
-      [first | _] = list ->
-        if first == "/", do: list, else: ["/"] ++ list
+      ["/" | _] = list ->
+        list
+
+      list ->
+        ["/" | list]
     end
   end
 end
