@@ -277,10 +277,60 @@ defmodule Bash.Filesystem.ETS do
   end
 
   @impl true
-  def ls(_tid, _path), do: {:error, :enotsup}
+  def ls(tid, dir_path) do
+    if :ets.member(tid, dir_path) and dir?(tid, dir_path) do
+      entries =
+        :ets.foldl(
+          fn
+            {{:_device, _}, _}, acc ->
+              acc
+
+            {path, _type, _content, _stat}, acc ->
+              parent = Path.dirname(path)
+
+              if parent == dir_path and path != dir_path do
+                [Path.basename(path) | acc]
+              else
+                acc
+              end
+          end,
+          [],
+          tid
+        )
+
+      {:ok, Enum.sort(entries)}
+    else
+      {:error, :enoent}
+    end
+  end
 
   @impl true
-  def wildcard(_tid, _pattern, _opts), do: []
+  def wildcard(tid, pattern, _opts) do
+    regex_source =
+      pattern
+      |> Regex.escape()
+      |> String.replace("\\*", "[^/]*")
+      |> String.replace("\\?", "[^/]")
+
+    case Regex.compile("^" <> regex_source <> "$") do
+      {:ok, regex} ->
+        :ets.foldl(
+          fn
+            {{:_device, _}, _}, acc ->
+              acc
+
+            {path, _type, _content, _stat}, acc ->
+              if Regex.match?(regex, path), do: [path | acc], else: acc
+          end,
+          [],
+          tid
+        )
+        |> Enum.sort()
+
+      {:error, _} ->
+        []
+    end
+  end
 
   defp insert_dir(tid, path, mode) do
     stat = dir_stat(mode)

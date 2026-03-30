@@ -369,6 +369,76 @@ defmodule Bash.Filesystem.ETSTest do
     end
   end
 
+  describe "ls/2" do
+    test "lists directory contents" do
+      tid =
+        ETS.new(%{
+          "/workspace/a.txt" => "a",
+          "/workspace/b.txt" => "b",
+          "/workspace/sub" => {:dir, nil}
+        })
+
+      assert {:ok, entries} = ETS.ls(tid, "/workspace")
+      assert Enum.sort(entries) == ["a.txt", "b.txt", "sub"]
+      :ets.delete(tid)
+    end
+
+    test "returns error for nonexistent directory" do
+      tid = ETS.new()
+      assert {:error, :enoent} = ETS.ls(tid, "/nonexistent")
+      :ets.delete(tid)
+    end
+
+    test "returns empty list for empty directory" do
+      tid = ETS.new(%{"/empty" => {:dir, nil}})
+      assert {:ok, []} = ETS.ls(tid, "/empty")
+      :ets.delete(tid)
+    end
+
+    test "lists root" do
+      tid = ETS.new()
+      assert {:ok, entries} = ETS.ls(tid, "/")
+      assert "tmp" in entries
+      assert "dev" in entries
+      assert "bin" in entries
+      :ets.delete(tid)
+    end
+  end
+
+  describe "wildcard/3" do
+    test "matches glob pattern" do
+      tid =
+        ETS.new(%{
+          "/tmp/a.txt" => "a",
+          "/tmp/b.txt" => "b",
+          "/tmp/c.log" => "c"
+        })
+
+      result = ETS.wildcard(tid, "/tmp/*.txt", [])
+      assert Enum.sort(result) == ["/tmp/a.txt", "/tmp/b.txt"]
+      :ets.delete(tid)
+    end
+
+    test "matches single-char wildcard" do
+      tid =
+        ETS.new(%{
+          "/tmp/ab" => "ab",
+          "/tmp/ac" => "ac",
+          "/tmp/abc" => "abc"
+        })
+
+      result = ETS.wildcard(tid, "/tmp/a?", [])
+      assert Enum.sort(result) == ["/tmp/ab", "/tmp/ac"]
+      :ets.delete(tid)
+    end
+
+    test "returns empty list for no matches" do
+      tid = ETS.new()
+      assert ETS.wildcard(tid, "/tmp/*.xyz", []) == []
+      :ets.delete(tid)
+    end
+  end
+
   describe "open/handle_write/handle_close flow" do
     test "write mode creates file on close" do
       tid = ETS.new()
