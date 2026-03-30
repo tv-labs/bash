@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## unreleased
+
+- There is now a pluggable Filesystem
+- The test suite has been massively improved and therefore improved parser correctness
+
 ## 0.4.0 (2026-03-12)
 
 - BREAKING - Removed the `~b` sigil. The `~BASH` sigil now interpolates. Improved compile-time validation.
@@ -27,11 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixes hex.pm release. Dang `README.md` wasn't included causing a compile
 error. :facepalm:
 
-## 0.3.0 (2026-01-30) 
+## 0.3.0 (2026-01-30)
 
-- Remove `Bash.Interop.IO` and other builtin context handling to consolidate 
-into `Bash.Context`. Expanded and clarified the `defbash` return signals and 
-how to update state. An issue with the now-deleted `Bash.Interop.IO` was that 
+- Remove `Bash.Interop.IO` and other builtin context handling to consolidate
+into `Bash.Context`. Expanded and clarified the `defbash` return signals and
+how to update state. An issue with the now-deleted `Bash.Interop.IO` was that
 it would accumulate state where we intend be focused on streams.
 
 ## 0.2.1 (2026-01-29)
