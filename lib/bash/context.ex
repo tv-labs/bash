@@ -510,9 +510,30 @@ defmodule Bash.Context do
   def update_state(updates) when is_map(updates) do
     ctx = get_context()
     normalized = normalize_variable_updates(updates)
-    new_updates = Map.merge(ctx.state_updates, normalized)
+    new_updates = merge_state_updates(ctx.state_updates, normalized)
     Process.put(@context_key, %{ctx | state_updates: new_updates})
     :ok
+  end
+
+  defp merge_state_updates(existing, new_updates) do
+    merged = Map.merge(existing, new_updates)
+
+    merged =
+      case {Map.get(existing, :local_vars), Map.get(new_updates, :local_vars)} do
+        {%MapSet{} = old_set, %MapSet{} = new_set} ->
+          Map.put(merged, :local_vars, MapSet.union(old_set, new_set))
+
+        _ ->
+          merged
+      end
+
+    case {Map.get(existing, :save_frame), Map.get(new_updates, :save_frame)} do
+      {%{} = old_frame, %{} = new_frame} ->
+        Map.put(merged, :save_frame, Map.merge(old_frame, new_frame))
+
+      _ ->
+        merged
+    end
   end
 
   defp normalize_variable_updates(%{variables: vars} = updates) when is_map(vars) do

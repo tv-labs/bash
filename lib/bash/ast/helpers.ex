@@ -202,8 +202,12 @@ defmodule Bash.AST.Helpers do
   end
 
   # Helper to convert Word to string, expanding variables and command substitution
-  def word_to_string(%AST.Word{parts: parts}, session_state) do
-    Enum.map_join(parts, "", &expand_part(&1, session_state))
+  def word_to_string(%AST.Word{parts: parts, quoted: quoted}, session_state) do
+    if quoted in [:single, :double] do
+      Enum.map_join(parts, "", &expand_part_no_tilde(&1, session_state))
+    else
+      Enum.map_join(parts, "", &expand_part(&1, session_state))
+    end
   end
 
   def word_to_string(str, _session_state) when is_binary(str), do: str
@@ -215,6 +219,11 @@ defmodule Bash.AST.Helpers do
   #
   # Returns {string, var_updates} where var_updates is a map of name => Variable struct.
   @doc false
+  def word_to_string_with_updates(%AST.Word{parts: parts, quoted: :single}, session_state) do
+    result = Enum.map_join(parts, "", &expand_part_no_tilde(&1, session_state))
+    {result, %{}}
+  end
+
   def word_to_string_with_updates(%AST.Word{parts: parts}, session_state) do
     {result_parts, env_updates, _final_state} =
       Enum.reduce(parts, {[], %{}, session_state}, fn part,
@@ -284,6 +293,12 @@ defmodule Bash.AST.Helpers do
   defp expand_part_with_updates(part, session_state) do
     {expand_part(part, session_state), %{}}
   end
+
+  defp expand_part_no_tilde({:literal, text}, session_state) do
+    expand_glob_pattern(text, session_state)
+  end
+
+  defp expand_part_no_tilde(part, session_state), do: expand_part(part, session_state)
 
   # Helper to expand a single part (used by word_to_string and word_to_string_with_updates)
   defp expand_part({:literal, text}, session_state) do

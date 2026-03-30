@@ -181,6 +181,14 @@ defmodule Bash.Builtin.Declare do
       update_state(variables: var_updates)
     end
 
+    if opts[:local_mode] do
+      local_names = var_updates |> Map.keys() |> MapSet.new()
+
+      if MapSet.size(local_names) > 0 do
+        update_state(%{local_vars: local_names})
+      end
+    end
+
     exit_code = if Enum.empty?(errors), do: 0, else: 1
     {:ok, exit_code}
   end

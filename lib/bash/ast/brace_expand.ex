@@ -182,38 +182,20 @@ defmodule Bash.AST.BraceExpand do
     {start_num, ""} = Integer.parse(start_str)
     {end_num, ""} = Integer.parse(end_str)
 
-    # Determine padding width from input
     pad_width = zero_pad || 0
 
-    # Use absolute value of step for the actual increment
-    abs_step = if step, do: abs(step), else: 1
+    # Bash ignores step sign and treats 0 as 1
+    abs_step = if step, do: max(abs(step), 1), else: 1
 
     cond do
-      # Zero step is always invalid
-      step == 0 ->
-        {:error, :invalid_range}
-
-      # Singleton range - always valid regardless of step sign
       start_num == end_num ->
         {:ok, [format_padded_number(start_num, pad_width)]}
 
-      # Ascending range
       start_num < end_num ->
-        if step != nil and step < 0 do
-          # Negative step on ascending range is invalid
-          {:error, :invalid_range}
-        else
-          {:ok, format_numeric_range(start_num..end_num//abs_step, pad_width)}
-        end
+        {:ok, format_numeric_range(start_num..end_num//abs_step, pad_width)}
 
-      # Descending range (start_num > end_num)
       true ->
-        if step != nil and step > 0 do
-          # Positive step on descending range is invalid
-          {:error, :invalid_range}
-        else
-          {:ok, format_numeric_range(start_num..end_num//-abs_step, pad_width)}
-        end
+        {:ok, format_numeric_range(start_num..end_num//-abs_step, pad_width)}
     end
   end
 
@@ -237,32 +219,18 @@ defmodule Bash.AST.BraceExpand do
   defp format_padded_number(n, _pad_width), do: Integer.to_string(n)
 
   defp expand_alpha_range(<<start_char>>, <<end_char>>, step) do
-    abs_step = if step, do: abs(step), else: 1
+    # Bash ignores step sign and treats 0 as 1
+    abs_step = if step, do: max(abs(step), 1), else: 1
 
     cond do
-      # Zero step is invalid
-      step == 0 ->
-        {:error, :invalid_range}
-
-      # Singleton - always valid
       start_char == end_char ->
         {:ok, [<<start_char>>]}
 
-      # Ascending
       start_char < end_char ->
-        if step != nil and step < 0 do
-          {:error, :invalid_range}
-        else
-          {:ok, start_char..end_char//abs_step |> Enum.to_list() |> Enum.map(&<<&1>>)}
-        end
+        {:ok, start_char..end_char//abs_step |> Enum.to_list() |> Enum.map(&<<&1>>)}
 
-      # Descending
       true ->
-        if step != nil and step > 0 do
-          {:error, :invalid_range}
-        else
-          {:ok, start_char..end_char//-abs_step |> Enum.to_list() |> Enum.map(&<<&1>>)}
-        end
+        {:ok, start_char..end_char//-abs_step |> Enum.to_list() |> Enum.map(&<<&1>>)}
     end
   end
 end

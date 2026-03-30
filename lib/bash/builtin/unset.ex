@@ -238,22 +238,37 @@ defmodule Bash.Builtin.Unset do
     end
   end
 
-  # Build state updates for deleted variables, functions, and array element updates
-  defp build_updates(var_deletes, func_deletes, array_updates, _session_state) do
+  defp build_updates(var_deletes, func_deletes, array_updates, session_state) do
     updates = %{}
 
-    # For variables, we need to track which ones to delete
     updates =
       if Enum.empty?(var_deletes) and map_size(array_updates) == 0 do
         updates
       else
-        deleted_vars = Map.new(var_deletes, fn name -> {name, nil} end)
+        saved_vars = Map.get(session_state, :saved_vars, [])
+        local_vars = Map.get(session_state, :local_vars, MapSet.new())
+
+        deleted_vars =
+          Map.new(var_deletes, fn name ->
+            saved = find_saved_value(name, saved_vars)
+
+            cond do
+              MapSet.member?(local_vars, name) and saved != nil ->
+                {name, saved}
+
+              MapSet.member?(local_vars, name) ->
+                {name, nil}
+
+              true ->
+                {name, saved}
+            end
+          end)
+
         new_variables = Map.merge(array_updates, deleted_vars)
 
         Map.put(updates, :variables, new_variables)
       end
 
-    # For functions, we track which ones to delete
     updates =
       if Enum.empty?(func_deletes) do
         updates
@@ -265,5 +280,14 @@ defmodule Bash.Builtin.Unset do
       end
 
     updates
+  end
+
+  defp find_saved_value(_name, []), do: nil
+
+  defp find_saved_value(name, [frame | rest]) do
+    case Map.get(frame, name) do
+      nil -> find_saved_value(name, rest)
+      saved_var -> saved_var
+    end
   end
 end

@@ -100,6 +100,8 @@ defmodule Bash.Session do
     in_loop: false,
     current_function_name: "main",
     call_stack: [],
+    local_vars: MapSet.new(),
+    saved_vars: [],
     # Runtime snapshot at session start (ms) for `times` builtin
     start_runtime_ms: 0,
     # Directory stack for pushd/popd/dirs
@@ -155,6 +157,8 @@ defmodule Bash.Session do
           command_policy: CommandPolicy.t(),
           in_function: boolean(),
           in_loop: boolean(),
+          local_vars: MapSet.t(String.t()),
+          saved_vars: [map()],
           call_stack: [
             %{line_number: pos_integer(), function_name: String.t(), source_file: String.t()}
           ],

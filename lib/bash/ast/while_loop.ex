@@ -272,6 +272,40 @@ defmodule Bash.AST.WhileLoop do
             effective_stdin
           )
 
+        {:error, result, updates} ->
+          var_from_cond = Map.get(updates, :variables, %{})
+
+          var_values =
+            Map.new(var_from_cond, fn {k, v} ->
+              val = Variable.get(v, nil)
+              {k, if(is_binary(val), do: val, else: "")}
+            end)
+
+          merged = Map.merge(env_updates, var_values)
+
+          evaluate_while_condition(
+            result.exit_code || 1,
+            merged,
+            condition,
+            body,
+            until_mode,
+            session_state,
+            iteration,
+            effective_stdin
+          )
+
+        {:error, result} ->
+          evaluate_while_condition(
+            result.exit_code || 1,
+            env_updates,
+            condition,
+            body,
+            until_mode,
+            session_state,
+            iteration,
+            effective_stdin
+          )
+
         {:break, result, levels} ->
           {:break, result, levels, env_updates, iteration}
 

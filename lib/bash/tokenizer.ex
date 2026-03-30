@@ -333,32 +333,74 @@ defmodule Bash.Tokenizer do
 
   defp maybe_track_heredoc(_token, _acc, state), do: state
 
-  # Extract delimiter string and whether to expand variables
+  # Extract delimiter string and whether to expand variables.
+  # Handles mixed quoted/unquoted parts like <<'EOF'"2" producing delimiter "EOF2".
+  # Any quoted part disables expansion.
   defp extract_heredoc_delimiter(parts) do
-    case parts do
-      # Quoted delimiter - no expansion
-      [{:single_quoted, delim}] ->
-        {delim, false}
+    {text, has_quotes} =
+      Enum.reduce(parts, {"", false}, fn
+        {:literal, s}, {acc, q} ->
+          {acc <> s, q}
 
-      [{:double_quoted, inner_parts}] ->
-        delim =
-          Enum.map_join(inner_parts, "", fn
-            {:literal, s} -> s
-            _ -> ""
-          end)
+        {:single_quoted, s}, {acc, _q} ->
+          {acc <> s, true}
 
-        {delim, false}
+        {:double_quoted, inner_parts}, {acc, _q} ->
+          inner =
+            Enum.map_join(inner_parts, "", fn
+              {:literal, s} -> s
+              _ -> ""
+            end)
 
-      # Unquoted delimiter - allows expansion
+          {acc <> inner, true}
+
+        {:variable, name}, {acc, q} ->
+          {acc <> "${" <> name <> "}", q}
+
+        {:variable_braced, name, _opts}, {acc, q} ->
+          {acc <> "${" <> name <> "}", q}
+
+        {:command_sub, cmd}, {acc, q} ->
+          {acc <> "$(" <> cmd <> ")", q}
+
+        {:command_subst, tokens}, {acc, q} ->
+          inner = reconstruct_tokens_text(tokens)
+          {acc <> "$(" <> inner <> ")", q}
+
+        _, {acc, q} ->
+          {acc, q}
+      end)
+
+    {text, not has_quotes}
+  end
+
+  defp reconstruct_tokens_text(tokens) do
+    Enum.map_join(tokens, "", fn
+      {:word, parts, _, _} ->
+        Enum.map_join(parts, "", fn
+          {:literal, s} ->
+            s
+
+          {:single_quoted, s} ->
+            "'" <> s <> "'"
+
+          {:double_quoted, inner} ->
+            "\"" <>
+              Enum.map_join(inner, "", fn
+                {:literal, s} -> s
+                _ -> ""
+              end) <> "\""
+
+          _ ->
+            ""
+        end)
+
+      {:eof, _, _} ->
+        ""
+
       _ ->
-        delim =
-          Enum.map_join(parts, "", fn
-            {:literal, s} -> s
-            _ -> ""
-          end)
-
-        {delim, true}
-    end
+        ""
+    end)
   end
 
   # Consume heredoc content for all pending heredocs
@@ -604,7 +646,13 @@ defmodule Bash.Tokenizer do
         read_lbrace_or_brace_expansion(state)
 
       ?} ->
-        {:ok, {:rbrace, state.line, state.column}, advance(state)}
+        next = peek_next(state)
+
+        if next != nil and next not in @metacharacters do
+          read_word_starting_with_rbrace(state)
+        else
+          {:ok, {:rbrace, state.line, state.column}, advance(state)}
+        end
 
       ?< ->
         read_less(state)
@@ -627,15 +675,12 @@ defmodule Bash.Tokenizer do
         end
 
       c when c in ?0..?9 ->
-        # Check if this is an io_number (digit followed by < or >)
-        case peek_next(state) do
-          next when next in [?<, ?>] ->
-            # This is an io_number - read the digit and return
-            fd = c - ?0
-            {:ok, {:io_number, fd, state.line, state.column}, advance(state)}
+        # Check if this is an io_number (digits followed by < or >)
+        case try_read_io_number(state) do
+          {:ok, fd, new_state} ->
+            {:ok, {:io_number, fd, state.line, state.column}, new_state}
 
-          _ ->
-            # Just a regular word starting with a digit
+          :not_io_number ->
             read_word(state)
         end
 
@@ -644,13 +689,17 @@ defmodule Bash.Tokenizer do
     end
   end
 
-  defp read_io_number(state, acc) do
-    case peek_next(state) do
-      c when c in ?0..?9 ->
-        read_io_number(advance(state), acc * 10 + (c - ?0))
+  defp try_read_io_number(state) do
+    read_io_number_digits(state, 0, 0)
+  end
 
-      c when c in [?\<, ?\>] ->
-        {:io_number, acc, advance(state)}
+  defp read_io_number_digits(state, acc, count) do
+    case peek(state) do
+      c when c in ?0..?9 ->
+        read_io_number_digits(advance(state), acc * 10 + (c - ?0), count + 1)
+
+      c when c in [?<, ?>] and count > 0 ->
+        {:ok, acc, state}
 
       _ ->
         :not_io_number
@@ -1347,7 +1396,17 @@ defmodule Bash.Tokenizer do
           c when c in [nil, ?}, ?#] or c in @metacharacters ->
             {:ok, {:lbrace, start_line, start_col}, state1}
 
-          c when c not in [nil | @metacharacters] and c not in [?}, ?#] ->
+          ?{ ->
+            # Nested { might start a brace expansion (e.g., {{a,b})
+            case read_word_parts_after_brace(state1, [{:literal, "{"}]) do
+              {:ok, parts, final_state} ->
+                {:ok, {:word, parts, start_line, start_col}, final_state}
+
+              error ->
+                error
+            end
+
+          c ->
             {:error,
              "(SC1054) `{` is only a reserved word when followed by whitespace. Use `{ #{<<c>>}...` instead of `{#{<<c>>}...`",
              start_line, start_col}
@@ -1695,6 +1754,25 @@ defmodule Bash.Tokenizer do
     end
   end
 
+  defp read_word_starting_with_rbrace(state) do
+    start_line = state.line
+    start_col = state.column
+    state1 = advance(state)
+
+    case read_word_parts_after_brace(state1, [{:literal, "}"}]) do
+      {:ok, parts, new_state} ->
+        token = build_word_token(parts, start_line, start_col)
+
+        case token do
+          {:error, _, _, _} = err -> err
+          _ -> {:ok, token, new_state}
+        end
+
+      {:error, _, _, _} = err ->
+        err
+    end
+  end
+
   # If we just tokenized =~ inside a test expression, set the flag
   # so the next token is read as a regex pattern
   defp maybe_set_regex_op_flag({:word, [{:literal, "=~"}], _, _}, %{in_test_expr: true} = state) do
@@ -1965,7 +2043,7 @@ defmodule Bash.Tokenizer do
 
       [start_str, end_str, step_str] ->
         case Integer.parse(step_str) do
-          {step, ""} when step != 0 ->
+          {step, ""} ->
             zero_pad = detect_zero_padding(start_str, end_str)
 
             {:ok,

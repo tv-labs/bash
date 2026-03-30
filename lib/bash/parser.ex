@@ -739,11 +739,12 @@ defmodule Bash.Parser do
   defp parse_pipeline_continuation(first_cmd, state, commands, negate) do
     case current_token(state) do
       {:pipe, _line, _col} ->
-        state
-        |> advance()
-        |> skip_newlines()
-        |> parse_command()
-        |> case do
+        state = advance(state)
+        # Resolve any pending heredoc content tokens for the previous command
+        {commands, state} = resolve_pipeline_heredocs(commands, state)
+        state = skip_newlines(state)
+
+        case parse_command(state) do
           {:ok, cmd, new_state} ->
             parse_pipeline_continuation(first_cmd, new_state, [cmd | commands], negate)
 
@@ -766,6 +767,29 @@ defmodule Bash.Parser do
         }
 
         {:ok, pipeline, state}
+    end
+  end
+
+  # Resolve heredoc content tokens that appear between pipe and next command.
+  # This handles `cat <<EOF |\n...\nEOF\nnext_cmd` where heredoc_content
+  # tokens appear after the newline following `|`.
+  defp resolve_pipeline_heredocs(commands, state) do
+    state = skip_newlines(state)
+
+    case current_token(state) do
+      {:heredoc_content, content, delimiter, _strip_tabs} ->
+        resolved =
+          Enum.map(commands, fn cmd ->
+            case resolve_heredoc_in_stmt(cmd, content, delimiter) do
+              {:resolved, new_cmd} -> new_cmd
+              :not_found -> cmd
+            end
+          end)
+
+        resolve_pipeline_heredocs(resolved, advance(state))
+
+      _ ->
+        {commands, state}
     end
   end
 
@@ -945,17 +969,24 @@ defmodule Bash.Parser do
           {:ok, compound, state}
         end
 
-      # Redirect-only command (e.g., 2>&1, > file.txt)
+      # Redirect before command name (e.g., <<EOF tac, 2>&1, > file.txt)
+      # Parse the redirect(s) first, then the command name and remaining args
       token when assignments == [] and is_redirect_token_early(token) ->
         case parse_command_args(state, [], []) do
           {:error, _, _, _} = err ->
             err
 
-          {_args, redirects, state} ->
+          {args, redirects, state} ->
+            {name, cmd_args} =
+              case Enum.reverse(args) do
+                [cmd_name | rest] -> {cmd_name, rest}
+                [] -> {build_word([{:literal, ":"}], line, col), []}
+              end
+
             cmd = %AST.Command{
               meta: AST.meta(line, col),
-              name: build_word([{:literal, ":"}], line, col),
-              args: [],
+              name: name,
+              args: cmd_args,
               redirects: redirects,
               env_assignments: []
             }
@@ -1283,47 +1314,12 @@ defmodule Bash.Parser do
     end)
   end
 
+  defp parse_redirect(:duplicate, fd, line, col, state) do
+    parse_dup_or_move_target(fd, line, col, state)
+  end
+
   defp parse_redirect(direction, fd, line, col, state) do
     case current_token(state) do
-      {:word, [{:literal, "-"}], _, _} when direction == :duplicate ->
-        # Close file descriptor: <&- or >&-
-        redirect = %AST.Redirect{
-          meta: AST.meta(line, col),
-          direction: :close,
-          fd: fd,
-          target: :close
-        }
-
-        {:ok, redirect, advance(state)}
-
-      {:word, parts, _, _} when direction == :duplicate ->
-        # For duplicate (>&), target is a file descriptor number like "1" or "2"
-        target_word = build_word(parts, line, col)
-        target_str = to_string(target_word)
-
-        case Integer.parse(target_str) do
-          {target_fd, ""} ->
-            redirect = %AST.Redirect{
-              meta: AST.meta(line, col),
-              direction: direction,
-              fd: fd,
-              target: {:fd, target_fd}
-            }
-
-            {:ok, redirect, advance(state)}
-
-          _ ->
-            # Not a number, treat as file
-            redirect = %AST.Redirect{
-              meta: AST.meta(line, col),
-              direction: direction,
-              fd: fd,
-              target: {:file, target_word}
-            }
-
-            {:ok, redirect, advance(state)}
-        end
-
       {:word, parts, _, _} ->
         target_word = build_word(parts, line, col)
 
@@ -1339,6 +1335,84 @@ defmodule Bash.Parser do
       token ->
         {tline, tcol} = token_position(token)
         {:error, "expected file for redirect", tline, tcol}
+    end
+  end
+
+  # Parse the target of >&N, >&-, or >&N- (dup, close, or move)
+  defp parse_dup_or_move_target(fd, line, col, state) do
+    case current_token(state) do
+      {:word, [{:literal, "-"}], _, _} ->
+        redirect = %AST.Redirect{
+          meta: AST.meta(line, col),
+          direction: :close,
+          fd: fd,
+          target: :close
+        }
+
+        {:ok, redirect, advance(state)}
+
+      {:word, [{:literal, target_str}], _, _} ->
+        cond do
+          String.ends_with?(target_str, "-") ->
+            fd_str = String.trim_trailing(target_str, "-")
+
+            case Integer.parse(fd_str) do
+              {target_fd, ""} ->
+                redirect = %AST.Redirect{
+                  meta: AST.meta(line, col),
+                  direction: :move,
+                  fd: fd,
+                  target: {:fd, target_fd}
+                }
+
+                {:ok, redirect, advance(state)}
+
+              _ ->
+                {tline, tcol} = token_position(current_token(state))
+                {:error, "expected file descriptor", tline, tcol}
+            end
+
+          true ->
+            case Integer.parse(target_str) do
+              {target_fd, ""} ->
+                redirect = %AST.Redirect{
+                  meta: AST.meta(line, col),
+                  direction: :duplicate,
+                  fd: fd,
+                  target: {:fd, target_fd}
+                }
+
+                {:ok, redirect, advance(state)}
+
+              _ ->
+                target_word = build_word([{:literal, target_str}], line, col)
+
+                redirect = %AST.Redirect{
+                  meta: AST.meta(line, col),
+                  direction: :duplicate,
+                  fd: fd,
+                  target: {:file, target_word}
+                }
+
+                {:ok, redirect, advance(state)}
+            end
+        end
+
+      {:word, parts, _, _} ->
+        target_word = build_word(parts, line, col)
+
+        redirect = %AST.Redirect{
+          meta: AST.meta(line, col),
+          direction: :duplicate,
+          fd: fd,
+          target: {:file, target_word}
+        }
+
+        {:ok, redirect, advance(state)}
+
+      token ->
+        {tline, tcol} = token_position(token)
+        {:error, "expected file descriptor", tline, tcol}
     end
   end
 
@@ -1424,12 +1498,38 @@ defmodule Bash.Parser do
 
           {acc <> inner, true}
 
+        {:variable, name}, {acc, q} ->
+          {acc <> "${" <> name <> "}", q}
+
+        {:variable_braced, name, _opts}, {acc, q} ->
+          {acc <> "${" <> name <> "}", q}
+
+        {:command_sub, cmd}, {acc, q} ->
+          {acc <> "$(" <> cmd <> ")", q}
+
+        {:command_subst, tokens}, {acc, q} ->
+          inner = reconstruct_heredoc_delim_tokens(tokens)
+          {acc <> "$(" <> inner <> ")", q}
+
         _, {acc, q} ->
           {acc, q}
       end)
 
     # If any quoted parts, no expansion
     {text, not has_quotes}
+  end
+
+  defp reconstruct_heredoc_delim_tokens(tokens) do
+    Enum.map_join(tokens, "", fn
+      {:word, parts, _, _} ->
+        Enum.map_join(parts, "", fn
+          {:literal, s} -> s
+          _ -> ""
+        end)
+
+      _ ->
+        ""
+    end)
   end
 
   defp parse_fd_redirect(fd, line, col, state) do
@@ -1477,65 +1577,12 @@ defmodule Bash.Parser do
         end
 
       {:greaterand, _, _, _} ->
-        # 2>&1 style or 2>&- (close fd)
         state = advance(state)
-
-        case current_token(state) do
-          {:word, [{:literal, "-"}], _, _} ->
-            # Close file descriptor: >&- or 2>&-
-            redirect = %AST.Redirect{
-              meta: AST.meta(line, col),
-              direction: :close,
-              fd: fd,
-              target: :close
-            }
-
-            {:ok, redirect, advance(state)}
-
-          {:word, [{:literal, target_fd}], _, _} ->
-            redirect = %AST.Redirect{
-              meta: AST.meta(line, col),
-              direction: :duplicate,
-              fd: fd,
-              target: {:fd, String.to_integer(target_fd)}
-            }
-
-            {:ok, redirect, advance(state)}
-
-          token ->
-            {tline, tcol} = token_position(token)
-            {:error, "expected file descriptor", tline, tcol}
-        end
+        parse_dup_or_move_target(fd, line, col, state)
 
       {:lessand, _, _, _} ->
-        # 3<&1 style or 3<&- (close fd)
         state = advance(state)
-
-        case current_token(state) do
-          {:word, [{:literal, "-"}], _, _} ->
-            redirect = %AST.Redirect{
-              meta: AST.meta(line, col),
-              direction: :close,
-              fd: fd,
-              target: :close
-            }
-
-            {:ok, redirect, advance(state)}
-
-          {:word, [{:literal, target_fd}], _, _} ->
-            redirect = %AST.Redirect{
-              meta: AST.meta(line, col),
-              direction: :duplicate,
-              fd: fd,
-              target: {:fd, String.to_integer(target_fd)}
-            }
-
-            {:ok, redirect, advance(state)}
-
-          token ->
-            {tline, tcol} = token_position(token)
-            {:error, "expected file descriptor", tline, tcol}
-        end
+        parse_dup_or_move_target(fd, line, col, state)
 
       {:dgreater, _, _, _} ->
         state = advance(state)

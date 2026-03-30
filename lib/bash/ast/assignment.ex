@@ -60,8 +60,9 @@ defmodule Bash.AST.Assignment do
         session_state
       ) do
     started_at = DateTime.utc_now()
-    # Assignments do not perform glob expansion (bash spec).
+    # Assignments do not perform glob or brace expansion (bash spec).
     noglob_state = suppress_glob(session_state)
+    value = suppress_brace_expansion(value)
     # Use word_to_string_with_updates to capture ${x:=default} side effects
     {expanded_value, value_updates} = Helpers.word_to_string_with_updates(value, noglob_state)
     completed_at = DateTime.utc_now()
@@ -147,6 +148,44 @@ defmodule Bash.AST.Assignment do
     options = Map.get(session_state, :options, %{})
     %{session_state | options: Map.put(options, :noglob, true)}
   end
+
+  defp suppress_brace_expansion(%AST.Word{parts: parts} = word) do
+    %{word | parts: Enum.map(parts, &neutralize_brace/1)}
+  end
+
+  defp neutralize_brace({:brace_expand, %{type: :list, items: items}}) do
+    inner =
+      items
+      |> Enum.map(fn parts ->
+        Enum.map_join(parts, "", fn
+          {:literal, text} -> text
+          {:brace_expand, spec} -> neutralize_brace_to_string(spec)
+          other -> neutralize_brace_to_string(other)
+        end)
+      end)
+      |> Enum.join(",")
+
+    {:literal, "{" <> inner <> "}"}
+  end
+
+  defp neutralize_brace({:brace_expand, %{type: :range} = spec}) do
+    step_str = if spec.step, do: "..#{spec.step}", else: ""
+    {:literal, "{#{spec.range_start}..#{spec.range_end}#{step_str}}"}
+  end
+
+  defp neutralize_brace(other), do: other
+
+  defp neutralize_brace_to_string({:brace_expand, spec}) do
+    {:literal, text} = neutralize_brace({:brace_expand, spec})
+    text
+  end
+
+  defp neutralize_brace_to_string({:literal, text}), do: text
+  defp neutralize_brace_to_string({:variable, name}), do: "$" <> name
+  defp neutralize_brace_to_string({:variable_braced, name, _}), do: "${" <> name <> "}"
+  defp neutralize_brace_to_string({:command_subst, cmd}), do: "$(" <> cmd <> ")"
+  defp neutralize_brace_to_string({:single_quoted, str}), do: "'" <> str <> "'"
+  defp neutralize_brace_to_string(_), do: ""
 
   defimpl String.Chars do
     def to_string(%{

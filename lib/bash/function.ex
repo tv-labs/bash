@@ -19,17 +19,15 @@ defmodule Bash.AST.Function do
 
   alias Bash.AST
   alias Bash.Builtin.Trap
-  alias Bash.Executor
   alias Bash.CommandResult
+  alias Bash.Executor
   alias Bash.Statement
 
   @type t :: %__MODULE__{
           meta: AST.Meta.t(),
           name: String.t(),
           body: Statement.t(),
-          # Whether this function is exported (for subshells)
           exported: boolean(),
-          # Execution results (nil before execution)
           exit_code: 0..255 | nil,
           state_updates: map()
         }
@@ -38,22 +36,15 @@ defmodule Bash.AST.Function do
     :meta,
     :name,
     :body,
-    # Function attributes
     exported: false,
-    # Execution results
     exit_code: nil,
     state_updates: %{}
   ]
 
-  # Execute a function definition.
-  #
-  # When a function is defined, we store it in the session's functions map.
-  # This doesn't execute the function body - it just registers the function.
   @doc false
   def execute(%__MODULE__{name: name, body: body, meta: meta} = ast, _stdin, _session_state) do
     started_at = DateTime.utc_now()
 
-    # Create a function definition to store in session
     func_def = %__MODULE__{
       meta: nil,
       name: name,
@@ -81,25 +72,17 @@ defmodule Bash.AST.Function do
 
   # Call a function with the given arguments.
   #
-  # This executes the function body in a new context with the function marked as active.
-  # The function arguments become the positional parameters ($1, $2, etc.) within the function.
+  # Bash uses dynamic scoping: variables set inside a function (without `local`)
+  # are global and visible to the caller after return. Variables declared with
+  # `local` are discarded when the function returns.
   #
-  # ## Trap Inheritance
-  #
-  # - If `errtrace` option (`set -E`) is enabled, the ERR trap is inherited by the function
-  # - If `functrace` option (`set -T`) is enabled, the DEBUG trap is inherited by the function
+  # Prefix/temp bindings (e.g., `X=val func`) create a scope layer that is
+  # saved and can be restored by `unset` within the function.
   @doc false
   def call(func_def, args, session_state, opts \\ []) do
-    # Push args onto positional_params stack (they become $1, $2, etc.)
     current_params = Map.get(session_state, :positional_params, [[]])
-
-    # Build inherited traps based on errtrace and functrace options
     inherited_traps = build_inherited_traps(session_state)
 
-    # Build call stack frame from caller metadata
-    # Per bash semantics, caller reports the *calling* context:
-    # line number of the call site, name of the calling function (or "main"),
-    # and the source file.
     caller_line = Keyword.get(opts, :caller_line, 0)
     source_file = Map.get(session_state.special_vars, "0", "bash")
     current_stack = Map.get(session_state, :call_stack, [])
@@ -110,62 +93,69 @@ defmodule Bash.AST.Function do
       source_file: source_file
     }
 
+    pre_call_vars = Keyword.get(opts, :pre_prefix_vars) || session_state.variables
+    pre_call_funcs = session_state.functions
+
+    # Build save frame for prefix/temp bindings so `unset` can restore them
+    save_frame =
+      if Keyword.get(opts, :pre_prefix_vars) do
+        pre_call_vars
+        |> Map.filter(fn {name, _var} ->
+          Map.get(session_state.variables, name) != Map.get(pre_call_vars, name)
+        end)
+      else
+        %{}
+      end
+
+    current_saved = Map.get(session_state, :saved_vars, [])
+
     func_state = %{
       session_state
       | in_function: true,
         current_function_name: func_def.name,
         positional_params: [args | current_params],
         traps: inherited_traps,
-        call_stack: [frame | current_stack]
+        call_stack: [frame | current_stack],
+        local_vars: MapSet.new(),
+        saved_vars: [save_frame | current_saved]
     }
 
-    # Execute each statement in the function body
-    # If any statement is a return, stop execution early
-    # Filter separators for execution (they're preserved in AST for formatting)
     executable_body = Enum.reject(func_def.body, &match?({:separator, _}, &1))
     result = execute_body(executable_body, func_state, nil)
 
     case result do
-      {:return, exit_code, _state} ->
-        # Return statement was encountered
+      {:return, exit_code, final_state} ->
+        state_updates = collect_global_updates(final_state, pre_call_vars, pre_call_funcs)
+
         {:ok,
          %CommandResult{
            command: func_def.name,
            exit_code: exit_code,
            error: nil
-         }}
+         }, state_updates}
 
-      {:ok, last_result, _state} ->
-        # Normal completion - return the last command's result
-        {:ok, last_result}
+      {:ok, last_result, final_state} ->
+        state_updates = collect_global_updates(final_state, pre_call_vars, pre_call_funcs)
+        {:ok, last_result, state_updates}
 
-      {:error, error_result, _state} ->
-        # Error during execution
-        {:error, error_result}
+      {:error, error_result, final_state} ->
+        state_updates = collect_global_updates(final_state, pre_call_vars, pre_call_funcs)
+        {:error, error_result, state_updates}
 
-      {:exit, exit_result, _state} ->
-        # errexit triggered - propagate
-        {:exit, exit_result}
+      {:exit, exit_result, final_state} ->
+        state_updates = collect_global_updates(final_state, pre_call_vars, pre_call_funcs)
+        {:exit, exit_result, state_updates}
     end
   end
 
-  # Build inherited traps based on errtrace and functrace options.
-  #
-  # When errtrace (-E) is enabled, the ERR trap is inherited by shell functions.
-  # When functrace (-T) is enabled, the DEBUG trap is inherited by shell functions.
-  #
-  # By default, functions do NOT inherit traps (they start with an empty trap map).
-  # Only with these options enabled do the specified traps propagate into functions.
   defp build_inherited_traps(session_state) do
     options = Map.get(session_state, :options, %{})
 
     errtrace_enabled = Map.get(options, :errtrace, false)
     functrace_enabled = Map.get(options, :functrace, false)
 
-    # Start with empty traps (functions don't inherit by default)
     inherited = %{}
 
-    # Add ERR trap if errtrace is enabled
     inherited =
       if errtrace_enabled do
         case Trap.get_err_trap(session_state) do
@@ -176,7 +166,6 @@ defmodule Bash.AST.Function do
         inherited
       end
 
-    # Add DEBUG trap if functrace is enabled
     inherited =
       if functrace_enabled do
         case Trap.get_debug_trap(session_state) do
@@ -187,25 +176,17 @@ defmodule Bash.AST.Function do
         inherited
       end
 
-    # Note: RETURN trap is also affected by functrace in bash, add it as well
-    inherited =
-      if functrace_enabled do
-        case Trap.get_return_trap(session_state) do
-          nil -> inherited
-          return_trap -> Map.put(inherited, "RETURN", return_trap)
-        end
-      else
-        inherited
+    if functrace_enabled do
+      case Trap.get_return_trap(session_state) do
+        nil -> inherited
+        return_trap -> Map.put(inherited, "RETURN", return_trap)
       end
-
-    inherited
+    else
+      inherited
+    end
   end
 
-  # Execute function body statements sequentially
-  # Stop early if return is encountered
-  # Execute function body - output goes to sinks during execution
   defp execute_body([], state, last_result) do
-    # No more statements - return the last result or a success
     result =
       last_result ||
         %CommandResult{
@@ -220,25 +201,19 @@ defmodule Bash.AST.Function do
   defp execute_body([stmt | rest], state, _last_result) do
     case Executor.execute(stmt, state) do
       {:ok, %CommandResult{command: "return", exit_code: exit_code}} ->
-        # Legacy CommandResult return statement - stop execution and propagate exit code
         {:return, exit_code, state}
 
       {:ok, result} ->
-        # Check if this is a return statement (AST node wrapping return builtin result)
         if is_return_command?(result) do
           {:return, result.exit_code, state}
         else
-          # Normal statement - continue with next
           execute_body(rest, state, result)
         end
 
       {:ok, result, state_updates} ->
-        # Check if this is a return statement with state updates
         if is_return_command?(result) do
           {:return, result.exit_code, state}
         else
-          # Statement with state updates (like cd or function definitions)
-          # Apply state updates by merging into struct fields
           updated_state = apply_state_updates(state, state_updates)
           execute_body(rest, updated_state, result)
         end
@@ -257,7 +232,6 @@ defmodule Bash.AST.Function do
         {:error, result, updated_state}
 
       {:exit, result} ->
-        # errexit triggered - propagate exit
         {:exit, result, state}
 
       {:exit, result, state_updates} ->
@@ -266,12 +240,49 @@ defmodule Bash.AST.Function do
     end
   end
 
+  defp collect_global_updates(final_state, pre_call_vars, pre_call_funcs) do
+    local_vars = Map.get(final_state, :local_vars, MapSet.new())
+
+    changed_vars =
+      final_state.variables
+      |> Enum.reject(fn {name, _} -> MapSet.member?(local_vars, name) end)
+      |> Enum.filter(fn {name, var} -> Map.get(pre_call_vars, name) != var end)
+      |> Map.new()
+
+    unset_vars =
+      pre_call_vars
+      |> Map.keys()
+      |> Enum.reject(fn name -> MapSet.member?(local_vars, name) end)
+      |> Enum.reject(fn name -> Map.has_key?(final_state.variables, name) end)
+      |> Map.new(fn name -> {name, nil} end)
+
+    var_updates = Map.merge(changed_vars, unset_vars)
+
+    func_changes =
+      final_state.functions
+      |> Enum.filter(fn {name, func} -> Map.get(pre_call_funcs, name) != func end)
+      |> Map.new()
+
+    updates = %{}
+
+    updates =
+      if map_size(var_updates) > 0,
+        do: Map.put(updates, :variables, var_updates),
+        else: updates
+
+    if map_size(func_changes) > 0,
+      do: Map.put(updates, :function_updates, func_changes),
+      else: updates
+  end
+
   defp apply_state_updates(state, updates) do
     state
     |> maybe_update_working_dir(updates)
     |> maybe_update_variables(updates)
     |> maybe_update_functions(updates)
     |> maybe_update_positional_params(updates)
+    |> maybe_update_local_vars(updates)
+    |> maybe_push_save_frame(updates)
   end
 
   defp maybe_update_working_dir(state, %{working_dir: new_dir}) do
@@ -308,8 +319,27 @@ defmodule Bash.AST.Function do
 
   defp maybe_update_positional_params(state, _), do: state
 
-  # Check if a result is from a "return" command
-  # Works with both legacy CommandResult and AST nodes
+  defp maybe_update_local_vars(state, %{local_vars: new_locals}) do
+    current = Map.get(state, :local_vars, MapSet.new())
+    %{state | local_vars: MapSet.union(current, new_locals)}
+  end
+
+  defp maybe_update_local_vars(state, _), do: state
+
+  defp maybe_push_save_frame(state, %{save_frame: frame}) when map_size(frame) > 0 do
+    current = Map.get(state, :saved_vars, [])
+
+    case current do
+      [head | rest] ->
+        %{state | saved_vars: [Map.merge(head, frame) | rest]}
+
+      [] ->
+        %{state | saved_vars: [frame]}
+    end
+  end
+
+  defp maybe_push_save_frame(state, _), do: state
+
   defp is_return_command?(%CommandResult{command: "return"}), do: true
 
   defp is_return_command?(%AST.Command{name: %AST.Word{parts: [{:literal, "return"}]}}), do: true

@@ -143,11 +143,16 @@ defmodule Bash.Builtin.Echo do
     interpret_escapes(rest, ["\\" | acc], suppress)
   end
 
-  # Octal: \0nnn (0-3 digits)
+  # Octal: \0nnn (0-3 digits). \0 alone means NUL byte (octal 0).
+  # Values are taken mod 256 and emitted as raw bytes.
   defp interpret_escapes(<<"\\0", rest::binary>>, acc, suppress) do
     case parse_octal(rest) do
-      {char, remaining} -> interpret_escapes(remaining, [<<char::utf8>> | acc], suppress)
-      :error -> interpret_escapes(rest, ["\\0" | acc], suppress)
+      {value, remaining} ->
+        byte = rem(value, 256)
+        interpret_escapes(remaining, [<<byte::8>> | acc], suppress)
+
+      :error ->
+        interpret_escapes(rest, [<<0>> | acc], suppress)
     end
   end
 

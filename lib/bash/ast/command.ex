@@ -145,7 +145,9 @@ defmodule Bash.AST.Command do
     default_stdin = stdin || Map.get(session_state, :pipe_stdin)
 
     # Apply prefix env assignments (e.g., "IFS=: read -a parts")
-    # These are temporary and only affect this command's execution
+    # These are temporary and only affect this command's execution.
+    # Save original variables so function scoping can restore them after return.
+    pre_prefix_vars = session_state.variables
     session_with_prefix_env = apply_prefix_assignments(env_assignments, session_state)
 
     # Write verbose/xtrace output to stderr sink (before command execution)
@@ -190,7 +192,8 @@ defmodule Bash.AST.Command do
                     exec_session,
                     effective_stdin,
                     redirects,
-                    ast.meta
+                    ast.meta,
+                    pre_prefix_vars
                   )
                 end
 
@@ -392,6 +395,10 @@ defmodule Bash.AST.Command do
       {control, command_result} when control in [:exit, :exec] ->
         {control, wrap_result(ast, command_result, started_at, completed_at)}
 
+      {control, command_result, state_updates} when control in [:exit, :exec] ->
+        executed_ast = wrap_result(ast, command_result, started_at, completed_at)
+        {control, executed_ast, merge_var_updates(state_updates, var_updates_from_expansion)}
+
       # Standard ok/error tuples
       {status, command_result, state_updates} when status in [:ok, :error] ->
         executed_ast = wrap_result(ast, command_result, started_at, completed_at)
@@ -566,12 +573,14 @@ defmodule Bash.AST.Command do
   end
 
   # FD duplication with variable target: >&${FD_VAR}
-  # When the target is a word (variable), expand it and try to get the FD number
+  # When the target is a word (variable), expand it and try to get the FD number.
+  # If the target isn't a valid fd number, bash treats it as a file redirect.
   defp apply_redirect_to_sinks(
-         %AST.Redirect{direction: :duplicate, fd: from_fd, target: {:file, file_word}},
+         %AST.Redirect{direction: :duplicate, fd: from_fd, target: {:file, file_word}} =
+           redirect,
          state,
          session_state,
-         _noclobber
+         noclobber
        ) do
     target_str = Helpers.word_to_string(file_word, session_state)
 
@@ -580,7 +589,8 @@ defmodule Bash.AST.Command do
         duplicate_fd_sink(from_fd, to_fd, state, session_state)
 
       _ ->
-        {:ok, state}
+        file_redirect = %{redirect | direction: :output, target: {:file, file_word}}
+        apply_redirect_to_sinks(file_redirect, state, session_state, noclobber)
     end
   end
 
@@ -740,23 +750,22 @@ defmodule Bash.AST.Command do
   defp read_input_redirect(
          %AST.Redirect{direction: :input, target: {:file, file_word}},
          session_state,
-         default_stdin
+         _default_stdin
        ) do
     file_path = resolve_redirect_path(file_word, session_state)
 
     case CommandPolicy.check_path(CommandPolicy.from_state(session_state), file_path) do
-      {:error, _} ->
-        default_stdin
+      {:error, msg} ->
+        {:error, msg <> "\n"}
 
       :ok ->
         case Filesystem.read(Filesystem.from_state(session_state), file_path) do
           {:ok, content} ->
             content
 
-          {:error, _reason} ->
-            # Fall back to default stdin when file read fails
-            # (preserves backward compatibility with VFS and other filesystems)
-            default_stdin
+          {:error, reason} ->
+            message = :file.format_error(reason) |> to_string()
+            {:error, "bash: #{file_path}: #{message}\n"}
         end
     end
   end
@@ -871,11 +880,29 @@ defmodule Bash.AST.Command do
   end
 
   # Resolve command category, check policy, then dispatch
-  defp resolve_and_execute(command_name, args, session_state, stdin, redirects, meta) do
+  defp resolve_and_execute(
+         command_name,
+         args,
+         session_state,
+         stdin,
+         redirects,
+         meta,
+         pre_prefix_vars \\ nil
+       ) do
     {category, payload} = resolve_command(command_name, session_state)
 
     with :ok <- check_command_policy(command_name, category, session_state) do
-      dispatch(category, payload, command_name, args, session_state, stdin, redirects, meta)
+      dispatch(
+        category,
+        payload,
+        command_name,
+        args,
+        session_state,
+        stdin,
+        redirects,
+        meta,
+        pre_prefix_vars
+      )
     end
   end
 
@@ -908,21 +935,35 @@ defmodule Bash.AST.Command do
     end
   end
 
-  defp dispatch(:function, func, _command_name, args, session_state, _stdin, _redirects, meta) do
+  defp dispatch(
+         :function,
+         func,
+         _command_name,
+         args,
+         session_state,
+         _stdin,
+         _redirects,
+         meta,
+         pre_prefix_vars
+       ) do
     caller_line = if meta, do: meta.line, else: 0
-    Function.call(func, args, session_state, caller_line: caller_line)
+
+    Function.call(func, args, session_state,
+      caller_line: caller_line,
+      pre_prefix_vars: pre_prefix_vars
+    )
   end
 
-  defp dispatch(:interop, {module, function_name}, _name, args, state, stdin, _redirects, _meta) do
-    call_elixir_function(module, function_name, args, stdin, state)
+  defp dispatch(:interop, {mod, fun}, _name, args, state, stdin, _redirects, _meta, _ppv) do
+    call_elixir_function(mod, fun, args, stdin, state)
   end
 
-  defp dispatch(:builtin, module, _command_name, args, session_state, stdin, _redirects, _meta) do
+  defp dispatch(:builtin, module, _cmd_name, args, session_state, stdin, _redirects, _meta, _ppv) do
     module.execute(args, stdin, session_state)
   end
 
-  defp dispatch(:external, _payload, command_name, args, session_state, stdin, redirects, _meta) do
-    execute_external_command(command_name, args, session_state, stdin, redirects)
+  defp dispatch(:external, _payload, cmd_name, args, session_state, stdin, redirects, _meta, _ppv) do
+    execute_external_command(cmd_name, args, session_state, stdin, redirects)
   end
 
   defp check_command_policy(command_name, category, session_state) do
