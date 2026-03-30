@@ -152,6 +152,11 @@ defmodule Bash.Parser.Arithmetic do
   def tokenize("," <> rest, acc), do: tokenize(rest, [{:op, ","} | acc])
   def tokenize("(" <> rest, acc), do: tokenize(rest, [{:lparen, "("} | acc])
   def tokenize(")" <> rest, acc), do: tokenize(rest, [{:rparen, ")"} | acc])
+  def tokenize("[" <> rest, acc), do: tokenize(rest, [{:lbracket, "["} | acc])
+  def tokenize("]" <> rest, acc), do: tokenize(rest, [{:rbracket, "]"} | acc])
+
+  def tokenize(<<"0x", rest::binary>>, acc), do: tokenize_hex(rest, acc)
+  def tokenize(<<"0X", rest::binary>>, acc), do: tokenize_hex(rest, acc)
 
   def tokenize(<<c, _rest::binary>> = input, acc) when c in ?0..?9 do
     {num_str, rest} = take_while(input, &(&1 in ?0..?9))
@@ -172,7 +177,14 @@ defmodule Bash.Parser.Arithmetic do
         end
 
       _ ->
-        tokenize(rest, [{:number, String.to_integer(num_str)} | acc])
+        value =
+          if String.starts_with?(num_str, "0") and byte_size(num_str) > 1 do
+            String.to_integer(num_str, 8)
+          else
+            String.to_integer(num_str)
+          end
+
+        tokenize(rest, [{:number, value} | acc])
     end
   end
 
@@ -183,6 +195,17 @@ defmodule Bash.Parser.Arithmetic do
   end
 
   def tokenize(<<c, _rest::binary>>, _acc), do: {:error, "Unexpected character: #{<<c>>}"}
+
+  defp tokenize_hex(rest, acc) do
+    {hex_str, rest2} =
+      take_while(rest, &(&1 in ?0..?9 or &1 in ?a..?f or &1 in ?A..?F))
+
+    if hex_str == "" do
+      {:error, "Invalid hex number: expected digits after 0x"}
+    else
+      tokenize(rest2, [{:number, String.to_integer(hex_str, 16)} | acc])
+    end
+  end
 
   defp take_while(input, pred) do
     take_while(input, pred, "")
@@ -311,11 +334,25 @@ defmodule Bash.Parser.Arithmetic do
     case rest do
       [{:op, "++"} | rest2] -> {:ok, {:post_inc, {:var, name}}, rest2}
       [{:op, "--"} | rest2] -> {:ok, {:post_dec, {:var, name}}, rest2}
+      [{:lbracket, _} | rest2] -> parse_array_subscript(name, rest2)
       _ -> {:ok, {:var, name}, rest}
     end
   end
 
+  defp parse_prefix([{:op, "++"}, {:id, name} | [{:lbracket, _} | rest2]]) do
+    with {:ok, var_node, rest3} <- parse_array_subscript(name, rest2) do
+      {:ok, {:pre_inc, var_node}, rest3}
+    end
+  end
+
   defp parse_prefix([{:op, "++"}, {:id, name} | rest]), do: {:ok, {:pre_inc, name}, rest}
+
+  defp parse_prefix([{:op, "--"}, {:id, name} | [{:lbracket, _} | rest2]]) do
+    with {:ok, var_node, rest3} <- parse_array_subscript(name, rest2) do
+      {:ok, {:pre_dec, var_node}, rest3}
+    end
+  end
+
   defp parse_prefix([{:op, "--"}, {:id, name} | rest]), do: {:ok, {:pre_dec, name}, rest}
 
   defp parse_prefix([{:op, op} | rest]) when op in @unary_operators do
@@ -340,6 +377,21 @@ defmodule Bash.Parser.Arithmetic do
   defp parse_prefix([]), do: {:error, "Unexpected end of expression"}
   defp parse_prefix([token | _]), do: {:error, "Unexpected token: #{inspect(token)}"}
 
+  defp parse_array_subscript(name, rest) do
+    with {:ok, index_expr, [{:rbracket, _} | rest2]} <- parse_expression(rest) do
+      var_node = {:var, name, index_expr}
+
+      case rest2 do
+        [{:op, "++"} | rest3] -> {:ok, {:post_inc, var_node}, rest3}
+        [{:op, "--"} | rest3] -> {:ok, {:post_dec, var_node}, rest3}
+        _ -> {:ok, var_node, rest2}
+      end
+    else
+      {:ok, _, _} -> {:error, "Expected closing ']' in array subscript"}
+      err -> err
+    end
+  end
+
   defp parse_infix(left, [{:op, op} | rest] = tokens, min_prec) do
     {op_prec, assoc} = operator_info(op)
 
@@ -353,8 +405,8 @@ defmodule Bash.Parser.Arithmetic do
   defp parse_infix(left, tokens, _min_prec), do: {:ok, left, tokens}
 
   defp parse_infix_op(left, "?", rest, min_prec, _assoc, _prec) do
-    with {:ok, true_expr, [{:op, ":"} | rest2]} <- parse_prec(rest, prec(:ternary)),
-         {:ok, false_expr, rest3} <- parse_prec(rest2, prec(:ternary)) do
+    with {:ok, true_expr, [{:op, ":"} | rest2]} <- parse_prec(rest, prec(:assign)),
+         {:ok, false_expr, rest3} <- parse_prec(rest2, prec(:assign)) do
       parse_infix({:ternary, left, true_expr, false_expr}, rest3, min_prec)
     else
       {:ok, _, _} -> {:error, "Expected ':' in ternary expression"}
@@ -365,6 +417,11 @@ defmodule Bash.Parser.Arithmetic do
   defp parse_infix_op(left, op, rest, min_prec, _assoc, _prec) when op in @assignment_operators do
     case left do
       {:var, _} = var ->
+        with {:ok, right, rest2} <- parse_prec(rest, prec(:assign)) do
+          parse_infix({:assign, op, var, right}, rest2, min_prec)
+        end
+
+      {:var, _, _} = var ->
         with {:ok, right, rest2} <- parse_prec(rest, prec(:assign)) do
           parse_infix({:assign, op, var, right}, rest2, min_prec)
         end

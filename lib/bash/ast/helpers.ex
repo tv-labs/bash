@@ -1442,11 +1442,8 @@ defmodule Bash.AST.Helpers do
   # In bash, $((n++)) updates the variable n.
   @doc false
   def expand_arithmetic_with_updates(expr_string, session_state) do
-    # Convert variables to plain string map for Arithmetic
-    vars =
-      Map.new(session_state.variables, fn {k, v} ->
-        {k, Variable.get(v, nil)}
-      end)
+    # Convert variables to plain string map for Arithmetic, including array elements
+    vars = build_arith_env(session_state.variables)
 
     # Add positional parameters ($1, $2, etc.)
     positional_params = Map.get(session_state, :positional_params, [])
@@ -1458,13 +1455,27 @@ defmodule Bash.AST.Helpers do
         Map.put(acc, Integer.to_string(idx), value)
       end)
 
-    # First expand command substitutions $(...)  in the expression
-    # This must happen before variable expansion
-    expr_with_cmd_subst = expand_arith_command_subst(expr_string, session_state)
+    # Expand nested $((  )) arithmetic substitutions first
+    expr_with_arith = expand_arith_nested_arith(expr_string, session_state)
 
-    # Expand $variable references in the expression before evaluation
-    # Bash allows both $var and var inside $((...))
-    expanded_expr = expand_arith_variables(expr_with_cmd_subst, vars_with_positional)
+    # Expand command substitutions $(...) and backticks
+    expr_with_cmd_subst = expand_arith_command_subst(expr_with_arith, session_state)
+    expr_with_cmd_subst = expand_arith_backticks(expr_with_cmd_subst, session_state)
+
+    # Inject positional params as variables so the expander can resolve $1, $2 etc.
+    positional_vars =
+      positional_params
+      |> Enum.with_index(1)
+      |> Map.new(fn {value, idx} -> {Integer.to_string(idx), Variable.new(value)} end)
+
+    state_for_expansion = %{
+      session_state
+      | variables: Map.merge(session_state.variables, positional_vars)
+    }
+
+    # Expand ${var:-default} and $var references using the full variable expander
+    {expanded_expr, _expand_updates} =
+      VariableExpander.expand_variables(expr_with_cmd_subst, state_for_expansion)
 
     case Arithmetic.evaluate(expanded_expr, vars_with_positional) do
       {:ok, result, updated_env} ->
@@ -1480,6 +1491,27 @@ defmodule Bash.AST.Helpers do
         # On error, return empty string (like bash does for failed expansions)
         {"", %{}}
     end
+  end
+
+  defp build_arith_env(variables) do
+    Enum.reduce(variables, %{}, fn
+      {name, %Variable{value: value}}, acc when is_binary(value) ->
+        Map.put(acc, name, value)
+
+      {name, %Variable{value: value}}, acc when is_integer(value) ->
+        Map.put(acc, name, Integer.to_string(value))
+
+      {name, %Variable{value: elements, attributes: %{array_type: type}}}, acc
+      when type in [:indexed, :associative] and is_map(elements) ->
+        acc = Map.put(acc, name, to_string(Map.get(elements, 0, Map.get(elements, "0", "0"))))
+
+        Enum.reduce(elements, acc, fn {idx, val}, inner_acc ->
+          Map.put(inner_acc, "#{name}[#{idx}]", to_string(val))
+        end)
+
+      _, acc ->
+        acc
+    end)
   end
 
   # Expand command substitutions $(...) in arithmetic expressions
@@ -1557,32 +1589,92 @@ defmodule Bash.AST.Helpers do
     find_matching_paren(rest, depth, pos + 1)
   end
 
-  # Expand $variable references in arithmetic expressions
-  # Handles: $1, $var, ${var}
-  # Returns the expression with variables replaced by their values
-  defp expand_arith_variables(expr, vars) do
-    # Match ${var}, $digits, and $var patterns
-    Regex.replace(
-      ~r/\$\{([^}]+)\}|\$([0-9]+)|\$([A-Za-z_][A-Za-z0-9_]*)/,
-      expr,
-      fn
-        # ${var} pattern
-        _full, var_name, "", "" ->
-          Map.get(vars, var_name, "0")
+  defp expand_arith_nested_arith(expr, session_state) do
+    case find_nested_arith(expr) do
+      nil ->
+        expr
 
-        # $digits pattern (positional params)
-        _full, "", digits, "" ->
-          Map.get(vars, digits, "0")
+      {start_pos, end_pos, inner_expr} ->
+        {result, _updates} = expand_arithmetic_with_updates(inner_expr, session_state)
+        prefix = String.slice(expr, 0, start_pos)
+        suffix = String.slice(expr, end_pos, String.length(expr))
+        expand_arith_nested_arith(prefix <> result <> suffix, session_state)
+    end
+  end
 
-        # $var pattern
-        _full, "", "", var_name ->
-          Map.get(vars, var_name, "0")
+  defp find_nested_arith(expr) do
+    case :binary.match(expr, "$((") do
+      :nomatch ->
+        nil
 
-        # Fallback
-        full, _, _, _ ->
-          full
-      end
-    )
+      {start_pos, 3} ->
+        content_start = start_pos + 3
+        rest = String.slice(expr, content_start, String.length(expr))
+
+        case find_matching_double_paren(rest, 0, 0) do
+          nil ->
+            nil
+
+          content_length ->
+            content = String.slice(rest, 0, content_length)
+            # +2 for the closing ))
+            end_pos = content_start + content_length + 2
+            {start_pos, end_pos, content}
+        end
+    end
+  end
+
+  defp find_matching_double_paren(<<>>, _depth, _pos), do: nil
+
+  defp find_matching_double_paren(<<"$((", rest::binary>>, depth, pos) do
+    find_matching_double_paren(rest, depth + 1, pos + 3)
+  end
+
+  defp find_matching_double_paren(<<"))", _rest::binary>>, 0, pos), do: pos
+
+  defp find_matching_double_paren(<<"))", rest::binary>>, depth, pos) do
+    find_matching_double_paren(rest, depth - 1, pos + 2)
+  end
+
+  defp find_matching_double_paren(<<_char::utf8, rest::binary>>, depth, pos) do
+    find_matching_double_paren(rest, depth, pos + 1)
+  end
+
+  defp expand_arith_backticks(expr, session_state) do
+    case find_backtick(expr) do
+      nil ->
+        expr
+
+      {start_pos, end_pos, cmd_content} ->
+        output =
+          case Parser.parse(cmd_content) do
+            {:ok, ast} -> expand_command_substitution(ast, session_state)
+            {:error, _, _, _} -> ""
+          end
+
+        prefix = String.slice(expr, 0, start_pos)
+        suffix = String.slice(expr, end_pos, String.length(expr))
+        expand_arith_backticks(prefix <> output <> suffix, session_state)
+    end
+  end
+
+  defp find_backtick(expr) do
+    case :binary.match(expr, "`") do
+      :nomatch ->
+        nil
+
+      {start_pos, 1} ->
+        rest = String.slice(expr, start_pos + 1, String.length(expr))
+
+        case :binary.match(rest, "`") do
+          :nomatch ->
+            nil
+
+          {end_offset, 1} ->
+            content = String.slice(rest, 0, end_offset)
+            {start_pos, start_pos + 1 + end_offset + 1, content}
+        end
+    end
   end
 
   # Expand a simple string expression for use as an associative array key.

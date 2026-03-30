@@ -495,7 +495,7 @@ defmodule Bash.VirtualFilesystemTest do
     test "read builtin receives input from VFS redirect", context do
       {session, _fs} =
         start_vfs_session(context, %{
-          "/workspace/input.txt" => "hello from vfs"
+          "/workspace/input.txt" => "hello from vfs\n"
         })
 
       result = run_script(session, "read line < input.txt && echo $line")
@@ -795,7 +795,7 @@ defmodule Bash.VirtualFilesystemTest do
     test "read < file reads from VFS only", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/input.txt") => "vfs_input_data"
+          (@enforcement_base <> "/input.txt") => "vfs_input_data\n"
         })
 
       result = run_script(session, "read line < input.txt && echo $line")

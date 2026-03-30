@@ -153,7 +153,7 @@ defmodule Bash.AST.Arithmetic do
         }
 
         if map_size(env_updates) > 0 do
-          var_updates = Map.new(env_updates, fn {k, v} -> {k, Bash.Variable.new(v)} end)
+          var_updates = build_var_updates(env_updates, session_state.variables)
           {:ok, command_result, %{variables: var_updates}}
         else
           {:ok, command_result}
@@ -170,11 +170,21 @@ defmodule Bash.AST.Arithmetic do
   end
 
   defp build_env(variables) do
-    variables
-    |> Enum.filter(fn {_name, %{value: value}} -> is_binary(value) or is_integer(value) end)
-    |> Map.new(fn {name, %{value: value}} ->
-      # Convert to string for arithmetic evaluator
-      {name, to_string(value)}
+    Enum.reduce(variables, %{}, fn
+      {name, %{value: value}}, acc when is_binary(value) or is_integer(value) ->
+        Map.put(acc, name, to_string(value))
+
+      {name, %{value: elements, attributes: %{array_type: type}}}, acc
+      when type in [:indexed, :associative] and is_map(elements) ->
+        # Add array elements as "name[index]" keys and bare name decays to element 0
+        acc = Map.put(acc, name, to_string(Map.get(elements, 0, Map.get(elements, "0", "0"))))
+
+        Enum.reduce(elements, acc, fn {idx, val}, inner_acc ->
+          Map.put(inner_acc, "#{name}[#{idx}]", to_string(val))
+        end)
+
+      _, acc ->
+        acc
     end)
   end
 
@@ -182,6 +192,38 @@ defmodule Bash.AST.Arithmetic do
     new_env
     |> Enum.filter(fn {k, v} -> Map.get(old_env, k) != v end)
     |> Map.new()
+  end
+
+  @array_key_regex ~r/^([A-Za-z_][A-Za-z0-9_]*)\[(.+)\]$/
+
+  defp build_var_updates(env_updates, session_variables) do
+    Enum.reduce(env_updates, %{}, fn {key, value}, acc ->
+      case Regex.run(@array_key_regex, key) do
+        [_, array_name, index_str] ->
+          index =
+            case Integer.parse(index_str) do
+              {n, ""} -> n
+              _ -> index_str
+            end
+
+          existing = Map.get(acc, array_name) || Map.get(session_variables, array_name)
+
+          updated =
+            case existing do
+              %Bash.Variable{value: elements, attributes: %{array_type: _type}}
+              when is_map(elements) ->
+                %Bash.Variable{existing | value: Map.put(elements, index, value)}
+
+              _ ->
+                Bash.Variable.new_indexed_array(%{index => value})
+            end
+
+          Map.put(acc, array_name, updated)
+
+        nil ->
+          Map.put(acc, key, Bash.Variable.new(value))
+      end
+    end)
   end
 
   # Expand $variable references in arithmetic expressions
@@ -225,7 +267,39 @@ defmodule Bash.AST.Arithmetic do
 
   defp eval({:var, name}, env) do
     value = Map.get(env, name, "0")
-    {:ok, to_int(value), env}
+    resolve_value(value, env)
+  end
+
+  defp eval({:var, name, index_expr}, env) do
+    with {:ok, index, env2} <- eval(index_expr, env) do
+      key = "#{name}[#{index}]"
+      value = Map.get(env2, key, "0")
+      resolve_value(value, env2)
+    end
+  end
+
+  defp eval({:binop, "&&", left, right}, env) do
+    with {:ok, l_val, env2} <- eval(left, env) do
+      if l_val == 0 do
+        {:ok, 0, env2}
+      else
+        with {:ok, r_val, env3} <- eval(right, env2) do
+          {:ok, if(r_val != 0, do: 1, else: 0), env3}
+        end
+      end
+    end
+  end
+
+  defp eval({:binop, "||", left, right}, env) do
+    with {:ok, l_val, env2} <- eval(left, env) do
+      if l_val != 0 do
+        {:ok, 1, env2}
+      else
+        with {:ok, r_val, env3} <- eval(right, env2) do
+          {:ok, if(r_val != 0, do: 1, else: 0), env3}
+        end
+      end
+    end
   end
 
   defp eval({:binop, op, left, right}, env) do
@@ -240,7 +314,8 @@ defmodule Bash.AST.Arithmetic do
           "/" -> raise "Division by zero"
           "%" when r_val != 0 -> rem(l_val, r_val)
           "%" -> raise "Division by zero"
-          "**" -> l_val |> :math.pow(r_val) |> trunc()
+          "**" when r_val < 0 -> raise "Exponent less than 0"
+          "**" -> integer_pow(l_val, r_val)
           "<<" -> Bitwise.bsl(l_val, r_val)
           ">>" -> Bitwise.bsr(l_val, r_val)
           "<" -> if l_val < r_val, do: 1, else: 0
@@ -252,8 +327,6 @@ defmodule Bash.AST.Arithmetic do
           "&" -> Bitwise.band(l_val, r_val)
           "|" -> Bitwise.bor(l_val, r_val)
           "^" -> Bitwise.bxor(l_val, r_val)
-          "&&" -> if l_val != 0 and r_val != 0, do: 1, else: 0
-          "||" -> if l_val != 0 or r_val != 0, do: 1, else: 0
         end
 
       {:ok, result, env3}
@@ -286,47 +359,88 @@ defmodule Bash.AST.Arithmetic do
     end
   end
 
+  defp eval({:assign, "=", {:var, name, index_expr}, right}, env) do
+    with {:ok, index, env2} <- eval(index_expr, env),
+         {:ok, val, env3} <- eval(right, env2) do
+      key = "#{name}[#{index}]"
+      {:ok, val, Map.put(env3, key, Integer.to_string(val))}
+    end
+  end
+
   defp eval({:assign, "=", {:var, name}, right}, env) do
     with {:ok, val, env2} <- eval(right, env) do
       {:ok, val, Map.put(env2, name, Integer.to_string(val))}
     end
   end
 
+  defp eval({:assign, op, {:var, name, index_expr}, right}, env) do
+    with {:ok, index, env2} <- eval(index_expr, env) do
+      key = "#{name}[#{index}]"
+
+      with {:ok, left_val, env3} <- eval({:var, key}, env2),
+           {:ok, right_val, env4} <- eval(right, env3) do
+        result = apply_compound_op(op, left_val, right_val)
+        {:ok, result, Map.put(env4, key, Integer.to_string(result))}
+      end
+    end
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
   defp eval({:assign, op, {:var, name}, right}, env) do
     with {:ok, left_val, env2} <- eval({:var, name}, env),
          {:ok, right_val, env3} <- eval(right, env2) do
-      result =
-        case op do
-          "+=" -> left_val + right_val
-          "-=" -> left_val - right_val
-          "*=" -> left_val * right_val
-          "/=" when right_val != 0 -> div(left_val, right_val)
-          "%=" when right_val != 0 -> rem(left_val, right_val)
-          "<<=" -> Bitwise.bsl(left_val, right_val)
-          ">>=" -> Bitwise.bsr(left_val, right_val)
-          "&=" -> Bitwise.band(left_val, right_val)
-          "^=" -> Bitwise.bxor(left_val, right_val)
-          "|=" -> Bitwise.bor(left_val, right_val)
-          _ -> raise "Unsupported compound assignment: #{op}"
-        end
-
+      result = apply_compound_op(op, left_val, right_val)
       {:ok, result, Map.put(env3, name, Integer.to_string(result))}
     end
   rescue
     e -> {:error, Exception.message(e)}
   end
 
-  defp eval({:pre_inc, name}, env) do
+  defp eval({:pre_inc, {:var, name, index_expr}}, env) do
+    with {:ok, index, env2} <- eval(index_expr, env) do
+      key = "#{name}[#{index}]"
+
+      with {:ok, val, env3} <- eval({:var, key}, env2) do
+        new_val = val + 1
+        {:ok, new_val, Map.put(env3, key, Integer.to_string(new_val))}
+      end
+    end
+  end
+
+  defp eval({:pre_inc, name}, env) when is_binary(name) do
     with {:ok, val, env2} <- eval({:var, name}, env) do
       new_val = val + 1
       {:ok, new_val, Map.put(env2, name, Integer.to_string(new_val))}
     end
   end
 
-  defp eval({:pre_dec, name}, env) do
+  defp eval({:pre_dec, {:var, name, index_expr}}, env) do
+    with {:ok, index, env2} <- eval(index_expr, env) do
+      key = "#{name}[#{index}]"
+
+      with {:ok, val, env3} <- eval({:var, key}, env2) do
+        new_val = val - 1
+        {:ok, new_val, Map.put(env3, key, Integer.to_string(new_val))}
+      end
+    end
+  end
+
+  defp eval({:pre_dec, name}, env) when is_binary(name) do
     with {:ok, val, env2} <- eval({:var, name}, env) do
       new_val = val - 1
       {:ok, new_val, Map.put(env2, name, Integer.to_string(new_val))}
+    end
+  end
+
+  defp eval({:post_inc, {:var, name, index_expr}}, env) do
+    with {:ok, index, env2} <- eval(index_expr, env) do
+      key = "#{name}[#{index}]"
+
+      with {:ok, val, env3} <- eval({:var, key}, env2) do
+        new_val = val + 1
+        {:ok, val, Map.put(env3, key, Integer.to_string(new_val))}
+      end
     end
   end
 
@@ -334,6 +448,17 @@ defmodule Bash.AST.Arithmetic do
     with {:ok, val, env2} <- eval({:var, name}, env) do
       new_val = val + 1
       {:ok, val, Map.put(env2, name, Integer.to_string(new_val))}
+    end
+  end
+
+  defp eval({:post_dec, {:var, name, index_expr}}, env) do
+    with {:ok, index, env2} <- eval(index_expr, env) do
+      key = "#{name}[#{index}]"
+
+      with {:ok, val, env3} <- eval({:var, key}, env2) do
+        new_val = val - 1
+        {:ok, val, Map.put(env3, key, Integer.to_string(new_val))}
+      end
     end
   end
 
@@ -355,6 +480,44 @@ defmodule Bash.AST.Arithmetic do
   end
 
   defp eval(ast, _env), do: {:error, "Invalid AST node: #{inspect(ast)}"}
+
+  defp resolve_value(value, env) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {n, ""} ->
+        {:ok, n, env}
+
+      _ ->
+        # Value is not a plain integer — try to evaluate it as an arithmetic expression
+        alias Bash.Parser.Arithmetic, as: ArithmeticParser
+
+        case ArithmeticParser.parse(value) do
+          {:ok, ast} -> eval(ast, env)
+          {:error, _} -> {:ok, 0, env}
+        end
+    end
+  end
+
+  defp resolve_value(value, env) when is_integer(value), do: {:ok, value, env}
+  defp resolve_value(_, env), do: {:ok, 0, env}
+
+  defp apply_compound_op(op, left_val, right_val) do
+    case op do
+      "+=" -> left_val + right_val
+      "-=" -> left_val - right_val
+      "*=" -> left_val * right_val
+      "/=" when right_val != 0 -> div(left_val, right_val)
+      "%=" when right_val != 0 -> rem(left_val, right_val)
+      "<<=" -> Bitwise.bsl(left_val, right_val)
+      ">>=" -> Bitwise.bsr(left_val, right_val)
+      "&=" -> Bitwise.band(left_val, right_val)
+      "^=" -> Bitwise.bxor(left_val, right_val)
+      "|=" -> Bitwise.bor(left_val, right_val)
+      _ -> raise "Unsupported compound assignment: #{op}"
+    end
+  end
+
+  defp integer_pow(_base, 0), do: 1
+  defp integer_pow(base, exp) when exp > 0, do: base * integer_pow(base, exp - 1)
 
   defp to_int(val) when is_integer(val), do: val
 

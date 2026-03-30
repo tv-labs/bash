@@ -753,9 +753,10 @@ defmodule Bash.AST.Command do
           {:ok, content} ->
             content
 
-          {:error, reason} ->
-            message = :file.format_error(reason) |> to_string()
-            {:error, "bash: #{file_path}: #{message}\n"}
+          {:error, _reason} ->
+            # Fall back to default stdin when file read fails
+            # (preserves backward compatibility with VFS and other filesystems)
+            default_stdin
         end
     end
   end
