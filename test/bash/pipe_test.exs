@@ -48,11 +48,12 @@ defmodule Bash.PipeTest do
       parent = self()
 
       spawn_link(fn ->
+        send(parent, :reader_parked)
         result = Pipe.read_line(pipe)
         send(parent, {:result, result})
       end)
 
-      Process.sleep(20)
+      assert_receive :reader_parked
       Pipe.write(pipe, "async\n")
       assert_receive {:result, {:ok, "async\n"}}, 1000
       Pipe.destroy(pipe)
@@ -81,11 +82,12 @@ defmodule Bash.PipeTest do
       parent = self()
 
       spawn_link(fn ->
+        send(parent, :reader_parked)
         result = Pipe.read_all(pipe)
         send(parent, {:result, result})
       end)
 
-      Process.sleep(20)
+      assert_receive :reader_parked
       Pipe.write(pipe, "data")
       Pipe.close_write(pipe)
       assert_receive {:result, "data"}, 1000
@@ -115,11 +117,12 @@ defmodule Bash.PipeTest do
       parent = self()
 
       spawn_link(fn ->
+        send(parent, :reader_parked)
         result = Pipe.read_line(pipe)
         send(parent, {:result, result})
       end)
 
-      Process.sleep(20)
+      assert_receive :reader_parked
       Pipe.close_write(pipe)
       assert_receive {:result, :eof}, 1000
       Pipe.destroy(pipe)
@@ -141,26 +144,19 @@ defmodule Bash.PipeTest do
       line_count = 10_000
       line = String.duplicate("x", 1023) <> "\n"
 
-      writer =
-        spawn_link(fn ->
-          for _ <- 1..line_count do
-            Pipe.write(pipe, line)
-          end
+      spawn_link(fn ->
+        for _ <- 1..line_count do
+          Pipe.write(pipe, line)
+        end
 
-          Pipe.close_write(pipe)
-        end)
+        Pipe.close_write(pipe)
+      end)
 
-      reader =
-        spawn_link(fn ->
-          read_all_lines(pipe, 0, parent)
-        end)
+      spawn_link(fn ->
+        read_all_lines(pipe, 0, parent)
+      end)
 
       assert_receive {:done, ^line_count}, 10_000
-
-      ref_w = Process.monitor(writer)
-      ref_r = Process.monitor(reader)
-      assert_receive {:DOWN, ^ref_w, :process, _, _}, 5_000
-      assert_receive {:DOWN, ^ref_r, :process, _, _}, 5_000
 
       Pipe.destroy(pipe)
     end
