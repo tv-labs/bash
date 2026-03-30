@@ -662,7 +662,6 @@ defmodule Bash.Script do
   end
 
   # Check if errexit should trigger based on exit code and options
-  defp errexit_triggered?(exit_code, updates, state, stmt \\ nil)
   defp errexit_triggered?(0, _updates, _state, _stmt), do: false
 
   defp errexit_triggered?(exit_code, updates, state, stmt) when exit_code != 0 do

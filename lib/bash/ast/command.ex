@@ -887,7 +887,7 @@ defmodule Bash.AST.Command do
          stdin,
          redirects,
          meta,
-         pre_prefix_vars \\ nil
+         pre_prefix_vars
        ) do
     {category, payload} = resolve_command(command_name, session_state)
 

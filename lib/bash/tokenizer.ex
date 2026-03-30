@@ -1843,11 +1843,8 @@ defmodule Bash.Tokenizer do
         end
 
       ?{ ->
-        # { starts brace expansion in word context - read until matching }
-        case read_brace_expansion(state) do
-          {:ok, part, new_state} -> read_word_parts(new_state, [part | acc])
-          {:error, _, _, _} = err -> err
-        end
+        {:ok, part, new_state} = read_brace_expansion(state)
+        read_word_parts(new_state, [part | acc])
 
       ?} ->
         # } ends the word (end of brace expansion context)
@@ -2512,7 +2509,7 @@ defmodule Bash.Tokenizer do
   end
 
   # Read simple variable: $VAR, $?, $$, $1, $-, etc.
-  defp read_simple_variable(state, start_line, start_col, at_word_start \\ false) do
+  defp read_simple_variable(state, start_line, start_col, at_word_start) do
     case peek(state) do
       c when c in [??, ?$, ?!, ?#, ?@, ?*, ?_, ?-] ->
         {:ok, {:variable, <<c>>}, advance(state)}
@@ -3607,7 +3604,7 @@ defmodule Bash.Tokenizer do
 
   # Convert word to reserved word if applicable
   defp maybe_reserved_word({:word, [{:literal, text}], line, col}) when text in @reserved_words do
-    {String.to_atom(text), line, col}
+    {String.to_existing_atom(text), line, col}
   end
 
   defp maybe_reserved_word(token), do: token

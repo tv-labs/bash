@@ -311,18 +311,6 @@ defmodule Bash.AST.WhileLoop do
 
         {:continue, result, levels} ->
           {:continue, result, levels, env_updates, iteration}
-
-        {:error, result} ->
-          evaluate_while_condition(
-            result.exit_code || 1,
-            env_updates,
-            condition,
-            body,
-            until_mode,
-            session_state,
-            iteration,
-            effective_stdin
-          )
       end
     end
   end

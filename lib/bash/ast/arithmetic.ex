@@ -210,9 +210,9 @@ defmodule Bash.AST.Arithmetic do
 
           updated =
             case existing do
-              %Bash.Variable{value: elements, attributes: %{array_type: _type}}
+              %Bash.Variable{value: elements, attributes: %{array_type: _type}} = var
               when is_map(elements) ->
-                %Bash.Variable{existing | value: Map.put(elements, index, value)}
+                %Bash.Variable{var | value: Map.put(elements, index, value)}
 
               _ ->
                 Bash.Variable.new_indexed_array(%{index => value})

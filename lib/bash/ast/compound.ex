@@ -170,11 +170,11 @@ defmodule Bash.AST.Compound do
           {:error, result} ->
             {:error, result}
 
-          {:break, result, _level} ->
-            {:break, result, _level}
+          {:break, result, level} ->
+            {:break, result, level}
 
-          {:continue, result, _level} ->
-            {:continue, result, _level}
+          {:continue, result, level} ->
+            {:continue, result, level}
 
           {:return, result} ->
             {:return, result}
