@@ -194,13 +194,87 @@ defmodule Bash.Filesystem.ETS do
   end
 
   @impl true
-  def open(_tid, _path, _modes), do: {:error, :enotsup}
+  def open(tid, "/dev/null", _modes) do
+    {:ok, device} = StringIO.open("")
+    :ets.insert(tid, {{:_device, device}, :dev_null})
+    {:ok, device}
+  end
+
+  def open(tid, path, modes) when is_list(modes) do
+    cond do
+      :write in modes or :append in modes -> open_for_write(tid, path, modes)
+      :read in modes -> open_for_read(tid, path)
+      true -> {:error, :einval}
+    end
+  end
+
+  def open(_tid, _path, _modes), do: {:error, :einval}
+
+  defp open_for_write(tid, path, modes) do
+    is_append = :append in modes
+
+    existing_content =
+      if is_append do
+        case :ets.lookup(tid, path) do
+          [{^path, :file, content, _stat}] -> content
+          _ -> ""
+        end
+      else
+        ""
+      end
+
+    {:ok, device} = StringIO.open("")
+    :ets.insert(tid, {{:_device, device}, {:write_to, path, is_append, existing_content}})
+    {:ok, device}
+  end
+
+  defp open_for_read(tid, path) do
+    case :ets.lookup(tid, path) do
+      [{^path, :file, content, _stat}] ->
+        {:ok, device} = StringIO.open(content)
+        {:ok, device}
+
+      [{^path, :dir, _content, _stat}] ->
+        {:error, :eisdir}
+
+      [] ->
+        {:error, :enoent}
+    end
+  end
 
   @impl true
-  def handle_write(_tid, _device, _data), do: {:error, :enotsup}
+  def handle_write(_tid, device, data) do
+    IO.binwrite(device, data)
+  end
 
   @impl true
-  def handle_close(_tid, _device), do: {:error, :enotsup}
+  def handle_close(tid, device) do
+    case :ets.lookup(tid, {:_device, device}) do
+      [{{:_device, ^device}, :dev_null}] ->
+        :ets.delete(tid, {:_device, device})
+        StringIO.close(device)
+        :ok
+
+      [{{:_device, ^device}, {:write_to, path, is_append, existing_content}}] ->
+        {_input, output} = StringIO.contents(device)
+
+        final_content =
+          if is_append, do: existing_content <> output, else: output
+
+        Enum.each(parent_paths(path), fn parent ->
+          :ets.insert_new(tid, {parent, :dir, nil, dir_stat(0o755)})
+        end)
+
+        :ets.insert(tid, {path, :file, final_content, file_stat(final_content, 0o644)})
+        :ets.delete(tid, {:_device, device})
+        StringIO.close(device)
+        :ok
+
+      [] ->
+        StringIO.close(device)
+        :ok
+    end
+  end
 
   @impl true
   def ls(_tid, _path), do: {:error, :enotsup}

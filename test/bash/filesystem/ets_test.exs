@@ -368,4 +368,47 @@ defmodule Bash.Filesystem.ETSTest do
       :ets.delete(tid)
     end
   end
+
+  describe "open/handle_write/handle_close flow" do
+    test "write mode creates file on close" do
+      tid = ETS.new()
+      {:ok, device} = ETS.open(tid, "/tmp/out.txt", [:write])
+      :ok = ETS.handle_write(tid, device, "hello world")
+      :ok = ETS.handle_close(tid, device)
+      assert {:ok, "hello world"} = ETS.read(tid, "/tmp/out.txt")
+      :ets.delete(tid)
+    end
+
+    test "append mode preserves existing content" do
+      tid = ETS.new(%{"/tmp/log.txt" => "line1\n"})
+      {:ok, device} = ETS.open(tid, "/tmp/log.txt", [:append])
+      :ok = ETS.handle_write(tid, device, "line2\n")
+      :ok = ETS.handle_close(tid, device)
+      assert {:ok, "line1\nline2\n"} = ETS.read(tid, "/tmp/log.txt")
+      :ets.delete(tid)
+    end
+
+    test "read mode returns file content" do
+      tid = ETS.new(%{"/tmp/data.txt" => "some content"})
+      {:ok, device} = ETS.open(tid, "/tmp/data.txt", [:read])
+      assert IO.binread(device, :eof) == "some content"
+      StringIO.close(device)
+      :ets.delete(tid)
+    end
+
+    test "open missing file for read returns error" do
+      tid = ETS.new()
+      assert {:error, :enoent} = ETS.open(tid, "/tmp/missing.txt", [:read])
+      :ets.delete(tid)
+    end
+
+    test "open /dev/null discards writes" do
+      tid = ETS.new()
+      {:ok, device} = ETS.open(tid, "/dev/null", [:write])
+      :ok = ETS.handle_write(tid, device, "ignored data")
+      :ok = ETS.handle_close(tid, device)
+      refute ETS.regular?(tid, "/dev/null")
+      :ets.delete(tid)
+    end
+  end
 end
