@@ -139,6 +139,10 @@ defmodule Bash.Parser.VariableExpander do
   defp parse_braced_modifiers(name, ":=" <> rest), do: parse_modifier(name, :default, ":=", rest)
   defp parse_braced_modifiers(name, ":?" <> rest), do: parse_modifier(name, :default, ":?", rest)
   defp parse_braced_modifiers(name, ":+" <> rest), do: parse_modifier(name, :default, ":+", rest)
+  defp parse_braced_modifiers(name, "-" <> rest), do: parse_modifier(name, :default, "-", rest)
+  defp parse_braced_modifiers(name, "=" <> rest), do: parse_modifier(name, :default, "=", rest)
+  defp parse_braced_modifiers(name, "?" <> rest), do: parse_modifier(name, :default, "?", rest)
+  defp parse_braced_modifiers(name, "+" <> rest), do: parse_modifier(name, :default, "+", rest)
   defp parse_braced_modifiers(name, ":" <> rest), do: parse_modifier(name, :substring, nil, rest)
   defp parse_braced_modifiers(name, "##" <> rest), do: parse_modifier(name, :pattern, "##", rest)
   defp parse_braced_modifiers(name, "#" <> rest), do: parse_modifier(name, :pattern, "#", rest)
@@ -319,8 +323,12 @@ defmodule Bash.Parser.VariableExpander do
   defp expand_default_op(var_name, op, word, session_state) do
     value = get_var_or_nil(var_name, session_state)
     null_or_unset? = is_nil(value) or value == ""
+    unset? = is_nil(value)
 
-    expand_default(op, var_name, value, word, null_or_unset?)
+    case op do
+      ":" <> _ -> expand_default(op, var_name, value, word, null_or_unset?)
+      _ -> expand_default(op, var_name, value, word, unset?)
+    end
   end
 
   defp expand_default(":-", _name, _value, word, true), do: {word, %{}}
@@ -342,6 +350,26 @@ defmodule Bash.Parser.VariableExpander do
   end
 
   defp expand_default(":?", _name, value, _word, false), do: {value, %{}}
+
+  defp expand_default("-", _name, _value, word, true), do: {word, %{}}
+  defp expand_default("-", _name, value, _word, false), do: {value || "", %{}}
+  defp expand_default("=", name, _value, word, true), do: {word, %{name => word}}
+  defp expand_default("=", _name, value, _word, false), do: {value || "", %{}}
+  defp expand_default("+", _name, _value, _word, true), do: {"", %{}}
+  defp expand_default("+", _name, _value, word, false), do: {word, %{}}
+
+  defp expand_default("?", name, _value, word, true) do
+    hint = if word == "", do: "parameter not set", else: word
+
+    raise Bash.SyntaxError,
+      code: "SC2154",
+      line: 1,
+      column: 0,
+      script: "${#{name}?#{word}}",
+      hint: "#{name}: #{hint}"
+  end
+
+  defp expand_default("?", _name, value, _word, false), do: {value || "", %{}}
 
   defp expand_pattern_op(var_name, "#", pattern, session_state) do
     get_var(var_name, session_state) |> remove_prefix(pattern, :shortest)

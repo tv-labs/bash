@@ -896,6 +896,31 @@ defmodule Bash.Parser do
             {:ok, cmd, state}
         end
 
+      # Env binding before a compound command keyword is a syntax error,
+      # but only when it looks like a real compound command (keyword followed by more tokens).
+      # A bare keyword like "FOO=bar for" alone is "command not found" (status 127).
+      {keyword, kline, kcol}
+      when assignments != [] and keyword in [:for, :while, :until, :if, :case] ->
+        next_state = advance(state)
+
+        case current_token(next_state) do
+          {:eof, _, _} ->
+            name = build_word([{:literal, Atom.to_string(keyword)}], kline, kcol)
+
+            cmd = %AST.Command{
+              meta: AST.meta(line, col),
+              name: name,
+              args: [],
+              redirects: [],
+              env_assignments: assignments
+            }
+
+            {:ok, cmd, next_state}
+
+          _ ->
+            {:error, "syntax error near unexpected token `#{keyword}'", kline, kcol}
+        end
+
       # Just assignments, no command
       _ when assignments != [] ->
         # Return assignments as standalone
@@ -2679,6 +2704,18 @@ defmodule Bash.Parser do
 
         Keyword.has_key?(ops, :alternate) ->
           {:alternate, Keyword.get(ops, :alternate)}
+
+        Keyword.has_key?(ops, :default_unset) ->
+          {:default_unset, Keyword.get(ops, :default_unset)}
+
+        Keyword.has_key?(ops, :assign_default_unset) ->
+          {:assign_default_unset, Keyword.get(ops, :assign_default_unset)}
+
+        Keyword.has_key?(ops, :error_unset) ->
+          {:error_unset, Keyword.get(ops, :error_unset)}
+
+        Keyword.has_key?(ops, :alternate_unset) ->
+          {:alternate_unset, Keyword.get(ops, :alternate_unset)}
 
         true ->
           find_expansion_tuple(ops)

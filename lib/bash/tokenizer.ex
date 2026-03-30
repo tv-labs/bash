@@ -2848,6 +2848,47 @@ defmodule Bash.Tokenizer do
 
         {:variable_braced, var_name, [{op_atom, word}]}
 
+      # ${VAR[sub]-default}, ${VAR[sub]=default}, ${VAR[sub]?error}, ${VAR[sub]+alternate}
+      # Non-colon variants: trigger only when variable is unset (not when empty)
+      match =
+          Regex.run(
+            ~r/^([A-Za-z_][A-Za-z0-9_]*)\[([^\]]+)\](-|=|\?|\+)(.*)$/s,
+            content
+          ) ->
+        [_, var_name, subscript, op, word] = match
+
+        sub =
+          case subscript do
+            "@" -> :all_values
+            "*" -> :all_star
+            idx -> {:index, idx}
+          end
+
+        op_atom =
+          case op do
+            "-" -> :default_unset
+            "=" -> :assign_default_unset
+            "?" -> :error_unset
+            "+" -> :alternate_unset
+          end
+
+        {:variable_braced, var_name, [{op_atom, word}, subscript: sub]}
+
+      # ${VAR-default}, ${VAR=default}, ${VAR?error}, ${VAR+alternate}
+      # Non-colon variants: trigger only when variable is unset (not when empty)
+      match = Regex.run(~r/^([A-Za-z_][A-Za-z0-9_]*|[?$!#@*0-9])(-|=|\?|\+)(.*)$/s, content) ->
+        [_, var_name, op, word] = match
+
+        op_atom =
+          case op do
+            "-" -> :default_unset
+            "=" -> :assign_default_unset
+            "?" -> :error_unset
+            "+" -> :alternate_unset
+          end
+
+        {:variable_braced, var_name, [{op_atom, word}]}
+
       # ${VAR#pattern}, ${VAR##pattern}, ${VAR%pattern}, ${VAR%%pattern}
       match = Regex.run(~r/^([A-Za-z_][A-Za-z0-9_]*|[?$!#@*0-9])(##?|%%?)(.*)$/s, content) ->
         [_, var_name, op, pattern] = match
@@ -2983,7 +3024,7 @@ defmodule Bash.Tokenizer do
           case subscript do
             "@" -> :all_values
             "*" -> :all_star
-            idx -> {:index, idx}
+            idx -> {:index, strip_subscript_quotes(idx)}
           end
 
         {:variable_braced, var_name, [subscript: sub]}
@@ -3003,6 +3044,19 @@ defmodule Bash.Tokenizer do
   defp parse_transform_op("a"), do: :attributes
   defp parse_transform_op("u"), do: :upper
   defp parse_transform_op("L"), do: :lower
+
+  defp strip_subscript_quotes(str) do
+    cond do
+      String.starts_with?(str, "\"") and String.ends_with?(str, "\"") ->
+        String.slice(str, 1..-2//1)
+
+      String.starts_with?(str, "'") and String.ends_with?(str, "'") ->
+        String.slice(str, 1..-2//1)
+
+      true ->
+        str
+    end
+  end
 
   # Parse offset string for substring expansion
   # Handles: "5", "-5", "(-5)", " -5"
@@ -3371,11 +3425,68 @@ defmodule Bash.Tokenizer do
                  col}
 
               nil ->
-                {:word, merged_parts, line, col}
+                # Try array subscript assignment where subscript contains variable
+                # references: VAR["$key"]=value → parts like [{:literal, "foo["}, {:var, "key"}, {:literal, "]=value"}]
+                case try_dynamic_subscript_assignment(text, rest, line, col) do
+                  nil -> {:word, merged_parts, line, col}
+                  result -> result
+                end
             end
         end
     end
   end
+
+  defp try_dynamic_subscript_assignment(text, rest, line, col) do
+    case Regex.run(~r/^([A-Za-z_][A-Za-z0-9_]*)\[(.*)$/s, text) do
+      [_, base_name, subscript_start] ->
+        case find_subscript_close(rest, subscript_start) do
+          {:ok, subscript_expr, value_parts} ->
+            var_with_subscript = "#{base_name}[#{subscript_expr}]"
+
+            {:assignment_word, var_with_subscript, merge_adjacent_literals(value_parts), line,
+             col}
+
+          :not_found ->
+            nil
+        end
+
+      nil ->
+        nil
+    end
+  end
+
+  defp find_subscript_close([], _acc), do: :not_found
+
+  defp find_subscript_close([{:literal, text} | rest], acc) do
+    case Regex.run(~r/^([^\]]*)\]=(.*)$/s, text) do
+      [_, subscript_end, value_start] ->
+        subscript_expr = acc <> subscript_end
+
+        value_parts =
+          if value_start == "" do
+            rest
+          else
+            [{:literal, value_start} | rest]
+          end
+
+        {:ok, subscript_expr, value_parts}
+
+      nil ->
+        find_subscript_close(rest, acc <> text)
+    end
+  end
+
+  defp find_subscript_close([{type, var_name} | rest], acc)
+       when type in [:variable_simple, :variable_braced] do
+    find_subscript_close(rest, acc <> "${#{var_name}}")
+  end
+
+  defp find_subscript_close([{type, var_name, _ops} | rest], acc)
+       when type in [:variable_simple, :variable_braced] do
+    find_subscript_close(rest, acc <> "${#{var_name}}")
+  end
+
+  defp find_subscript_close(_parts, _acc), do: :not_found
 
   # SC1069: Check if a word looks like a reserved word immediately followed by [
   # e.g., "if[" or "while[" - these should have a space before [

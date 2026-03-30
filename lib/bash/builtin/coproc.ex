@@ -295,19 +295,10 @@ defmodule Bash.Builtin.Coproc do
     {:ok, stdin_pipe} = Bash.Pipe.create()
     {:ok, stdout_pipe} = Bash.Pipe.create()
 
-    parent = self()
-
-    # FIFO open blocks until both ends are connected,
-    # so body and GenServer must open concurrently.
     pid =
       spawn(fn ->
-        {:ok, stdin_r} = Bash.Pipe.open_read(stdin_pipe)
-        {:ok, stdout_w} = Bash.Pipe.open_write(stdout_pipe)
-        run_internal_body(parent, stdin_r, stdout_w, opts.body, opts.session_state)
+        run_internal_body(stdin_pipe, stdout_pipe, opts.body, opts.session_state)
       end)
-
-    {:ok, stdin_pipe} = Bash.Pipe.open_write(stdin_pipe)
-    {:ok, stdout_pipe} = Bash.Pipe.open_read(stdout_pipe)
 
     ref = Process.monitor(pid)
 
@@ -322,7 +313,7 @@ defmodule Bash.Builtin.Coproc do
      }}
   end
 
-  defp run_internal_body(_coproc_server, stdin_pipe, stdout_pipe, body, session_state) do
+  defp run_internal_body(stdin_pipe, stdout_pipe, body, session_state) do
     body_session = %{
       session_state
       | stdout_sink: Bash.Sink.pipe(stdout_pipe),
@@ -374,7 +365,7 @@ defmodule Bash.Builtin.Coproc do
 
   def handle_call(:close_stdin, _from, %{mode: :internal} = state) do
     Bash.Pipe.close_write(state.stdin_pipe)
-    {:reply, :ok, %{state | stdin_pipe: %{state.stdin_pipe | write_end: nil}}}
+    {:reply, :ok, state}
   end
 
   def handle_call(:close_stdout, _from, %{mode: :external} = state) do

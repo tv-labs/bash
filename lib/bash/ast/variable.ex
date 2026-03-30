@@ -87,6 +87,10 @@ defmodule Bash.AST.Variable do
           | {:assign_default, AST.Word.t()}
           | {:error, AST.Word.t()}
           | {:alternate, AST.Word.t()}
+          | {:default_unset, AST.Word.t()}
+          | {:assign_default_unset, AST.Word.t()}
+          | {:error_unset, AST.Word.t()}
+          | {:alternate_unset, AST.Word.t()}
           | {:length}
           | {:substring, integer(), integer() | nil}
           | {:remove_prefix, AST.Word.t(), :shortest | :longest}
@@ -139,6 +143,18 @@ defmodule Bash.AST.Variable do
 
         {:alternate, word} ->
           "${#{name_with_subscript}:+#{word}}"
+
+        {:default_unset, word} ->
+          "${#{name_with_subscript}-#{word}}"
+
+        {:assign_default_unset, word} ->
+          "${#{name_with_subscript}=#{word}}"
+
+        {:error_unset, word} ->
+          "${#{name_with_subscript}?#{word}}"
+
+        {:alternate_unset, word} ->
+          "${#{name_with_subscript}+#{word}}"
 
         {:length} ->
           "${##{name_with_subscript}}"

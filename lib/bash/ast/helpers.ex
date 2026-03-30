@@ -697,6 +697,76 @@ defmodule Bash.AST.Helpers do
     end
   end
 
+  # ${var-default} - Use default only if var is truly unset (empty string is valid)
+  defp expand_variable(
+         %AST.Variable{
+           name: var_name,
+           subscript: nil,
+           expansion: {:default_unset, default_value}
+         },
+         session_state
+       ) do
+    case get_scalar_value_or_unset(session_state, var_name) do
+      :unset -> expand_word_or_string(default_value, session_state)
+      {:set, value} -> value
+    end
+  end
+
+  # ${var=default} - Assign default only if var is truly unset
+  defp expand_variable(
+         %AST.Variable{
+           name: var_name,
+           subscript: nil,
+           expansion: {:assign_default_unset, default_value}
+         },
+         session_state
+       ) do
+    case get_scalar_value_or_unset(session_state, var_name) do
+      :unset -> expand_word_or_string(default_value, session_state)
+      {:set, value} -> value
+    end
+  end
+
+  # ${var?error} - Error only if var is truly unset
+  defp expand_variable(
+         %AST.Variable{name: var_name, subscript: nil, expansion: {:error_unset, error_word}},
+         session_state
+       ) do
+    case get_scalar_value_or_unset(session_state, var_name) do
+      :unset ->
+        hint =
+          case error_word do
+            %AST.Word{parts: [{:literal, ""}]} -> "parameter not set"
+            _ -> expand_word_or_string(error_word, session_state)
+          end
+
+        raise Bash.SyntaxError,
+          code: "SC2154",
+          line: 1,
+          column: 0,
+          script: "${#{var_name}?}",
+          hint: "#{var_name}: #{hint}"
+
+      {:set, value} ->
+        value
+    end
+  end
+
+  # ${var+alternate} - Use alternate only if var is set (even if empty)
+  defp expand_variable(
+         %AST.Variable{
+           name: var_name,
+           subscript: nil,
+           expansion: {:alternate_unset, alt_value}
+         },
+         session_state
+       ) do
+    case get_scalar_value_or_unset(session_state, var_name) do
+      :unset -> ""
+      {:set, _value} -> expand_word_or_string(alt_value, session_state)
+    end
+  end
+
   # ${var:offset} or ${var:offset:length} - Substring extraction
   defp expand_variable(
          %AST.Variable{name: var_name, subscript: nil, expansion: {:substring, offset, length}},
@@ -1045,8 +1115,25 @@ defmodule Bash.AST.Helpers do
     end
   end
 
+  defp expand_variable_with_updates(
+         %AST.Variable{
+           name: var_name,
+           subscript: nil,
+           expansion: {:assign_default_unset, default_value}
+         },
+         session_state
+       ) do
+    case get_scalar_value_or_unset(session_state, var_name) do
+      :unset ->
+        default = expand_word_or_string(default_value, session_state)
+        {default, %{var_name => default}}
+
+      {:set, value} ->
+        {value, %{}}
+    end
+  end
+
   defp expand_variable_with_updates(var, session_state) do
-    # All other variable expansions don't produce env updates
     {expand_variable(var, session_state), %{}}
   end
 
@@ -1958,6 +2045,40 @@ defmodule Bash.AST.Helpers do
         resolve_variable_value(session_state, var_name, 0)
     end
   end
+
+  defp get_scalar_value_or_unset(session_state, var_name) do
+    cond do
+      is_special_var?(var_name) ->
+        {:set, get_special_var(var_name, session_state)}
+
+      is_positional_param?(var_name) ->
+        {:set, get_positional_param(var_name, session_state)}
+
+      is_dynamic_var?(var_name) ->
+        {:set, get_dynamic_var(var_name, session_state)}
+
+      true ->
+        resolve_variable_value_or_unset(session_state, var_name, 0)
+    end
+  end
+
+  defp resolve_variable_value_or_unset(session_state, var_name, depth) when depth < 10 do
+    case Map.get(session_state.variables, var_name) do
+      nil ->
+        :unset
+
+      %Variable{value: :unset} ->
+        :unset
+
+      %Variable{} = var ->
+        case Variable.nameref_target(var) do
+          nil -> {:set, Variable.get(var, nil) || ""}
+          target_name -> resolve_variable_value_or_unset(session_state, target_name, depth + 1)
+        end
+    end
+  end
+
+  defp resolve_variable_value_or_unset(_session_state, _var_name, _depth), do: :unset
 
   # Resolve variable value, following nameref references
   defp resolve_variable_value(session_state, var_name, depth) when depth < 10 do
