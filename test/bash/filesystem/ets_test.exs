@@ -351,5 +351,21 @@ defmodule Bash.Filesystem.ETSTest do
       assert {:error, :enoent} = ETS.rm(tid, "/nonexistent/file.txt")
       :ets.delete(tid)
     end
+
+    test "returns eisdir when path is a directory" do
+      tid = ETS.new()
+      assert {:error, :eisdir} = ETS.rm(tid, "/tmp")
+      assert ETS.dir?(tid, "/tmp")
+      :ets.delete(tid)
+    end
+  end
+
+  describe "write/4 edge cases" do
+    test "returns eisdir when writing to a directory path" do
+      tid = ETS.new()
+      assert {:error, :eisdir} = ETS.write(tid, "/tmp", "content", [])
+      assert ETS.dir?(tid, "/tmp")
+      :ets.delete(tid)
+    end
   end
 end

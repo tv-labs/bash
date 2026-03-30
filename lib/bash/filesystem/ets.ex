@@ -148,22 +148,25 @@ defmodule Bash.Filesystem.ETS do
       :ets.insert_new(tid, {parent, :dir, nil, dir_stat(0o755)})
     end)
 
-    {final_content, mode} =
-      case :ets.lookup(tid, path) do
-        [{^path, :file, existing, existing_stat}] ->
-          if Keyword.get(opts, :append, false) do
-            {existing <> binary, existing_stat.mode}
-          else
-            {binary, existing_stat.mode}
-          end
+    case :ets.lookup(tid, path) do
+      [{^path, :dir, _, _}] ->
+        {:error, :eisdir}
 
-        _ ->
-          {binary, 0o644}
-      end
+      [{^path, :file, existing, existing_stat}] ->
+        final_content =
+          if Keyword.get(opts, :append, false), do: existing <> binary, else: binary
 
-    stat = file_stat(final_content, mode)
-    :ets.insert(tid, {path, :file, final_content, stat})
-    :ok
+        :ets.insert(
+          tid,
+          {path, :file, final_content, file_stat(final_content, existing_stat.mode)}
+        )
+
+        :ok
+
+      [] ->
+        :ets.insert(tid, {path, :file, binary, file_stat(binary, 0o644)})
+        :ok
+    end
   end
 
   @impl true
@@ -177,11 +180,16 @@ defmodule Bash.Filesystem.ETS do
 
   @impl true
   def rm(tid, path) do
-    if :ets.member(tid, path) do
-      :ets.delete(tid, path)
-      :ok
-    else
-      {:error, :enoent}
+    case :ets.lookup(tid, path) do
+      [{^path, :file, _, _}] ->
+        :ets.delete(tid, path)
+        :ok
+
+      [{^path, :dir, _, _}] ->
+        {:error, :eisdir}
+
+      [] ->
+        {:error, :enoent}
     end
   end
 
