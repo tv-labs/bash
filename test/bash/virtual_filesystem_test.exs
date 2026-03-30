@@ -1063,4 +1063,86 @@ defmodule Bash.VirtualFilesystemTest do
       assert get_stdout(result) =~ vfs_bin <> "/hashme"
     end
   end
+
+  describe "process substitution with virtual filesystem" do
+    test "input process substitution writes temp file to VFS", context do
+      {session, _fs} =
+        start_vfs_session(context, %{
+          "/workspace" => :directory,
+          "/tmp" => :directory
+        })
+
+      # Snapshot host /tmp before — stale files from prior runs must not skew the check.
+      before_subst = MapSet.new(Path.wildcard("/tmp/runcom_proc_subst_*"))
+
+      # Use a redirect into a builtin loop rather than external cat — the
+      # VFS temp file exists only in memory and cannot be opened by an OS process.
+      result =
+        run_script(
+          session,
+          "while read line; do echo \"$line\"; done < <(echo hello_from_vfs)"
+        )
+
+      assert get_stdout(result) == "hello_from_vfs\n"
+
+      after_subst = MapSet.new(Path.wildcard("/tmp/runcom_proc_subst_*"))
+      new_files = MapSet.difference(after_subst, before_subst) |> MapSet.to_list()
+      assert new_files == [], "ProcessSubst created host files: #{inspect(new_files)}"
+    end
+  end
+
+  describe "full VFS sandboxing — no host filesystem access" do
+    test "coproc with VFS creates no host pipe files", context do
+      # Use working_dir: "/tmp" so the external coproc process can start on the host.
+      # The goal of this test is to verify no host bash_pipe_* FIFOs are created —
+      # coproc I/O is handled by BeamPipe, not OS FIFOs.
+      {session, _fs} =
+        start_vfs_session(
+          context,
+          %{
+            "/tmp" => :directory
+          },
+          working_dir: "/tmp"
+        )
+
+      before_pipes = MapSet.new(Path.wildcard("/tmp/bash_pipe_*"))
+
+      result =
+        run_script(session, ~S"""
+        coproc cat
+        echo hello >&${COPROC[1]}
+        eval "exec ${COPROC[1]}>&-"
+        read -u ${COPROC[0]} reply
+        echo "$reply"
+        """)
+
+      assert get_stdout(result) =~ "hello"
+
+      after_pipes = MapSet.new(Path.wildcard("/tmp/bash_pipe_*"))
+      new_pipes = MapSet.difference(after_pipes, before_pipes) |> MapSet.to_list()
+      assert new_pipes == [], "Coproc created host pipes: #{inspect(new_pipes)}"
+    end
+
+    test "process substitution with VFS creates no host files", context do
+      {session, _fs} =
+        start_vfs_session(context, %{
+          "/workspace" => :directory,
+          "/tmp" => :directory
+        })
+
+      before_subst = MapSet.new(Path.wildcard("/tmp/runcom_proc_subst_*"))
+
+      result =
+        run_script(
+          session,
+          "while read line; do echo \"$line\"; done < <(echo sandboxed)"
+        )
+
+      assert get_stdout(result) == "sandboxed\n"
+
+      after_subst = MapSet.new(Path.wildcard("/tmp/runcom_proc_subst_*"))
+      new_files = MapSet.difference(after_subst, before_subst) |> MapSet.to_list()
+      assert new_files == [], "ProcessSubst created host files: #{inspect(new_files)}"
+    end
+  end
 end
