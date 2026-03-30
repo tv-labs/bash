@@ -87,13 +87,15 @@ defmodule Bash.Filesystem.ETS do
   def exists?(_tid, path) when path in @magic_devices, do: true
 
   def exists?(tid, path) do
-    :ets.member(tid, path)
+    :ets.member(tid, normalize(path))
   end
 
   @impl true
   def dir?(_tid, path) when path in @magic_devices, do: false
 
   def dir?(tid, path) do
+    path = normalize(path)
+
     case :ets.lookup(tid, path) do
       [{^path, :dir, _content, _stat}] -> true
       _ -> false
@@ -104,6 +106,8 @@ defmodule Bash.Filesystem.ETS do
   def regular?(_tid, path) when path in @magic_devices, do: false
 
   def regular?(tid, path) do
+    path = normalize(path)
+
     case :ets.lookup(tid, path) do
       [{^path, :file, _content, _stat}] -> true
       _ -> false
@@ -116,6 +120,8 @@ defmodule Bash.Filesystem.ETS do
   end
 
   def stat(tid, path) do
+    path = normalize(path)
+
     case :ets.lookup(tid, path) do
       [{^path, _type, _content, stat}] -> {:ok, stat}
       [] -> {:error, :enoent}
@@ -131,6 +137,8 @@ defmodule Bash.Filesystem.ETS do
   def read(_tid, "/dev/stdin"), do: {:error, :eacces}
 
   def read(tid, path) do
+    path = normalize(path)
+
     case :ets.lookup(tid, path) do
       [{^path, :file, content, _stat}] -> {:ok, content}
       [{^path, :dir, _content, _stat}] -> {:error, :eisdir}
@@ -142,6 +150,7 @@ defmodule Bash.Filesystem.ETS do
   def write(_tid, "/dev/null", _content, _opts), do: :ok
 
   def write(tid, path, content, opts) do
+    path = normalize(path)
     binary = IO.iodata_to_binary(content)
 
     Enum.each(parent_paths(path), fn parent ->
@@ -171,6 +180,8 @@ defmodule Bash.Filesystem.ETS do
 
   @impl true
   def mkdir_p(tid, path) do
+    path = normalize(path)
+
     Enum.each([path | parent_paths(path)], fn dir ->
       :ets.insert_new(tid, {dir, :dir, nil, dir_stat(0o755)})
     end)
@@ -180,6 +191,8 @@ defmodule Bash.Filesystem.ETS do
 
   @impl true
   def rm(tid, path) do
+    path = normalize(path)
+
     case :ets.lookup(tid, path) do
       [{^path, :file, _, _}] ->
         :ets.delete(tid, path)
@@ -201,6 +214,8 @@ defmodule Bash.Filesystem.ETS do
   end
 
   def open(tid, path, modes) when is_list(modes) do
+    path = normalize(path)
+
     cond do
       :write in modes or :append in modes -> open_for_write(tid, path, modes)
       :read in modes -> open_for_read(tid, path)
@@ -278,6 +293,8 @@ defmodule Bash.Filesystem.ETS do
 
   @impl true
   def ls(tid, dir_path) do
+    dir_path = normalize(dir_path)
+
     if :ets.member(tid, dir_path) and dir?(tid, dir_path) do
       entries =
         :ets.foldl(
@@ -337,6 +354,8 @@ defmodule Bash.Filesystem.ETS do
 
   @impl true
   def read_link_all(_tid, _path), do: {:error, :enotsup}
+
+  defp normalize(path), do: Path.expand(path)
 
   defp insert_dir(tid, path, mode) do
     stat = dir_stat(mode)
