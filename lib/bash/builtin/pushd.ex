@@ -24,8 +24,10 @@ defmodule Bash.Builtin.Pushd do
   """
   use Bash.Builtin
 
-  alias Bash.Variable
   alias Bash.Builtin.Dirs
+  alias Bash.CommandPolicy
+  alias Bash.Filesystem
+  alias Bash.Variable
 
   defbash execute(args, state) do
     case parse_args(args) do
@@ -107,22 +109,22 @@ defmodule Bash.Builtin.Pushd do
           :ok
         else
           # Swap and change directory
-          case validate_directory(second) do
-            :ok ->
-              new_stack = [cwd | rest]
-              write(format_stack_output(second, new_stack, session_state))
+          with :ok <- CommandPolicy.check_path(CommandPolicy.from_state(session_state), second),
+               :ok <- validate_directory(second, session_state) do
+            new_stack = [cwd | rest]
+            write(format_stack_output(second, new_stack, session_state))
 
-              update_state(
-                working_dir: second,
-                dir_stack: new_stack,
-                variables: %{
-                  "PWD" => second,
-                  "OLDPWD" => cwd
-                }
-              )
+            update_state(
+              working_dir: second,
+              dir_stack: new_stack,
+              variables: %{
+                "PWD" => second,
+                "OLDPWD" => cwd
+              }
+            )
 
-              :ok
-
+            :ok
+          else
             {:error, reason} ->
               error("pushd: #{second}: #{reason}")
               {:ok, 1}
@@ -139,34 +141,32 @@ defmodule Bash.Builtin.Pushd do
     # Resolve relative paths
     resolved_dir = resolve_path(expanded_dir, session_state)
 
-    case validate_directory(resolved_dir) do
-      :ok ->
-        cwd = session_state.working_dir
-        stack = Map.get(session_state, :dir_stack, [])
+    with :ok <- CommandPolicy.check_path(CommandPolicy.from_state(session_state), resolved_dir),
+         :ok <- validate_directory(resolved_dir, session_state) do
+      cwd = session_state.working_dir
+      stack = Map.get(session_state, :dir_stack, [])
 
-        if opts.no_cd do
-          # Only push to stack, don't change directory
-          new_stack = [resolved_dir | stack]
-          write(format_stack_output(cwd, new_stack, session_state))
-          update_state(dir_stack: new_stack)
-          :ok
-        else
-          # Push current directory to stack and change to new directory
-          new_stack = [cwd | stack]
-          write(format_stack_output(resolved_dir, new_stack, session_state))
+      if opts.no_cd do
+        new_stack = [resolved_dir | stack]
+        write(format_stack_output(cwd, new_stack, session_state))
+        update_state(dir_stack: new_stack)
+        :ok
+      else
+        new_stack = [cwd | stack]
+        write(format_stack_output(resolved_dir, new_stack, session_state))
 
-          update_state(
-            working_dir: resolved_dir,
-            dir_stack: new_stack,
-            variables: %{
-              "PWD" => resolved_dir,
-              "OLDPWD" => cwd
-            }
-          )
+        update_state(
+          working_dir: resolved_dir,
+          dir_stack: new_stack,
+          variables: %{
+            "PWD" => resolved_dir,
+            "OLDPWD" => cwd
+          }
+        )
 
-          :ok
-        end
-
+        :ok
+      end
+    else
       {:error, reason} ->
         error("pushd: #{dir}: #{reason}")
         {:ok, 1}
@@ -214,21 +214,21 @@ defmodule Bash.Builtin.Pushd do
 
         :ok
       else
-        case validate_directory(new_cwd) do
-          :ok ->
-            write(format_stack_output(new_cwd, rotated_stack, session_state))
+        with :ok <- CommandPolicy.check_path(CommandPolicy.from_state(session_state), new_cwd),
+             :ok <- validate_directory(new_cwd, session_state) do
+          write(format_stack_output(new_cwd, rotated_stack, session_state))
 
-            update_state(
-              working_dir: new_cwd,
-              dir_stack: rotated_stack,
-              variables: %{
-                "PWD" => new_cwd,
-                "OLDPWD" => session_state.working_dir
-              }
-            )
+          update_state(
+            working_dir: new_cwd,
+            dir_stack: rotated_stack,
+            variables: %{
+              "PWD" => new_cwd,
+              "OLDPWD" => session_state.working_dir
+            }
+          )
 
-            :ok
-
+          :ok
+        else
           {:error, reason} ->
             error("pushd: #{new_cwd}: #{reason}")
             {:ok, 1}
@@ -238,12 +238,14 @@ defmodule Bash.Builtin.Pushd do
   end
 
   # Validate that the path is a directory
-  defp validate_directory(path) do
+  defp validate_directory(path, session_state) do
+    fs = Filesystem.from_state(session_state)
+
     cond do
-      not File.exists?(path) ->
+      not Filesystem.exists?(fs, path) ->
         {:error, "No such file or directory"}
 
-      not File.dir?(path) ->
+      not Filesystem.dir?(fs, path) ->
         {:error, "Not a directory"}
 
       true ->

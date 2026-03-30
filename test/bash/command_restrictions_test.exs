@@ -603,7 +603,7 @@ defmodule Bash.CommandRestrictionsTest do
   describe "CommandPolicy struct" do
     test "new/1 from keyword list" do
       policy = CommandPolicy.new(commands: :no_external)
-      assert %CommandPolicy{commands: :no_external, paths: nil, files: nil} = policy
+      assert %CommandPolicy{commands: :no_external, paths: nil} = policy
     end
 
     test "new/1 normalizes string lists to MapSet" do

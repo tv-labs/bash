@@ -23,6 +23,7 @@ defmodule Bash.Builtin.Type do
   use Bash.Builtin
 
   alias Bash.Builtin, as: BuiltinRegistry
+  alias Bash.Filesystem
   alias Bash.Variable
 
   defbash execute(args, state) do
@@ -175,8 +176,10 @@ defmodule Bash.Builtin.Type do
   end
 
   defp find_in_path(name, state) do
+    fs = Filesystem.from_state(state)
+
     if String.contains?(name, "/") do
-      if File.exists?(name) and not File.dir?(name), do: name, else: nil
+      if Filesystem.exists?(fs, name) and not Filesystem.dir?(fs, name), do: name, else: nil
     else
       path_var = Map.get(state.variables, "PATH", Variable.new("/usr/bin:/bin"))
       path_dirs = path_var |> Variable.get(nil) |> String.split(":")
@@ -184,7 +187,7 @@ defmodule Bash.Builtin.Type do
       Enum.find_value(path_dirs, fn dir ->
         full_path = Path.join(dir, name)
 
-        if File.exists?(full_path) and not File.dir?(full_path) do
+        if Filesystem.exists?(fs, full_path) and not Filesystem.dir?(fs, full_path) do
           full_path
         end
       end)

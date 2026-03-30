@@ -20,6 +20,7 @@ defmodule Bash.Builtin.Command do
   alias Bash.Builtin
   alias Bash.CommandPolicy
   alias Bash.CommandPort
+  alias Bash.Filesystem
   alias Bash.Variable
 
   # Standard utilities path that is guaranteed to find all standard utilities
@@ -260,22 +261,22 @@ defmodule Bash.Builtin.Command do
 
   # Find command in PATH
   defp find_in_path(name, state) do
+    fs = Filesystem.from_state(state)
+
     if String.contains?(name, "/") do
-      # Absolute or relative path - check directly
-      if File.exists?(name) and not File.dir?(name) do
+      if Filesystem.exists?(fs, name) and not Filesystem.dir?(fs, name) do
         Path.expand(name, state.working_dir)
       else
         nil
       end
     else
-      # Search in PATH
       path_var = Map.get(state.variables, "PATH", Variable.new(@default_path))
       path_dirs = path_var |> Variable.get(nil) |> String.split(":")
 
       Enum.find_value(path_dirs, fn dir ->
         full_path = Path.join(dir, name)
 
-        if File.exists?(full_path) and not File.dir?(full_path) do
+        if Filesystem.exists?(fs, full_path) and not Filesystem.dir?(fs, full_path) do
           full_path
         end
       end)
