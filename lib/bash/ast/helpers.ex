@@ -1836,9 +1836,6 @@ defmodule Bash.AST.Helpers do
   defp extract_exit_code({:exit, result, _updates}), do: result.exit_code || 0
   defp extract_exit_code(_), do: 0
 
-  # Expand process substitution by starting a background process and returning FIFO path
-  # The background process writes to (for input) or reads from (for output) the FIFO.
-  # Returns {fifo_path, pid} so caller can track for cleanup.
   defp expand_process_substitution(ast, direction, session_state) do
     temp_dir = get_temp_dir(session_state)
 
@@ -1848,8 +1845,8 @@ defmodule Bash.AST.Helpers do
            session_state: session_state,
            temp_dir: temp_dir
          ) do
-      {:ok, pid, fifo_path} ->
-        {fifo_path, pid}
+      {:ok, pid, temp_path} ->
+        {temp_path, pid}
 
       {:error, reason} ->
         # On error, return empty string (similar to failed command substitution)

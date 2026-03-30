@@ -122,6 +122,10 @@ defmodule Bash.Pipe do
     {:noreply, %{state | reader: {:all, from}}}
   end
 
+  def handle_call(:close_write, _from, %{closed: true} = state) do
+    {:reply, :ok, state}
+  end
+
   def handle_call(:close_write, _from, %{reader: reader, buffer: buffer} = state) do
     new_state = %{state | closed: true, reader: nil}
 

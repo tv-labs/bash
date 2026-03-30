@@ -49,7 +49,7 @@ defmodule Bash.ProcessSubst do
   alias Bash.Sink
 
   defstruct [
-    :fifo_path,
+    :temp_path,
     :direction,
     :command_ast,
     :session_state,
@@ -60,7 +60,7 @@ defmodule Bash.ProcessSubst do
   @type direction :: :input | :output
 
   @type t :: %__MODULE__{
-          fifo_path: String.t() | nil,
+          temp_path: String.t() | nil,
           direction: direction(),
           command_ast: term(),
           session_state: map(),
@@ -85,8 +85,8 @@ defmodule Bash.ProcessSubst do
   def start_link(opts) do
     case GenServer.start_link(__MODULE__, opts) do
       {:ok, pid} ->
-        case GenServer.call(pid, :get_fifo_path, :infinity) do
-          {:ok, fifo_path} -> {:ok, pid, fifo_path}
+        case GenServer.call(pid, :get_temp_path, :infinity) do
+          {:ok, temp_path} -> {:ok, pid, temp_path}
           {:error, reason} -> {:error, reason}
         end
 
@@ -126,7 +126,7 @@ defmodule Bash.ProcessSubst do
       direction: direction,
       command_ast: command_ast,
       session_state: session_state,
-      fifo_path: nil,
+      temp_path: nil,
       worker_pid: nil,
       os_pid: nil
     }
@@ -145,7 +145,7 @@ defmodule Bash.ProcessSubst do
     Bash.Filesystem.mkdir_p(filesystem, temp_dir)
 
     # For :input (<(cmd)), run the command inline so the file is written before
-    # get_fifo_path returns. The GenServer is blocked during execution, which is
+    # get_temp_path returns. The GenServer is blocked during execution, which is
     # fine — the caller needs the file ready before it can proceed anyway.
     #
     # For :output (>(cmd)), spawn async: the caller writes the file and the
@@ -154,24 +154,20 @@ defmodule Bash.ProcessSubst do
       case state.direction do
         :input ->
           run_worker(:input, temp_path, state, self())
-          %{state | fifo_path: temp_path}
+          %{state | temp_path: temp_path}
 
         :output ->
           parent = self()
           worker_pid = spawn_link(fn -> run_worker(:output, temp_path, state, parent) end)
-          %{state | fifo_path: temp_path, worker_pid: worker_pid}
+          %{state | temp_path: temp_path, worker_pid: worker_pid}
       end
 
     {:noreply, state}
   end
 
   @impl true
-  def handle_call(:get_fifo_path, _from, %{fifo_path: nil} = state) do
-    {:reply, {:error, :not_ready}, state}
-  end
-
-  def handle_call(:get_fifo_path, _from, state) do
-    {:reply, {:ok, state.fifo_path}, state}
+  def handle_call(:get_temp_path, _from, state) do
+    {:reply, {:ok, state.temp_path}, state}
   end
 
   def handle_call(:wait, _from, %{worker_pid: nil} = state) do
@@ -225,9 +221,9 @@ defmodule Bash.ProcessSubst do
 
   @impl true
   def terminate(_reason, state) do
-    if state.fifo_path do
+    if state.temp_path do
       filesystem = Bash.Filesystem.from_state(state.session_state)
-      Bash.Filesystem.rm(filesystem, state.fifo_path)
+      Bash.Filesystem.rm(filesystem, state.temp_path)
     end
 
     :ok
