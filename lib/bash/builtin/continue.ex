@@ -34,7 +34,7 @@ defmodule Bash.Builtin.Continue do
 
     if loop_depth == 0 do
       error("continue: only meaningful in a `for', `while', or `until' loop")
-      {:ok, 1}
+      {:ok, 0}
     else
       case parse_level(args, loop_depth) do
         {:ok, levels} ->
@@ -47,7 +47,13 @@ defmodule Bash.Builtin.Continue do
 
         {:error, :too_many_args, reason} ->
           error(reason)
-          {:exit, %CommandResult{command: "continue", exit_code: 2, error: reason}}
+          # bash prints error then breaks out of the loop
+          {:break,
+           %CommandResult{
+             command: "continue",
+             exit_code: 0,
+             error: reason
+           }, 1}
 
         {:error, reason} ->
           error(reason)

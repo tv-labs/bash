@@ -28,7 +28,15 @@ defmodule Bash.SpecCase do
   def run_and_assert(%Bash.SpecParser{} = spec) do
     task =
       Task.async(fn ->
-        Bash.run(spec.code)
+        tmp_dir = Path.join(System.tmp_dir!(), "bash_spec_#{System.unique_integer([:positive])}")
+        File.mkdir_p!(tmp_dir)
+        File.mkdir_p!(Path.join(tmp_dir, "_tmp"))
+
+        try do
+          Bash.run(spec.code, env: %{"TMP" => tmp_dir}, working_dir: tmp_dir)
+        after
+          File.rm_rf(tmp_dir)
+        end
       end)
 
     run_result =

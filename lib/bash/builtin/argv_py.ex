@@ -22,7 +22,11 @@ defmodule Bash.Builtin.ArgvPy do
     formatted =
       args
       |> Enum.map_join(", ", fn arg ->
-        escaped = String.replace(arg, "\n", "\\n")
+        escaped =
+          arg
+          |> String.replace("\\", "\\\\")
+          |> String.replace("\n", "\\n")
+
         "'" <> escaped <> "'"
       end)
 

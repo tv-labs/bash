@@ -58,7 +58,16 @@ defmodule Bash.AST.Redirect do
 
   alias Bash.AST
 
-  @type direction :: :input | :output | :append | :duplicate | :heredoc | :herestring
+  @type direction ::
+          :input
+          | :output
+          | :append
+          | :clobber
+          | :duplicate
+          | :move
+          | :close
+          | :heredoc
+          | :herestring
 
   @type target ::
           {:file, AST.Word.t()}
@@ -101,10 +110,21 @@ defmodule Bash.AST.Redirect do
       "#{fd_str}>> #{file}"
     end
 
+    def to_string(%{direction: :clobber, fd: fd, target: {:file, file}}) when is_integer(fd) do
+      fd_str = if fd == 1, do: "", else: "#{fd}"
+      "#{fd_str}>| #{file}"
+    end
+
     def to_string(%{direction: :duplicate, fd: fd, target: {:fd, target_fd}})
         when is_integer(fd) do
       fd_str = if fd == 1, do: "", else: "#{fd}"
       "#{fd_str}>&#{target_fd}"
+    end
+
+    def to_string(%{direction: :move, fd: fd, target: {:fd, target_fd}})
+        when is_integer(fd) do
+      fd_str = if fd == 1, do: "", else: "#{fd}"
+      "#{fd_str}>&#{target_fd}-"
     end
 
     # Heredoc: <<DELIM ... DELIM or <<-DELIM ... DELIM

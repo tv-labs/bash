@@ -23,7 +23,6 @@ defmodule Bash.Builtin.Local do
   # which is handled by the execution context.
   @doc false
   def execute(args, stdin, session_state) do
-    # Delegate to declare - the scope handling happens at the execution level
-    Declare.execute(args, stdin, session_state)
+    Declare.execute(args, stdin, Map.put(session_state, :__local_mode__, true))
   end
 end

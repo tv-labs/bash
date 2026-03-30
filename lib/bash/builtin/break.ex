@@ -32,7 +32,7 @@ defmodule Bash.Builtin.Break do
 
     if loop_depth == 0 do
       error("break: only meaningful in a `for', `while', or `until' loop")
-      {:ok, 1}
+      {:ok, 0}
     else
       case parse_level(args, loop_depth) do
         {:ok, levels} ->

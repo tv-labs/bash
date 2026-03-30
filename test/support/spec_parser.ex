@@ -181,6 +181,7 @@ defmodule Bash.SpecParser do
   defp parse_bash_overrides(lines) do
     acc = %{}
 
+    # OK bash overrides (acceptable bash-specific behavior)
     acc = parse_inline_stdout(lines, "## OK bash stdout: ", acc)
     acc = parse_inline_stdout_for_bash_in_list(lines, acc)
     acc = parse_stdout_json(lines, "## OK bash stdout-json: ", acc)
@@ -188,7 +189,17 @@ defmodule Bash.SpecParser do
     acc = parse_multiline_stdout(lines, "## OK bash STDOUT:", acc)
     acc = parse_multiline_stdout_for_bash_in_list(lines, acc)
     acc = parse_status(lines, "## OK bash status: ", acc)
-    parse_status_for_bash_in_list(lines, acc)
+    acc = parse_status_for_bash_in_list(lines, acc)
+
+    # BUG bash overrides (documented bash quirks we intentionally emulate)
+    acc = parse_inline_stdout(lines, "## BUG bash stdout: ", acc)
+    acc = parse_inline_stdout_for_bash_in_list(lines, acc, "## BUG ")
+    acc = parse_stdout_json(lines, "## BUG bash stdout-json: ", acc)
+    acc = parse_stdout_json_for_bash_in_list(lines, acc, "## BUG ")
+    acc = parse_multiline_stdout(lines, "## BUG bash STDOUT:", acc)
+    acc = parse_multiline_stdout_for_bash_in_list(lines, acc, "## BUG ")
+    acc = parse_status(lines, "## BUG bash status: ", acc)
+    parse_status_for_bash_in_list(lines, acc, "## BUG ")
   end
 
   defp parse_inline_stdout(lines, prefix, acc) do
@@ -301,10 +312,15 @@ defmodule Bash.SpecParser do
          rest = Enum.drop(lines, start_idx + 1),
          end_idx when not is_nil(end_idx) <-
            find_block_end(rest) do
-      rest
-      |> Enum.take(end_idx)
-      |> Enum.join("\n")
-      |> Kernel.<>("\n")
+      block_lines = Enum.take(rest, end_idx)
+
+      if block_lines == [] do
+        ""
+      else
+        block_lines
+        |> Enum.join("\n")
+        |> Kernel.<>("\n")
+      end
     else
       _ -> nil
     end

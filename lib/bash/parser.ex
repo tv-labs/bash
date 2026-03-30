@@ -801,6 +801,9 @@ defmodule Bash.Parser do
     end
   end
 
+  @redirect_tokens_early ~w[less greater dgreater lessand greaterand lessgreat andgreat anddgreat dless dlessdash tless io_number brace_fd]a
+  defguardp is_redirect_token_early(token) when elem(token, 0) in @redirect_tokens_early
+
   defp parse_simple_command_with_assignments(state, assignments, line, col) do
     # Parse command name (if any)
     case current_token(state) do
@@ -915,6 +918,24 @@ defmodule Bash.Parser do
           }
 
           {:ok, compound, state}
+        end
+
+      # Redirect-only command (e.g., 2>&1, > file.txt)
+      token when assignments == [] and is_redirect_token_early(token) ->
+        case parse_command_args(state, [], []) do
+          {:error, _, _, _} = err ->
+            err
+
+          {_args, redirects, state} ->
+            cmd = %AST.Command{
+              meta: AST.meta(line, col),
+              name: build_word([{:literal, ":"}], line, col),
+              args: [],
+              redirects: redirects,
+              env_assignments: []
+            }
+
+            {:ok, cmd, state}
         end
 
       # SC1133: Pipe at start of line (should end previous line)
@@ -1740,8 +1761,12 @@ defmodule Bash.Parser do
          "(SC1086) Don't use `$` on for loop variable `#{var_name}`. Use `for #{var_name} in ...` not `for $#{var_name} in ...`",
          wline, wcol}
 
-      {:word, [{:literal, var_name}], _, _} ->
-        parse_for_with_variable(state, var_name, line, col)
+      {:word, [{:literal, var_name}], wline, wcol} ->
+        if valid_identifier?(var_name) do
+          parse_for_with_variable(state, var_name, line, col)
+        else
+          {:error, "not a valid identifier: '#{var_name}'", wline, wcol}
+        end
 
       {:in, _iline, _icol} ->
         parse_for_with_variable(state, "in", line, col)
@@ -2720,6 +2745,10 @@ defmodule Bash.Parser do
   end
 
   defp current_position(state), do: token_position(current_token(state))
+
+  defp valid_identifier?(name) when is_binary(name) do
+    Regex.match?(~r/\A[a-zA-Z_][a-zA-Z_0-9]*\z/, name)
+  end
 
   defp token_position({_, line, col}), do: {line, col}
   defp token_position({_, _, line, col}), do: {line, col}

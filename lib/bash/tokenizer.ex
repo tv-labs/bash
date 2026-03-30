@@ -644,6 +644,19 @@ defmodule Bash.Tokenizer do
     end
   end
 
+  defp read_io_number(state, acc) do
+    case peek_next(state) do
+      c when c in ?0..?9 ->
+        read_io_number(advance(state), acc * 10 + (c - ?0))
+
+      c when c in [?\<, ?\>] ->
+        {:io_number, acc, advance(state)}
+
+      _ ->
+        :not_io_number
+    end
+  end
+
   # Try to read a brace fd specifier: {IDENTIFIER} followed by a redirect operator (< or >).
   # This is bash 4.1+ syntax for dynamic fd allocation.
   # Example: exec {myfd}>&1 — allocates a new fd, stores number in myfd, dups to stdout
@@ -1562,6 +1575,9 @@ defmodule Bash.Tokenizer do
 
       ?& ->
         {:ok, {:greaterand, 1, start_line, start_col}, advance(state, 2)}
+
+      ?| ->
+        {:ok, {:clobber, 1, start_line, start_col}, advance(state, 2)}
 
       _ ->
         {:ok, {:greater, 1, start_line, start_col}, advance(state)}

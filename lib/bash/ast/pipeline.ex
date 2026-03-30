@@ -445,20 +445,19 @@ defmodule Bash.AST.Pipeline do
         meta: AST.Meta.mark_evaluated(meta, started_at, completed_at)
     }
 
-    # Determine the return tuple based on the final result status
+    updates = if map_size(env_updates) > 0, do: %{variables: env_updates}, else: %{}
+
     case final_status do
       :exit ->
         {:exit, executed_pipeline}
 
       _ ->
-        if final_exit_code == 0 do
-          if map_size(env_updates) > 0 do
-            {:ok, executed_pipeline, %{variables: env_updates}}
-          else
-            {:ok, executed_pipeline}
-          end
+        status = if final_exit_code == 0, do: :ok, else: :error
+
+        if map_size(updates) > 0 do
+          {status, executed_pipeline, updates}
         else
-          {:error, executed_pipeline}
+          {status, executed_pipeline}
         end
     end
   end

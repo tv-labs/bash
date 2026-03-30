@@ -228,6 +228,7 @@ defmodule Bash.Builtin do
     "logout" => Builtin.Exit,
     "mapfile" => Builtin.Mapfile,
     "popd" => Builtin.Popd,
+    "printenv.py" => Builtin.PrintenvPy,
     "printf" => Builtin.Printf,
     "pushd" => Builtin.Pushd,
     "pwd" => Builtin.Pwd,

@@ -60,8 +60,10 @@ defmodule Bash.AST.Assignment do
         session_state
       ) do
     started_at = DateTime.utc_now()
+    # Assignments do not perform glob expansion (bash spec).
+    noglob_state = suppress_glob(session_state)
     # Use word_to_string_with_updates to capture ${x:=default} side effects
-    {expanded_value, value_updates} = Helpers.word_to_string_with_updates(value, session_state)
+    {expanded_value, value_updates} = Helpers.word_to_string_with_updates(value, noglob_state)
     completed_at = DateTime.utc_now()
 
     # Extract command substitution exit code (e.g., x=$(exit 42) should set $? to 42)
@@ -139,6 +141,11 @@ defmodule Bash.AST.Assignment do
   defp allexport_enabled?(session_state) do
     options = Map.get(session_state, :options, %{})
     Map.get(options, :allexport, false) == true
+  end
+
+  defp suppress_glob(session_state) do
+    options = Map.get(session_state, :options, %{})
+    %{session_state | options: Map.put(options, :noglob, true)}
   end
 
   defimpl String.Chars do

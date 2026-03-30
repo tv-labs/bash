@@ -31,74 +31,26 @@ defmodule Bash.Builtin.Read do
 
   @default_ifs " \t\n"
 
-  # Execute the read builtin.
-  #
-  # ## Arguments
-  #
-  # * `args` - Command arguments including flags and variable names
-  # * `stdin` - Input string to read from (nil means no input available)
-  # * `session_state` - Current session state with variables
-  #
-  # ## Returns
-  #
-  # * `{:ok, result, state_updates}` - Success with variable updates
-  # * `{:ok, result}` - Success with no state changes (e.g., EOF)
-  # * `{:error, result}` - Error occurred
-  #
-  # ## Examples
-  #
-  # # Read into REPLY (default)
-  # iex> Read.execute([], "hello world", %{variables: %{}})
-  # {:ok, %CommandResult{exit_code: 0}, %{variables: %{"REPLY" => %Variable{value: "hello world"}}}}
-  #
-  # # Read into named variable
-  # iex> Read.execute(["myvar"], "hello", %{variables: %{}})
-  # {:ok, %CommandResult{exit_code: 0}, %{variables: %{"myvar" => %Variable{value: "hello"}}}}
-  #
-  # # Read into multiple variables
-  # iex> Read.execute(["a", "b"], "one two three", %{variables: %{}})
-  # {:ok, %CommandResult{exit_code: 0}, %{variables: %{"a" => %Variable{value: "one"}, "b" => %Variable{value: "two three"}}}}
-  #
   @doc false
   defbash execute(args, state) do
     case parse_args(args) do
       {:ok, opts, var_names} ->
-        # Check for stdin_device first (set by while loops with redirects)
-        # This allows line-by-line reading from a StringIO device
-        stdin_input =
-          case Map.get(state, :stdin_device) do
-            nil ->
-              # No device, read from parameter stdin
-              case read(:all) do
-                {:ok, data} -> data
-                :eof -> nil
-                {:error, _} -> nil
-              end
-
-            device when is_pid(device) ->
-              # Read one line from the StringIO device
-              case IO.binread(device, :line) do
-                :eof -> nil
-                {:error, _} -> nil
-                line -> line
-              end
-          end
-
-        do_read(opts, var_names, stdin_input, state)
+        if opts.prompt, do: write(opts.prompt)
+        do_read(opts, var_names, state)
 
       {:error, msg} ->
         error("read: #{msg}")
-        {:ok, 2}
+        {:ok, 1}
     end
   end
 
-  # Parse command-line arguments
   defp parse_args(args) do
     default_opts = %{
       raw: false,
       array: nil,
       delimiter: "\n",
       nchars: nil,
+      nchars_mode: nil,
       prompt: nil,
       silent: false,
       timeout: nil,
@@ -108,91 +60,58 @@ defmodule Bash.Builtin.Read do
     parse_args(args, default_opts, [])
   end
 
-  defp parse_args([], opts, names) do
-    {:ok, opts, Enum.reverse(names)}
-  end
+  defp parse_args([], opts, names), do: {:ok, opts, Enum.reverse(names)}
 
-  # -r: raw mode (don't interpret backslashes)
-  defp parse_args(["-r" | rest], opts, names) do
-    parse_args(rest, %{opts | raw: true}, names)
-  end
+  defp parse_args(["-r" | rest], opts, names),
+    do: parse_args(rest, %{opts | raw: true}, names)
 
-  # -a array: read into indexed array
   defp parse_args(["-a", array_name | rest], opts, names) do
-    if valid_var_name?(array_name) do
-      parse_args(rest, %{opts | array: array_name}, names)
-    else
-      {:error, "#{array_name}: invalid identifier"}
-    end
+    if valid_var_name?(array_name),
+      do: parse_args(rest, %{opts | array: array_name}, names),
+      else: {:error, "#{array_name}: invalid identifier"}
   end
 
-  defp parse_args(["-a"], _opts, _names) do
-    {:error, "-a: option requires an argument"}
-  end
+  defp parse_args(["-a"], _opts, _names), do: {:error, "-a: option requires an argument"}
 
-  # -d delim: use delim as line terminator
   defp parse_args(["-d", delim | rest], opts, names) do
-    # Use first character of delim, or empty string for null delimiter
     delimiter = if delim == "", do: "", else: String.first(delim)
     parse_args(rest, %{opts | delimiter: delimiter}, names)
   end
 
-  defp parse_args(["-d"], _opts, _names) do
-    {:error, "-d: option requires an argument"}
-  end
+  defp parse_args(["-d"], _opts, _names), do: {:error, "-d: option requires an argument"}
 
-  # -n nchars: read exactly n characters
   defp parse_args(["-n", nchars_str | rest], opts, names) do
     case Integer.parse(nchars_str) do
-      {n, ""} when n >= 0 ->
-        parse_args(rest, %{opts | nchars: n}, names)
-
-      _ ->
-        {:error, "#{nchars_str}: invalid number"}
+      {n, ""} when n >= 0 -> parse_args(rest, %{opts | nchars: n, nchars_mode: :n}, names)
+      _ -> {:error, "#{nchars_str}: invalid number"}
     end
   end
 
-  defp parse_args(["-n"], _opts, _names) do
-    {:error, "-n: option requires an argument"}
-  end
+  defp parse_args(["-n"], _opts, _names), do: {:error, "-n: option requires an argument"}
 
-  # -N nchars: read exactly n characters (ignoring delimiter)
-  # For simplicity, treat same as -n in this implementation
   defp parse_args(["-N", nchars_str | rest], opts, names) do
     case Integer.parse(nchars_str) do
       {n, ""} when n >= 0 ->
-        # -N ignores delimiter, so we set delimiter to empty
-        parse_args(rest, %{opts | nchars: n, delimiter: ""}, names)
+        parse_args(rest, %{opts | nchars: n, nchars_mode: :big_n, delimiter: ""}, names)
 
       _ ->
         {:error, "#{nchars_str}: invalid number"}
     end
   end
 
-  defp parse_args(["-N"], _opts, _names) do
-    {:error, "-N: option requires an argument"}
-  end
+  defp parse_args(["-N"], _opts, _names), do: {:error, "-N: option requires an argument"}
 
-  # -p prompt: display prompt (no-op for non-interactive)
-  defp parse_args(["-p", prompt | rest], opts, names) do
-    parse_args(rest, %{opts | prompt: prompt}, names)
-  end
+  defp parse_args(["-p", prompt | rest], opts, names),
+    do: parse_args(rest, %{opts | prompt: prompt}, names)
 
-  defp parse_args(["-p"], _opts, _names) do
-    {:error, "-p: option requires an argument"}
-  end
+  defp parse_args(["-p"], _opts, _names), do: {:error, "-p: option requires an argument"}
 
-  # -s: silent mode (no echo)
-  defp parse_args(["-s" | rest], opts, names) do
-    parse_args(rest, %{opts | silent: true}, names)
-  end
+  defp parse_args(["-s" | rest], opts, names),
+    do: parse_args(rest, %{opts | silent: true}, names)
 
-  # -e: readline (no-op for non-interactive)
-  defp parse_args(["-e" | rest], opts, names) do
-    parse_args(rest, opts, names)
-  end
+  defp parse_args(["-e" | rest], opts, names),
+    do: parse_args(rest, opts, names)
 
-  # -t timeout: timeout in seconds
   defp parse_args(["-t", timeout_str | rest], opts, names) do
     case Float.parse(timeout_str) do
       {t, ""} when t >= 0 ->
@@ -200,58 +119,36 @@ defmodule Bash.Builtin.Read do
 
       _ ->
         case Integer.parse(timeout_str) do
-          {t, ""} when t >= 0 ->
-            parse_args(rest, %{opts | timeout: t * 1.0}, names)
-
-          _ ->
-            {:error, "#{timeout_str}: invalid timeout specification"}
+          {t, ""} when t >= 0 -> parse_args(rest, %{opts | timeout: t * 1.0}, names)
+          _ -> {:error, "#{timeout_str}: invalid timeout specification"}
         end
     end
   end
 
-  defp parse_args(["-t"], _opts, _names) do
-    {:error, "-t: option requires an argument"}
-  end
+  defp parse_args(["-t"], _opts, _names), do: {:error, "-t: option requires an argument"}
 
-  # -u fd: read from file descriptor
   defp parse_args(["-u", fd_str | rest], opts, names) do
     case Integer.parse(fd_str) do
-      {fd, ""} when fd >= 0 ->
-        parse_args(rest, %{opts | fd: fd}, names)
-
-      _ ->
-        {:error, "#{fd_str}: invalid file descriptor"}
+      {fd, ""} when fd >= 0 -> parse_args(rest, %{opts | fd: fd}, names)
+      _ -> {:error, "#{fd_str}: invalid file descriptor"}
     end
   end
 
-  defp parse_args(["-u"], _opts, _names) do
-    {:error, "-u: option requires an argument"}
-  end
+  defp parse_args(["-u"], _opts, _names), do: {:error, "-u: option requires an argument"}
 
-  # -i text: initial text for readline (no-op for non-interactive)
-  defp parse_args(["-i", _text | rest], opts, names) do
-    parse_args(rest, opts, names)
-  end
+  defp parse_args(["-i", _text | rest], opts, names),
+    do: parse_args(rest, opts, names)
 
-  defp parse_args(["-i"], _opts, _names) do
-    {:error, "-i: option requires an argument"}
-  end
+  defp parse_args(["-i"], _opts, _names), do: {:error, "-i: option requires an argument"}
 
-  # Combined flags like -rs
   defp parse_args(["-" <> flags | rest], opts, names) when byte_size(flags) > 1 do
     case expand_combined_flags(flags) do
-      {:ok, expanded} ->
-        parse_args(expanded ++ rest, opts, names)
-
-      :not_combined ->
-        # Unknown option
-        {:error, "-#{flags}: invalid option"}
+      {:ok, expanded} -> parse_args(expanded ++ rest, opts, names)
+      :not_combined -> {:error, "-#{flags}: invalid option"}
     end
   end
 
-  # -- stops option processing
   defp parse_args(["--" | rest], opts, names) do
-    # Everything after -- is a variable name
     valid_names = Enum.filter(rest, &valid_var_name?/1)
 
     if length(valid_names) == length(rest) do
@@ -262,42 +159,48 @@ defmodule Bash.Builtin.Read do
     end
   end
 
-  # Variable name (not starting with -)
   defp parse_args([name | rest], opts, names) do
-    if valid_var_name?(name) do
-      parse_args(rest, opts, [name | names])
-    else
-      {:error, "#{name}: invalid identifier"}
-    end
+    if valid_var_name?(name),
+      do: parse_args(rest, opts, [name | names]),
+      else: {:error, "#{name}: invalid identifier"}
   end
 
-  # Expand combined flags like "rs" to ["-r", "-s"]
-  defp expand_combined_flags(flags) do
-    chars = String.graphemes(flags)
+  defp expand_combined_flags(flags),
+    do: expand_combined_flags(String.graphemes(flags), [])
 
-    if Enum.all?(chars, &(&1 in ~w[r s e a])) do
-      {:ok, Enum.map(chars, &("-" <> &1))}
-    else
-      :not_combined
-    end
+  defp expand_combined_flags([], acc), do: {:ok, Enum.reverse(acc)}
+
+  defp expand_combined_flags([c | rest], acc) when c in ~w[r s e] do
+    expand_combined_flags(rest, ["-" <> c | acc])
   end
 
-  # Validate variable name
-  defp valid_var_name?(name) when is_binary(name) do
-    String.match?(name, ~r/^[a-zA-Z_][a-zA-Z0-9_]*$/)
+  defp expand_combined_flags([c | rest], acc) when c in ~w[n N d t u p a i] do
+    arg = Enum.join(rest)
+
+    if arg == "",
+      do: {:ok, Enum.reverse(["-" <> c | acc])},
+      else: {:ok, Enum.reverse(acc) ++ ["-" <> c, arg]}
   end
+
+  defp expand_combined_flags(_, _), do: :not_combined
+
+  defp valid_var_name?(name) when is_binary(name),
+    do: String.match?(name, ~r/^[a-zA-Z_][a-zA-Z0-9_]*$/)
 
   defp valid_var_name?(_), do: false
 
-  # Main read logic
-  defp do_read(opts, var_names, stdin_input, session_state) do
-    # Handle timeout (for non-blocking environments, this is a no-op check)
-    # In a real implementation, this would involve async I/O
+  defp do_read(opts, var_names, session_state) do
+    case read_raw_input(opts, session_state) do
+      {:ok, line, found_delimiter} ->
+        ifs = get_ifs(session_state)
+        var_updates = build_var_updates(opts, var_names, line, ifs, session_state)
+        update_state(variables: var_updates)
+        if found_delimiter, do: :ok, else: {:ok, 1}
 
-    # Resolve input from file descriptor
-    case resolve_input(opts.fd, stdin_input, session_state) do
-      {:ok, input} ->
-        do_read_from_input(opts, var_names, input, session_state)
+      :eof ->
+        var_updates = build_eof_updates(opts, var_names, session_state)
+        update_state(variables: var_updates)
+        {:ok, 1}
 
       {:error, msg} ->
         error("read: #{msg}")
@@ -305,156 +208,291 @@ defmodule Bash.Builtin.Read do
     end
   end
 
-  # Resolve input from file descriptor
-  # fd nil or 0 = stdin (default)
-  # fd 1/2 = stdout/stderr (not readable)
-  # fd 3+ = look up in session_state.file_descriptors
-  defp resolve_input(nil, stdin, _session_state), do: {:ok, stdin}
-  defp resolve_input(0, stdin, _session_state), do: {:ok, stdin}
+  defp read_raw_input(opts, session_state) do
+    case resolve_fd_input(opts.fd, session_state) do
+      {:ok, :use_context} ->
+        case Map.get(session_state, :stdin_device) do
+          device when is_pid(device) -> read_from_device(device, opts)
+          _ -> read_from_context(opts)
+        end
 
-  defp resolve_input(fd, _stdin, _session_state) when fd in [1, 2] do
-    {:error, "#{fd}: Bad file descriptor"}
+      {:ok, {:device, device}} ->
+        read_from_device(device, opts)
+
+      {:ok, {:raw_data, data}} ->
+        {:ok, device} = StringIO.open(data)
+        read_from_device(device, opts)
+
+      {:error, _} = err ->
+        err
+    end
   end
 
-  defp resolve_input(fd, _stdin, session_state) do
-    file_descriptors = Map.get(session_state, :file_descriptors, %{})
+  defp resolve_fd_input(nil, _state), do: {:ok, :use_context}
+  defp resolve_fd_input(0, _state), do: {:ok, :use_context}
+  defp resolve_fd_input(fd, _state) when fd in [1, 2], do: {:error, "#{fd}: Bad file descriptor"}
+
+  defp resolve_fd_input(fd, state) do
+    file_descriptors = Map.get(state, :file_descriptors, %{})
 
     case Map.get(file_descriptors, fd) do
       nil ->
         {:error, "#{fd}: Bad file descriptor"}
 
       {:coproc, coproc_pid, :read} ->
-        case Bash.Builtin.Coproc.read_output(coproc_pid, session_state.call_timeout) do
-          {:ok, data} -> {:ok, data}
-          :eof -> {:ok, nil}
+        case Bash.Builtin.Coproc.read_output(coproc_pid, state.call_timeout) do
+          {:ok, data} -> {:ok, {:raw_data, data}}
+          :eof -> {:error, "#{fd}: Bad file descriptor"}
           {:error, _} -> {:error, "#{fd}: Bad file descriptor"}
         end
 
       device when is_pid(device) ->
-        case IO.binread(device, :line) do
-          :eof -> {:ok, nil}
-          {:error, _} -> {:error, "#{fd}: Bad file descriptor"}
-          line -> {:ok, line}
-        end
+        {:ok, {:device, device}}
     end
   end
 
-  # Read from resolved input
-  defp do_read_from_input(opts, var_names, input, session_state) do
-    # Check for empty/nil input (EOF)
-    if input == nil or input == "" do
-      # EOF - set variables to empty and return 1
-      var_updates = build_eof_updates(opts, var_names, session_state)
-      update_state(variables: var_updates)
-      {:ok, 1}
-    else
-      # Read the input (for device-based reading, input is already one line)
-      {line, _rest} = read_input(input, opts)
-
-      # Process backslash escapes unless -r is specified
-      line = if opts.raw, do: line, else: process_escapes(line)
-
-      # Build variable updates
-      var_updates = build_var_updates(opts, var_names, line, session_state)
-
-      # Output prompt if specified (for interactive, would be written before read)
-      if opts.prompt do
-        write(opts.prompt)
-      end
-
-      update_state(variables: var_updates)
-      :ok
-    end
-  end
-
-  # Read input based on options
-  defp read_input(stdin, opts) do
+  defp read_from_context(opts) do
     cond do
-      # -n: read exactly n characters
-      opts.nchars != nil ->
-        chars = String.slice(stdin, 0, opts.nchars)
-        rest = String.slice(stdin, opts.nchars..-1//1)
-        {chars, rest}
+      opts.nchars != nil -> read_nchars_from_context(opts)
+      opts.delimiter != "\n" -> read_until_delimiter_from_context(opts)
+      true -> read_line_from_context(opts)
+    end
+  end
 
-      # -d: use custom delimiter
-      opts.delimiter == "" ->
-        # Null delimiter - read until null byte or end
-        case String.split(stdin, <<0>>, parts: 2) do
-          [line, rest] -> {line, rest}
-          [line] -> {line, ""}
+  defp read_line_from_context(opts) do
+    case gets() do
+      {:ok, data} ->
+        {line, found_newline} = strip_trailing_newline(data)
+
+        if not opts.raw,
+          do: read_continuations_from_context(line, found_newline),
+          else: {:ok, line, found_newline}
+
+      :eof ->
+        :eof
+
+      {:error, reason} ->
+        {:error, "#{inspect(reason)}"}
+    end
+  end
+
+  defp read_continuations_from_context(line, found_newline) do
+    if String.ends_with?(line, "\\") and found_newline do
+      continued = String.slice(line, 0, byte_size(line) - 1)
+
+      case gets() do
+        {:ok, next_data} ->
+          {next_line, next_found} = strip_trailing_newline(next_data)
+          read_continuations_from_context(continued <> next_line, next_found)
+
+        :eof ->
+          {:ok, continued, false}
+
+        {:error, _} ->
+          {:ok, continued, false}
+      end
+    else
+      {:ok, line, found_newline}
+    end
+  end
+
+  defp read_nchars_from_context(opts) do
+    if opts.nchars == 0 do
+      {:ok, "", true}
+    else
+      case read_n_chars_loop(opts.nchars, opts, []) do
+        {:ok, data} ->
+          found_delim = byte_size(data) >= opts.nchars
+          {:ok, data, found_delim}
+
+        :eof ->
+          :eof
+      end
+    end
+  end
+
+  defp read_n_chars_loop(0, _opts, acc),
+    do: {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
+
+  defp read_n_chars_loop(remaining, opts, acc) do
+    case read(1) do
+      {:ok, <<char>>} ->
+        cond do
+          opts.nchars_mode == :n and opts.delimiter != "" and <<char>> == opts.delimiter ->
+            {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
+
+          opts.nchars_mode == :n and not opts.raw and char == ?\\ ->
+            case read(1) do
+              {:ok, <<?\n>>} ->
+                read_n_chars_loop(remaining, opts, acc)
+
+              {:ok, <<next_char>>} ->
+                read_n_chars_loop(remaining - 1, opts, [<<next_char>> | acc])
+
+              _ ->
+                {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
+            end
+
+          true ->
+            read_n_chars_loop(remaining - 1, opts, [<<char>> | acc])
         end
 
-      # Non-raw mode with newline delimiter: handle line continuations
-      not opts.raw and opts.delimiter == "\n" ->
-        read_with_continuations(stdin)
+      _ ->
+        if acc == [], do: :eof, else: {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
+    end
+  end
 
-      true ->
-        # Read until delimiter (default newline)
-        case String.split(stdin, opts.delimiter, parts: 2) do
-          [line, rest] -> {line, rest}
-          [line] -> {String.trim_trailing(line, opts.delimiter), ""}
+  defp read_until_delimiter_from_context(opts),
+    do: read_until_delim_loop(opts, [])
+
+  defp read_until_delim_loop(opts, acc) do
+    case read(1) do
+      {:ok, <<char>>} ->
+        delim_char = if opts.delimiter == "", do: 0, else: :binary.first(opts.delimiter)
+
+        cond do
+          char == delim_char ->
+            {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), true}
+
+          not opts.raw and char == ?\\ ->
+            case read(1) do
+              {:ok, <<?\n>>} ->
+                read_until_delim_loop(opts, acc)
+
+              {:ok, <<next>>} ->
+                read_until_delim_loop(opts, [<<next>> | acc])
+
+              _ ->
+                {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), false}
+            end
+
+          true ->
+            read_until_delim_loop(opts, [<<char>> | acc])
+        end
+
+      _ ->
+        if acc == [],
+          do: :eof,
+          else: {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), false}
+    end
+  end
+
+  defp read_from_device(device, opts) do
+    cond do
+      opts.nchars != nil -> read_nchars_from_device(device, opts)
+      opts.delimiter != "\n" -> read_until_delimiter_from_device(device, opts)
+      true -> read_line_from_device(device, opts)
+    end
+  end
+
+  defp read_line_from_device(device, opts) do
+    case IO.binread(device, :line) do
+      :eof ->
+        :eof
+
+      {:error, reason} ->
+        {:error, "#{inspect(reason)}"}
+
+      data ->
+        {line, found_newline} = strip_trailing_newline(data)
+
+        if not opts.raw,
+          do: read_device_continuations(device, line, found_newline),
+          else: {:ok, line, found_newline}
+    end
+  end
+
+  defp read_device_continuations(device, line, found_newline) do
+    if String.ends_with?(line, "\\") and found_newline do
+      continued = String.slice(line, 0, byte_size(line) - 1)
+
+      case IO.binread(device, :line) do
+        :eof ->
+          {:ok, continued, false}
+
+        {:error, _} ->
+          {:ok, continued, false}
+
+        next_data ->
+          {next_line, next_found} = strip_trailing_newline(next_data)
+          read_device_continuations(device, continued <> next_line, next_found)
+      end
+    else
+      {:ok, line, found_newline}
+    end
+  end
+
+  defp read_nchars_from_device(device, opts) do
+    if opts.nchars == 0 do
+      {:ok, "", true}
+    else
+      case IO.binread(device, opts.nchars) do
+        :eof -> :eof
+        {:error, reason} -> {:error, "#{inspect(reason)}"}
+        data -> {:ok, data, byte_size(data) >= opts.nchars}
+      end
+    end
+  end
+
+  defp read_until_delimiter_from_device(device, opts),
+    do: read_device_delim_loop(device, opts, [])
+
+  defp read_device_delim_loop(device, opts, acc) do
+    case IO.binread(device, 1) do
+      :eof ->
+        if acc == [],
+          do: :eof,
+          else: {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), false}
+
+      {:error, _} ->
+        if acc == [],
+          do: :eof,
+          else: {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), false}
+
+      <<char>> ->
+        delim_char = if opts.delimiter == "", do: 0, else: :binary.first(opts.delimiter)
+
+        cond do
+          char == delim_char ->
+            {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), true}
+
+          not opts.raw and char == ?\\ ->
+            case IO.binread(device, 1) do
+              :eof ->
+                {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), false}
+
+              <<?\n>> ->
+                read_device_delim_loop(device, opts, acc)
+
+              <<next>> ->
+                read_device_delim_loop(device, opts, [<<next>> | acc])
+
+              _ ->
+                {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), false}
+            end
+
+          true ->
+            read_device_delim_loop(device, opts, [<<char>> | acc])
         end
     end
   end
 
-  # Read handling line continuations (backslash-newline)
-  # In non-raw mode, backslash-newline causes read to continue to next line
-  defp read_with_continuations(stdin) do
-    read_with_continuations(stdin, [])
+  defp strip_trailing_newline(data) do
+    if String.ends_with?(data, "\n"),
+      do: {String.trim_trailing(data, "\n"), true},
+      else: {data, false}
   end
 
-  defp read_with_continuations("", acc) do
-    {acc |> Enum.reverse() |> IO.iodata_to_binary(), ""}
+  defp get_ifs(session_state) do
+    case Map.get(session_state.variables, "IFS") do
+      nil -> @default_ifs
+      %Variable{value: val} when is_binary(val) -> val
+      _ -> @default_ifs
+    end
   end
 
-  defp read_with_continuations("\\\n" <> rest, acc) do
-    # Line continuation - continue reading
-    read_with_continuations(rest, acc)
-  end
-
-  defp read_with_continuations("\n" <> rest, acc) do
-    # End of logical line
-    {acc |> Enum.reverse() |> IO.iodata_to_binary(), rest}
-  end
-
-  defp read_with_continuations(<<char, rest::binary>>, acc) do
-    read_with_continuations(rest, [<<char>> | acc])
-  end
-
-  # Process backslash escapes (for non-raw mode)
-  # In bash, backslash followed by any char removes the backslash
-  defp process_escapes(str) do
-    process_escapes(str, [])
-  end
-
-  defp process_escapes("", acc) do
-    acc |> Enum.reverse() |> IO.iodata_to_binary()
-  end
-
-  # Line continuation: backslash at end of line followed by newline
-  defp process_escapes("\\\n" <> rest, acc) do
-    process_escapes(rest, acc)
-  end
-
-  # Escaped character - keep the character, drop the backslash
-  defp process_escapes("\\" <> <<char, rest::binary>>, acc) do
-    process_escapes(rest, [<<char>> | acc])
-  end
-
-  # Trailing backslash with no following char - keep it
-  defp process_escapes("\\", acc) do
-    acc |> Enum.reverse() |> IO.iodata_to_binary()
-  end
-
-  # Regular character
-  defp process_escapes(<<char, rest::binary>>, acc) do
-    process_escapes(rest, [<<char>> | acc])
-  end
-
-  # Build variable updates for EOF case
   defp build_eof_updates(opts, var_names, session_state) do
     if opts.array do
-      # -a: create empty array
       %{opts.array => Variable.new_indexed_array(%{})}
     else
       names = if Enum.empty?(var_names), do: ["REPLY"], else: var_names
@@ -466,193 +504,229 @@ defmodule Bash.Builtin.Read do
     Enum.reduce(names, %{}, fn name, acc ->
       existing = Map.get(session_state.variables, name)
 
-      # Check readonly
-      if existing && Variable.readonly?(existing) do
-        acc
-      else
-        Map.put(acc, name, Variable.new(""))
-      end
+      if existing && Variable.readonly?(existing),
+        do: acc,
+        else: Map.put(acc, name, Variable.new(""))
     end)
   end
 
-  # Build variable updates from read line
-  defp build_var_updates(opts, var_names, line, session_state) do
-    # Get IFS from session state, default to space/tab/newline
-    ifs = get_ifs(session_state)
-
+  defp build_var_updates(opts, var_names, line, ifs, session_state) do
     if opts.array do
-      # -a: read into indexed array
-      words = split_by_ifs(line, ifs)
+      words = split_by_ifs(line, ifs, opts.raw, :unlimited)
       build_array_update(opts.array, words, session_state)
     else
-      # Read into named variables
       names = if Enum.empty?(var_names), do: ["REPLY"], else: var_names
-      words = split_by_ifs(line, ifs)
-      build_scalar_updates(names, words, session_state)
-    end
-  end
 
-  # Get IFS from session state
-  defp get_ifs(session_state) do
-    case Map.get(session_state.variables, "IFS") do
-      nil -> @default_ifs
-      %Variable{value: val} when is_binary(val) -> val
-      _ -> @default_ifs
-    end
-  end
-
-  # Split string by IFS characters
-  # Bash IFS splitting rules:
-  # - Leading/trailing IFS whitespace is stripped
-  # - Multiple IFS whitespace chars are treated as one delimiter
-  # - Non-whitespace IFS chars are individual delimiters
-  defp split_by_ifs(str, ifs) do
-    if ifs == "" do
-      # Empty IFS means no word splitting
-      [str]
-    else
-      # Build a pattern from IFS characters
-      # Whitespace chars (space, tab, newline) in IFS get special treatment
-      ifs_whitespace = for <<c <- ifs>>, c in [?\s, ?\t, ?\n], do: <<c>>
-      ifs_non_whitespace = for <<c <- ifs>>, c not in [?\s, ?\t, ?\n], do: <<c>>
-
-      # First, trim leading/trailing IFS whitespace
-      str = trim_ifs_whitespace(str, ifs_whitespace)
-
-      # Split by IFS characters
-      if ifs_whitespace == [] and ifs_non_whitespace == [] do
-        [str]
+      if Enum.empty?(var_names) do
+        value = if opts.raw, do: line, else: process_escapes(line)
+        assign_words_to_names(names, [value], session_state)
       else
-        do_split_by_ifs(str, ifs_whitespace, ifs_non_whitespace, [], [])
+        assign_split_to_names(names, line, ifs, opts.raw, session_state)
       end
     end
   end
 
-  defp trim_ifs_whitespace(str, []) do
-    str
+  defp assign_split_to_names(names, line, ifs, raw, session_state) do
+    num_names = length(names)
+
+    if num_names == 1 do
+      value = trim_ifs_whitespace_only(line, ifs, raw)
+      assign_words_to_names(names, [value], session_state)
+    else
+      words = split_by_ifs(line, ifs, raw, num_names)
+      num_words = length(words)
+
+      cond do
+        num_words == 0 ->
+          build_empty_vars(names, session_state)
+
+        num_words <= num_names ->
+          words_padded = words ++ List.duplicate("", num_names - num_words)
+          assign_words_to_names(names, words_padded, session_state)
+
+        true ->
+          {first_words, rest_words} = Enum.split(words, num_names - 1)
+          last_word = Enum.join(rest_words, " ")
+          assign_words_to_names(names, first_words ++ [last_word], session_state)
+      end
+    end
   end
 
-  defp trim_ifs_whitespace(str, ifs_whitespace) do
-    pattern = "[" <> Enum.join(Enum.map(ifs_whitespace, &Regex.escape/1)) <> "]+"
+  defp trim_ifs_whitespace_only(str, ifs, raw) do
+    if ifs == "" do
+      if raw, do: str, else: process_escapes(str)
+    else
+      ifs_ws = for <<c <- ifs>>, c in [?\s, ?\t, ?\n], do: c
 
-    str
-    |> String.replace(~r/^#{pattern}/, "")
-    |> String.replace(~r/#{pattern}$/, "")
+      trimmed =
+        str
+        |> skip_leading_ifs_ws(ifs_ws)
+        |> strip_trailing_ifs_ws(ifs_ws)
+
+      if raw, do: trimmed, else: process_escapes(trimmed)
+    end
   end
 
-  defp do_split_by_ifs("", _ws, _nws, [], words) do
-    Enum.reverse(words)
+  defp split_by_ifs(str, ifs, raw, max_fields) do
+    if ifs == "" do
+      [if(raw, do: str, else: process_escapes(str))]
+    else
+      ifs_ws = for <<c <- ifs>>, c in [?\s, ?\t, ?\n], do: c
+      ifs_nws = for <<c <- ifs>>, c not in [?\s, ?\t, ?\n], do: c
+      do_ifs_split(str, ifs_ws, ifs_nws, raw, max_fields)
+    end
   end
 
-  defp do_split_by_ifs("", _ws, _nws, current, words) do
+  defp do_ifs_split(str, ifs_ws, ifs_nws, raw, max_fields) do
+    str = skip_leading_ifs_ws(str, ifs_ws)
+    do_ifs_split_loop(str, ifs_ws, ifs_nws, raw, max_fields, [], [])
+  end
+
+  defp do_ifs_split_loop("", _ws, _nws, _raw, _max, [], words),
+    do: Enum.reverse(words)
+
+  defp do_ifs_split_loop("", _ws, _nws, _raw, _max, current, words) do
     word = current |> Enum.reverse() |> IO.iodata_to_binary()
     Enum.reverse([word | words])
   end
 
-  defp do_split_by_ifs(<<char, rest::binary>>, ifs_ws, ifs_nws, current, words) do
-    char_str = <<char>>
+  defp do_ifs_split_loop(str, ifs_ws, ifs_nws, raw, max_fields, current, words) do
+    word_count = length(words) + if(current != [], do: 1, else: 0)
 
+    case max_fields do
+      n when is_integer(n) and word_count >= n ->
+        remaining = current |> Enum.reverse() |> IO.iodata_to_binary()
+        rest = if raw, do: str, else: process_escapes(str)
+        last_value = strip_trailing_ifs_ws(remaining <> rest, ifs_ws)
+        Enum.reverse([last_value | words])
+
+      _ ->
+        split_next_char(str, ifs_ws, ifs_nws, raw, max_fields, current, words)
+    end
+  end
+
+  defp split_next_char(<<char, rest::binary>>, ifs_ws, ifs_nws, raw, max_fields, current, words) do
     cond do
-      # IFS whitespace - skip consecutive, ends current word
-      char_str in ifs_ws ->
-        case current do
-          [] ->
-            # Skip leading whitespace within the string
-            do_split_by_ifs(skip_ifs_whitespace(rest, ifs_ws), ifs_ws, ifs_nws, [], words)
-
-          _ ->
-            word = current |> Enum.reverse() |> IO.iodata_to_binary()
-
-            do_split_by_ifs(
-              skip_ifs_whitespace(rest, ifs_ws),
+      not raw and char == ?\\ ->
+        case rest do
+          <<next, rest2::binary>> ->
+            do_ifs_split_loop(
+              rest2,
               ifs_ws,
               ifs_nws,
-              [],
-              [word | words]
+              raw,
+              max_fields,
+              [<<next>> | current],
+              words
             )
+
+          "" ->
+            do_ifs_split_loop("", ifs_ws, ifs_nws, raw, max_fields, current, words)
         end
 
-      # IFS non-whitespace - always a delimiter
-      char_str in ifs_nws ->
+      char in ifs_ws ->
         case current do
           [] ->
-            # Empty field before delimiter
-            do_split_by_ifs(rest, ifs_ws, ifs_nws, [], ["" | words])
+            remaining = skip_leading_ifs_ws(rest, ifs_ws)
+            do_ifs_split_loop(remaining, ifs_ws, ifs_nws, raw, max_fields, [], words)
 
           _ ->
             word = current |> Enum.reverse() |> IO.iodata_to_binary()
-            do_split_by_ifs(rest, ifs_ws, ifs_nws, [], [word | words])
+            new_words = [word | words]
+
+            if at_max_fields?(max_fields, new_words) do
+              last = strip_trailing_ifs_ws(if(raw, do: rest, else: process_escapes(rest)), ifs_ws)
+              Enum.reverse([last | new_words])
+            else
+              remaining = skip_leading_ifs_ws(rest, ifs_ws)
+              do_ifs_split_loop(remaining, ifs_ws, ifs_nws, raw, max_fields, [], new_words)
+            end
         end
 
-      # Regular character
+      char in ifs_nws ->
+        word =
+          case current do
+            [] -> ""
+            _ -> current |> Enum.reverse() |> IO.iodata_to_binary()
+          end
+
+        new_words = [word | words]
+
+        if at_max_fields?(max_fields, new_words) do
+          last = strip_trailing_ifs_ws(if(raw, do: rest, else: process_escapes(rest)), ifs_ws)
+          Enum.reverse([last | new_words])
+        else
+          do_ifs_split_loop(rest, ifs_ws, ifs_nws, raw, max_fields, [], new_words)
+        end
+
       true ->
-        do_split_by_ifs(rest, ifs_ws, ifs_nws, [char_str | current], words)
+        do_ifs_split_loop(rest, ifs_ws, ifs_nws, raw, max_fields, [<<char>> | current], words)
     end
   end
 
-  defp skip_ifs_whitespace(<<char, rest::binary>>, ifs_ws) do
-    if <<char>> in ifs_ws do
-      skip_ifs_whitespace(rest, ifs_ws)
-    else
-      <<char, rest::binary>>
-    end
+  defp at_max_fields?(:unlimited, _words), do: false
+  defp at_max_fields?(n, words) when is_integer(n), do: length(words) >= n - 1
+
+  defp skip_leading_ifs_ws("", _ws), do: ""
+
+  defp skip_leading_ifs_ws(<<char, rest::binary>>, ifs_ws) do
+    if char in ifs_ws,
+      do: skip_leading_ifs_ws(rest, ifs_ws),
+      else: <<char, rest::binary>>
   end
 
-  defp skip_ifs_whitespace("", _ifs_ws), do: ""
+  defp strip_trailing_ifs_ws(str, []), do: str
 
-  # Build array update
+  defp strip_trailing_ifs_ws(str, ifs_ws) do
+    str
+    |> String.reverse()
+    |> skip_leading_ifs_ws(ifs_ws)
+    |> String.reverse()
+  end
+
+  defp process_escapes(str), do: process_escapes(str, [])
+  defp process_escapes("", acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
+  defp process_escapes("\\\n" <> rest, acc), do: process_escapes(rest, acc)
+
+  defp process_escapes("\\" <> <<char, rest::binary>>, acc),
+    do: process_escapes(rest, [<<char>> | acc])
+
+  defp process_escapes("\\", acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
+
+  defp process_escapes(<<char, rest::binary>>, acc),
+    do: process_escapes(rest, [<<char>> | acc])
+
   defp build_array_update(array_name, words, session_state) do
     existing = Map.get(session_state.variables, array_name)
 
-    # Check readonly
     if existing && Variable.readonly?(existing) do
       %{}
     else
       array_map =
         words
         |> Enum.with_index()
-        |> Enum.map(fn {word, idx} -> {idx, word} end)
-        |> Map.new()
+        |> Map.new(fn {word, idx} -> {idx, word} end)
 
       %{array_name => Variable.new_indexed_array(array_map)}
     end
   end
 
-  # Build scalar variable updates
-  defp build_scalar_updates(names, words, session_state) do
-    # Number of variables vs number of words
+  defp assign_words_to_names(names, words, session_state) do
     num_names = length(names)
     num_words = length(words)
 
-    cond do
-      num_words == 0 ->
-        # No words - all variables get empty string
-        build_empty_vars(names, session_state)
+    padded =
+      if num_words >= num_names,
+        do: Enum.take(words, num_names),
+        else: words ++ List.duplicate("", num_names - num_words)
 
-      num_words <= num_names ->
-        # Fewer words than variables - extra vars get empty string
-        words_padded = words ++ List.duplicate("", num_names - num_words)
-        assign_words_to_names(names, words_padded, session_state)
-
-      true ->
-        # More words than variables - last var gets remaining words
-        {first_words, rest_words} = Enum.split(words, num_names - 1)
-        last_word = Enum.join(rest_words, " ")
-        assign_words_to_names(names, first_words ++ [last_word], session_state)
-    end
-  end
-
-  defp assign_words_to_names(names, words, session_state) do
-    Enum.zip(names, words)
+    Enum.zip(names, padded)
     |> Enum.reduce(%{}, fn {name, word}, acc ->
       existing = Map.get(session_state.variables, name)
 
-      # Check readonly
-      if existing && Variable.readonly?(existing) do
-        acc
-      else
-        Map.put(acc, name, Variable.new(word))
-      end
+      if existing && Variable.readonly?(existing),
+        do: acc,
+        else: Map.put(acc, name, Variable.new(word))
     end)
   end
 end

@@ -1769,8 +1769,19 @@ defmodule Bash.AST.Helpers do
       Enum.flat_map_reduce(items, %{}, fn item, acc_updates ->
         case item do
           %AST.Word{quoted: :none} = word ->
+            is_assignment = assignment_word?(word)
+
+            # Assignment words (name=value) should not glob-expand
+            expand_state =
+              if is_assignment do
+                options = Map.get(session_state, :options, %{})
+                %{session_state | options: Map.put(options, :noglob, true)}
+              else
+                session_state
+              end
+
             # Unquoted word - use expand_word_with_updates for brace expansion and updates
-            {expanded_words, word_updates} = expand_word_with_updates(word, session_state)
+            {expanded_words, word_updates} = expand_word_with_updates(word, expand_state)
 
             case expanded_words do
               :brace_expansion_error ->
@@ -1779,8 +1790,9 @@ defmodule Bash.AST.Helpers do
               words ->
                 merged_updates = Map.merge(acc_updates, word_updates)
 
-                if contains_quoted_parts?(word) do
-                  # Word contains double-quoted parts - don't word-split
+                if contains_quoted_parts?(word) or is_assignment do
+                  # Word contains double-quoted parts or is an assignment word
+                  # (name=value) - don't word-split
                   {words, merged_updates}
                 else
                   # Fully unquoted - expand and split on whitespace (for glob expansion)
@@ -1827,6 +1839,12 @@ defmodule Bash.AST.Helpers do
     end)
   end
 
+  defp assignment_word?(%AST.Word{parts: [{:literal, first_literal} | _]}) do
+    Regex.match?(~r/^[a-zA-Z_][a-zA-Z0-9_]*(\+?)=$/, first_literal)
+  end
+
+  defp assignment_word?(_), do: false
+
   # Get scalar variable value (extracts from Variable struct)
   # Also handles special variables ($?, $$, $!, $0, $_) and positional params ($1-$9)
   defp get_scalar_value(session_state, var_name) do
@@ -1854,6 +1872,13 @@ defmodule Bash.AST.Helpers do
     case Map.get(session_state.variables, var_name) do
       nil ->
         # Check nounset option - error if variable is unset
+        if nounset_enabled?(session_state) do
+          raise "bash: #{var_name}: unbound variable"
+        else
+          ""
+        end
+
+      %Variable{value: :unset} ->
         if nounset_enabled?(session_state) do
           raise "bash: #{var_name}: unbound variable"
         else

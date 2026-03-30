@@ -48,6 +48,15 @@ defmodule Bash.Variable do
   @doc "Create scalar variable"
   def new(value \\ ""), do: %__MODULE__{value: value}
 
+  @doc "Create a declared-but-unset variable (for `local x` / `declare x` without value)"
+  def new_unset do
+    %__MODULE__{value: :unset}
+  end
+
+  @doc "Returns true if the variable was declared but never assigned a value."
+  def unset?(%__MODULE__{value: :unset}), do: true
+  def unset?(_), do: false
+
   @doc "Create indexed array"
   def new_indexed_array(values \\ %{}) do
     %__MODULE__{
@@ -155,6 +164,7 @@ defmodule Bash.Variable do
   end
 
   # Variable struct-based get/2
+  def get(%__MODULE__{value: :unset}, _), do: ""
   def get(%__MODULE__{attributes: %{array_type: nil}, value: v}, nil), do: v
   # arr[0] on scalar returns the scalar
   def get(%__MODULE__{attributes: %{array_type: nil}, value: v}, 0), do: v
@@ -199,6 +209,7 @@ defmodule Bash.Variable do
   end
 
   @doc "Get all values for ${arr[@]} expansion"
+  def all_values(%__MODULE__{value: :unset}), do: []
   def all_values(%__MODULE__{attributes: %{array_type: nil}, value: v}), do: [v]
 
   def all_values(%__MODULE__{attributes: %{array_type: :indexed}, value: map}),
@@ -216,6 +227,7 @@ defmodule Bash.Variable do
   def all_keys(_), do: []
 
   @doc "Get length for ${#arr[@]} or ${#var}"
+  def length(%__MODULE__{value: :unset}), do: 0
   def length(%__MODULE__{attributes: %{array_type: nil}, value: v}), do: String.length(v)
   def length(%__MODULE__{value: map}) when is_map(map), do: map_size(map)
 
@@ -223,7 +235,22 @@ defmodule Bash.Variable do
   def set(%__MODULE__{attributes: %{array_type: nil}} = var, value, nil),
     do: %{var | value: value}
 
-  def set(%__MODULE__{attributes: %{array_type: type}, value: map} = var, value, idx)
+  def set(%__MODULE__{attributes: %{array_type: nil}} = var, value, idx) when is_integer(idx) do
+    existing_value =
+      case var.value do
+        v when v in ["", :unset] -> %{}
+        v -> %{0 => v}
+      end
+
+    new_value = Map.put(existing_value, idx, value)
+    %{var | value: new_value, attributes: %{var.attributes | array_type: :indexed}}
+  end
+
+  def set(%__MODULE__{attributes: %{array_type: type}, value: :unset} = var, value, idx)
       when not is_nil(type),
+      do: %{var | value: %{idx => value}}
+
+  def set(%__MODULE__{attributes: %{array_type: type}, value: map} = var, value, idx)
+      when not is_nil(type) and is_map(map),
       do: %{var | value: Map.put(map, idx, value)}
 end

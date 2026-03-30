@@ -143,7 +143,6 @@ defmodule Bash.AST.Command do
          session_state
        ) do
     default_stdin = stdin || Map.get(session_state, :pipe_stdin)
-    effective_stdin = process_input_redirects(redirects, session_state, default_stdin)
 
     # Apply prefix env assignments (e.g., "IFS=: read -a parts")
     # These are temporary and only affect this command's execution
@@ -155,43 +154,52 @@ defmodule Bash.AST.Command do
     started_at = DateTime.utc_now()
 
     result =
-      if command_name == "exec" and expanded_args == [] do
-        apply_exec_fd_redirects(redirects, session_with_prefix_env)
-      else
-        Telemetry.command_span(command_name, expanded_args, fn ->
-          # Set up hierarchical sinks for output redirects BEFORE execution.
-          # This allows output to flow directly to files without post-processing.
-          {exec_session, cleanup_fn, redirect_error} =
-            setup_output_redirect_sinks(redirects, session_with_prefix_env)
+      case process_input_redirects(redirects, session_state, default_stdin) do
+        {:error, error_msg} ->
+          Sink.write_stderr(session_state, error_msg)
 
-          exec_result =
-            if redirect_error do
-              # Redirect error - write error to stderr and return error result
-              Sink.write_stderr(session_state, redirect_error)
+          {:error,
+           %CommandResult{
+             command: command_name,
+             exit_code: 1,
+             error: :redirect_error
+           }}
 
-              {:error,
-               %CommandResult{
-                 command: command_name,
-                 exit_code: 1,
-                 error: :redirect_error
-               }}
-            else
-              resolve_and_execute(
-                command_name,
-                expanded_args,
-                exec_session,
-                effective_stdin,
-                redirects,
-                ast.meta
-              )
-            end
+        effective_stdin ->
+          if command_name == "exec" and expanded_args == [] do
+            apply_exec_fd_redirects(redirects, session_with_prefix_env)
+          else
+            Telemetry.command_span(command_name, expanded_args, fn ->
+              {exec_session, cleanup_fn, redirect_error} =
+                setup_output_redirect_sinks(redirects, session_with_prefix_env)
 
-          # Close file handles from redirect sinks
-          cleanup_fn.()
+              exec_result =
+                if redirect_error do
+                  Sink.write_stderr(session_state, redirect_error)
 
-          exit_code = get_exit_code(exec_result)
-          {exec_result, %{exit_code: exit_code}}
-        end)
+                  {:error,
+                   %CommandResult{
+                     command: command_name,
+                     exit_code: 1,
+                     error: :redirect_error
+                   }}
+                else
+                  resolve_and_execute(
+                    command_name,
+                    expanded_args,
+                    exec_session,
+                    effective_stdin,
+                    redirects,
+                    ast.meta
+                  )
+                end
+
+              cleanup_fn.()
+
+              exit_code = get_exit_code(exec_result)
+              {exec_result, %{exit_code: exit_code}}
+            end)
+          end
       end
 
     completed_at = DateTime.utc_now()
@@ -469,9 +477,15 @@ defmodule Bash.AST.Command do
     # Exclude input duplications (<&N) which have fd: 0
     output_redirects =
       Enum.filter(redirects, fn
-        %AST.Redirect{direction: :duplicate, fd: 0} -> false
-        %AST.Redirect{direction: dir} when dir in [:output, :append, :duplicate] -> true
-        _ -> false
+        %AST.Redirect{direction: :duplicate, fd: 0} ->
+          false
+
+        %AST.Redirect{direction: dir}
+        when dir in [:output, :append, :clobber, :duplicate, :move] ->
+          true
+
+        _ ->
+          false
       end)
 
     if output_redirects == [] do
@@ -542,11 +556,12 @@ defmodule Bash.AST.Command do
   # When duplicating FDs, we need to re-tag the output so the collector
   # stores it under the correct stream.
   defp apply_redirect_to_sinks(
-         %AST.Redirect{direction: :duplicate, fd: from_fd, target: {:fd, to_fd}},
+         %AST.Redirect{direction: dir, fd: from_fd, target: {:fd, to_fd}},
          state,
          session_state,
          _noclobber
-       ) do
+       )
+       when dir in [:duplicate, :move] do
     duplicate_fd_sink(from_fd, to_fd, state, session_state)
   end
 
@@ -569,14 +584,14 @@ defmodule Bash.AST.Command do
     end
   end
 
-  # File redirect: > file, >> file, 2> file, &> file, etc.
+  # File redirect: > file, >> file, >| file, 2> file, &> file, etc.
   defp apply_redirect_to_sinks(
          %AST.Redirect{direction: dir, fd: fd, target: {:file, file_word}},
          state,
          session_state,
          noclobber
        )
-       when dir in [:output, :append] do
+       when dir in [:output, :append, :clobber] do
     file_path = resolve_redirect_path(file_word, session_state)
     append = dir == :append
 
@@ -589,12 +604,16 @@ defmodule Bash.AST.Command do
       :ok ->
         fs = Filesystem.from_state(session_state)
 
-        # Check noclobber (set -C): cannot overwrite existing file with >
-        if noclobber && !append && Filesystem.exists?(fs, file_path) do
-          error_msg = "bash: #{file_path}: cannot overwrite existing file\n"
-          {:error, error_msg, state}
-        else
-          create_file_sink_for_redirect(file_path, append, fd, state, fs)
+        cond do
+          file_path == "" ->
+            {:error, "bash: : No such file or directory\n", state}
+
+          noclobber && !append && file_path != "/dev/null" && Filesystem.exists?(fs, file_path) ->
+            error_msg = "bash: #{file_path}: cannot overwrite existing file\n"
+            {:error, error_msg, state}
+
+          true ->
+            create_file_sink_for_redirect(file_path, append, fd, state, fs)
         end
     end
   end
@@ -731,8 +750,12 @@ defmodule Bash.AST.Command do
 
       :ok ->
         case Filesystem.read(Filesystem.from_state(session_state), file_path) do
-          {:ok, content} -> content
-          {:error, _} -> default_stdin
+          {:ok, content} ->
+            content
+
+          {:error, reason} ->
+            message = :file.format_error(reason) |> to_string()
+            {:error, "bash: #{file_path}: #{message}\n"}
         end
     end
   end
@@ -811,11 +834,13 @@ defmodule Bash.AST.Command do
     updated_vars =
       Enum.reduce(assignments, session_state.variables, fn
         {var_name, value_word}, vars ->
-          value = Helpers.word_to_string(value_word, session_state)
+          current_state = %{session_state | variables: vars}
+          value = Helpers.word_to_string(value_word, current_state)
           Map.put(vars, var_name, Variable.new(value))
 
         {:scalar_append, var_name, value_word, _line, _col}, vars ->
-          append_value = Helpers.word_to_string(value_word, session_state)
+          current_state = %{session_state | variables: vars}
+          append_value = Helpers.word_to_string(value_word, current_state)
 
           existing =
             case Map.get(vars, var_name) do
@@ -836,9 +861,8 @@ defmodule Bash.AST.Command do
   end
 
   defp resolve_redirect_path(file_word, session_state) do
-    file_word
-    |> Helpers.word_to_string(session_state)
-    |> expand_relative_path(session_state.working_dir)
+    raw = Helpers.word_to_string(file_word, session_state)
+    if raw == "", do: "", else: expand_relative_path(raw, session_state.working_dir)
   end
 
   defp expand_relative_path(path, working_dir) do

@@ -129,7 +129,7 @@ defmodule Bash.AST.Compound do
   # Instead, we execute directly with a copy of state and discard the updates.
   def execute(
         %__MODULE__{kind: :subshell, statements: statements, redirects: redirects},
-        _stdin,
+        stdin,
         session_state
       ) do
     # Create an isolated copy of session state for subshell execution
@@ -141,9 +141,12 @@ defmodule Bash.AST.Compound do
         hash: %{}
     }
 
+    # If we have piped stdin, set up a StringIO device for the read builtin
+    {stdin_session, stdin_cleanup} = setup_stdin_device(stdin, subshell_state)
+
     # Apply output redirects to sinks
     {redirect_session, redirect_cleanup, redirect_error} =
-      AST.Command.setup_output_redirect_sinks(redirects, subshell_state)
+      AST.Command.setup_output_redirect_sinks(redirects, stdin_session)
 
     if redirect_error do
       Sink.write_stderr(session_state, redirect_error)
@@ -166,9 +169,19 @@ defmodule Bash.AST.Compound do
 
           {:error, result} ->
             {:error, result}
+
+          {:break, result, _level} ->
+            {:break, result, _level}
+
+          {:continue, result, _level} ->
+            {:continue, result, _level}
+
+          {:return, result} ->
+            {:return, result}
         end
       after
         redirect_cleanup.()
+        stdin_cleanup.()
       end
     end
   end
@@ -193,10 +206,18 @@ defmodule Bash.AST.Compound do
         {:error, %CommandResult{exit_code: 1, error: :redirect_error}}
       else
         try do
-          # Apply input redirects
-          _effective_stdin = AST.Command.process_input_redirects(redirects, redirect_session, nil)
+          # Apply input redirects (heredoc, herestring, file redirect)
+          effective_stdin = AST.Command.process_input_redirects(redirects, redirect_session, nil)
 
-          Helpers.execute_body(statements, redirect_session, %{})
+          # If input redirect produced stdin, set up a device for read builtin
+          {input_session, input_cleanup} =
+            setup_stdin_device(effective_stdin, redirect_session)
+
+          try do
+            Helpers.execute_body(statements, input_session, %{})
+          after
+            input_cleanup.()
+          end
         after
           redirect_cleanup.()
         end

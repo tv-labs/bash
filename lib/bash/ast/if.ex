@@ -127,6 +127,16 @@ defmodule Bash.AST.If do
 
         {:error, result} ->
           {session_state.options, %{}, result.exit_code || 1}
+
+        # break/continue outside a loop in condition context — treat as success
+        {:break, result, _level} ->
+          {session_state.options, %{}, result.exit_code || 0}
+
+        {:continue, result, _level} ->
+          {session_state.options, %{}, result.exit_code || 0}
+
+        {:return, result} ->
+          {session_state.options, %{}, result.exit_code || 0}
       end
 
     # Apply condition's variable and option changes for the branch body

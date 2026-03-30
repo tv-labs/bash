@@ -47,6 +47,9 @@ defmodule Bash.Builtin.Declare do
   defbash execute(args, state) do
     {opts, names} = parse_args(args)
 
+    # Check if called via 'local' builtin (flag set on session state)
+    opts = if Map.get(state, :__local_mode__), do: Map.put(opts, :local_mode, true), else: opts
+
     cond do
       # Function mode (with or without names) - list/show functions
       opts.function_mode ->
@@ -322,8 +325,16 @@ defmodule Bash.Builtin.Declare do
           # Create a nameref variable pointing to the target variable name
           {:ok, Variable.new_nameref(value)}
         else
-          # Create or update variable
-          var = existing || Variable.new()
+          # Create or update variable.
+          # In local mode without a value, always create a new unset variable
+          # to shadow any existing global.
+          var =
+            cond do
+              opts[:local_mode] == true and is_nil(value) -> Variable.new_unset()
+              not is_nil(existing) -> existing
+              not is_nil(value) -> Variable.new()
+              true -> Variable.new_unset()
+            end
 
           # Apply attribute changes
           var = apply_attributes(var, opts)
