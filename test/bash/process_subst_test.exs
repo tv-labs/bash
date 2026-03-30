@@ -27,9 +27,8 @@ defmodule Bash.ProcessSubstTest do
       assert is_binary(temp_path)
       assert String.starts_with?(temp_path, "/tmp/runcom_proc_subst_")
 
-      # start_link blocks until the :input worker finishes writing,
-      # so the file is ready to read immediately.
-      assert {:ok, content} = File.read(temp_path)
+      filesystem = Bash.Filesystem.from_state(state)
+      assert {:ok, content} = Bash.Filesystem.read(filesystem, temp_path)
       assert content == "hello\n"
 
       ProcessSubst.stop(pid)
@@ -52,9 +51,8 @@ defmodule Bash.ProcessSubstTest do
       assert is_binary(expanded)
       assert String.starts_with?(expanded, "/tmp/runcom_proc_subst_")
 
-      # start_link blocks until the :input worker finishes writing,
-      # so the file is ready immediately after word_to_string returns.
-      assert {:ok, content} = File.read(expanded)
+      filesystem = Bash.Filesystem.from_state(state)
+      assert {:ok, content} = Bash.Filesystem.read(filesystem, expanded)
       assert content == "hello\n"
 
       Session.stop(session)
