@@ -139,13 +139,51 @@ defmodule Bash.Filesystem.ETS do
   end
 
   @impl true
-  def write(_tid, _path, _content, _opts), do: {:error, :enotsup}
+  def write(_tid, "/dev/null", _content, _opts), do: :ok
+
+  def write(tid, path, content, opts) do
+    binary = IO.iodata_to_binary(content)
+
+    Enum.each(parent_paths(path), fn parent ->
+      :ets.insert_new(tid, {parent, :dir, nil, dir_stat(0o755)})
+    end)
+
+    {final_content, mode} =
+      case :ets.lookup(tid, path) do
+        [{^path, :file, existing, existing_stat}] ->
+          if Keyword.get(opts, :append, false) do
+            {existing <> binary, existing_stat.mode}
+          else
+            {binary, existing_stat.mode}
+          end
+
+        _ ->
+          {binary, 0o644}
+      end
+
+    stat = file_stat(final_content, mode)
+    :ets.insert(tid, {path, :file, final_content, stat})
+    :ok
+  end
 
   @impl true
-  def mkdir_p(_tid, _path), do: {:error, :enotsup}
+  def mkdir_p(tid, path) do
+    Enum.each([path | parent_paths(path)], fn dir ->
+      :ets.insert_new(tid, {dir, :dir, nil, dir_stat(0o755)})
+    end)
+
+    :ok
+  end
 
   @impl true
-  def rm(_tid, _path), do: {:error, :enotsup}
+  def rm(tid, path) do
+    if :ets.member(tid, path) do
+      :ets.delete(tid, path)
+      :ok
+    else
+      {:error, :enoent}
+    end
+  end
 
   @impl true
   def open(_tid, _path, _modes), do: {:error, :enotsup}

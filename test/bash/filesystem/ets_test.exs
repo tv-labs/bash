@@ -250,4 +250,106 @@ defmodule Bash.Filesystem.ETSTest do
       :ets.delete(tid)
     end
   end
+
+  describe "write/4" do
+    test "creates a new file" do
+      tid = ETS.new()
+      assert :ok = ETS.write(tid, "/tmp/new.txt", "hello", [])
+      assert {:ok, "hello"} = ETS.read(tid, "/tmp/new.txt")
+      :ets.delete(tid)
+    end
+
+    test "overwrites existing file" do
+      tid = ETS.new(%{"/tmp/existing.txt" => "original"})
+      assert :ok = ETS.write(tid, "/tmp/existing.txt", "replaced", [])
+      assert {:ok, "replaced"} = ETS.read(tid, "/tmp/existing.txt")
+      :ets.delete(tid)
+    end
+
+    test "appends when append: true" do
+      tid = ETS.new(%{"/tmp/log.txt" => "line1\n"})
+      assert :ok = ETS.write(tid, "/tmp/log.txt", "line2\n", append: true)
+      assert {:ok, "line1\nline2\n"} = ETS.read(tid, "/tmp/log.txt")
+      :ets.delete(tid)
+    end
+
+    test "auto-creates parent directories" do
+      tid = ETS.new()
+      assert :ok = ETS.write(tid, "/a/b/c/file.txt", "content", [])
+
+      for path <- ["/", "/a", "/a/b", "/a/b/c"] do
+        assert ETS.dir?(tid, path), "expected #{path} to be a directory"
+      end
+
+      assert {:ok, "content"} = ETS.read(tid, "/a/b/c/file.txt")
+      :ets.delete(tid)
+    end
+
+    test "writes to /dev/null succeed silently" do
+      tid = ETS.new()
+      assert :ok = ETS.write(tid, "/dev/null", "ignored", [])
+      refute ETS.exists?(tid, "/dev/null") and ETS.regular?(tid, "/dev/null")
+      :ets.delete(tid)
+    end
+
+    test "preserves existing mode when overwriting" do
+      tid = ETS.new(%{"/usr/bin/script" => %{content: "old", mode: 0o755}})
+      assert :ok = ETS.write(tid, "/usr/bin/script", "new", [])
+      {:ok, stat} = ETS.stat(tid, "/usr/bin/script")
+      assert stat.mode == 0o755
+      :ets.delete(tid)
+    end
+
+    test "new files use mode 0o644" do
+      tid = ETS.new()
+      assert :ok = ETS.write(tid, "/tmp/plain.txt", "data", [])
+      {:ok, stat} = ETS.stat(tid, "/tmp/plain.txt")
+      assert stat.mode == 0o644
+      :ets.delete(tid)
+    end
+
+    test "updates size in stat after write" do
+      tid = ETS.new(%{"/tmp/sized.txt" => "short"})
+      assert :ok = ETS.write(tid, "/tmp/sized.txt", "much longer content", [])
+      {:ok, stat} = ETS.stat(tid, "/tmp/sized.txt")
+      assert stat.size == byte_size("much longer content")
+      :ets.delete(tid)
+    end
+  end
+
+  describe "mkdir_p/2" do
+    test "creates nested directories" do
+      tid = ETS.new()
+      assert :ok = ETS.mkdir_p(tid, "/a/b/c/d")
+
+      for path <- ["/", "/a", "/a/b", "/a/b/c", "/a/b/c/d"] do
+        assert ETS.dir?(tid, path), "expected #{path} to be a directory"
+      end
+
+      :ets.delete(tid)
+    end
+
+    test "is idempotent" do
+      tid = ETS.new()
+      assert :ok = ETS.mkdir_p(tid, "/tmp/mydir")
+      assert :ok = ETS.mkdir_p(tid, "/tmp/mydir")
+      assert ETS.dir?(tid, "/tmp/mydir")
+      :ets.delete(tid)
+    end
+  end
+
+  describe "rm/2" do
+    test "removes a file" do
+      tid = ETS.new(%{"/tmp/to_remove.txt" => "bye"})
+      assert :ok = ETS.rm(tid, "/tmp/to_remove.txt")
+      refute ETS.exists?(tid, "/tmp/to_remove.txt")
+      :ets.delete(tid)
+    end
+
+    test "returns error for missing file" do
+      tid = ETS.new()
+      assert {:error, :enoent} = ETS.rm(tid, "/nonexistent/file.txt")
+      :ets.delete(tid)
+    end
+  end
 end
