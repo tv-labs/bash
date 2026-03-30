@@ -332,6 +332,12 @@ defmodule Bash.Filesystem.ETS do
     end
   end
 
+  @impl true
+  def read_link(_tid, _path), do: {:error, :enotsup}
+
+  @impl true
+  def read_link_all(_tid, _path), do: {:error, :enotsup}
+
   defp insert_dir(tid, path, mode) do
     stat = dir_stat(mode)
     :ets.insert(tid, {path, :dir, nil, stat})

@@ -481,4 +481,18 @@ defmodule Bash.Filesystem.ETSTest do
       :ets.delete(tid)
     end
   end
+
+  describe "symlink stubs" do
+    test "read_link returns :enotsup" do
+      tid = ETS.new()
+      assert {:error, :enotsup} = ETS.read_link(tid, "/anything")
+      :ets.delete(tid)
+    end
+
+    test "read_link_all returns :enotsup" do
+      tid = ETS.new()
+      assert {:error, :enotsup} = ETS.read_link_all(tid, "/anything")
+      :ets.delete(tid)
+    end
+  end
 end
