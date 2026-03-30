@@ -274,7 +274,7 @@ defmodule Bash.SpecParser do
     end)
   end
 
-  defp find_bash_in_list_value(lines, suffix, prefix \\ "## OK ") do
+  defp find_bash_in_list_value(lines, suffix, prefix) do
     # Match patterns like "## OK bash/zsh stdout: value" or "## BUG bash/zsh stdout: value"
     Enum.find_value(lines, fn line ->
       with true <- String.starts_with?(line, prefix),
@@ -288,10 +288,6 @@ defmodule Bash.SpecParser do
         _ -> nil
       end
     end)
-  end
-
-  defp bash_in_ok_shell_list?(line) do
-    bash_in_shell_list_line?(line, "## OK ")
   end
 
   defp bash_in_shell_list_line?(line, prefix) do

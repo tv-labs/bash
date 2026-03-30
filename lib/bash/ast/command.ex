@@ -816,7 +816,7 @@ defmodule Bash.AST.Command do
           end
 
         device when is_pid(device) ->
-          case IO.binread(device, :all) do
+          case IO.binread(device, :eof) do
             data when is_binary(data) -> data
             _ -> default_stdin
           end

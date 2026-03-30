@@ -61,7 +61,8 @@ defmodule Bash.AST do
         # ...
       end
   """
-  defguard command_name(node) when elem(hd(node.name.parts), 1)
+  defguard command_name(node)
+           when is_tuple(hd(node.name.parts)) and elem(hd(node.name.parts), 1)
 
   @doc """
   Returns `true` if `node` is a `Command` with the given literal name.
@@ -79,6 +80,7 @@ defmodule Bash.AST do
   """
   defguard is_command(node)
            when is_struct(node, AST.Command) and
+                  is_tuple(hd(node.name.parts)) and
                   elem(hd(node.name.parts), 0) == :literal
 
   defguard is_command(node, name)
