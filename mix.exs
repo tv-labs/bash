@@ -82,7 +82,7 @@ defmodule Bash.MixProject do
           Bash.Telemetry,
           Bash.Filesystem,
           Bash.Filesystem.ETS,
-          Bash.Filesystem.LockDisk
+          Bash.Filesystem.LocalDisk
         ],
         "Elixir Interop": [
           Bash.Interop,
