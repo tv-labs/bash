@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## unreleased
 
+- Add `Bash.Filesystem.ETS` — an in-memory virtual filesystem backed by ETS for sandboxing and test isolation. Implements the full `Bash.Filesystem` behaviour with POSIX skeleton seeding, magic device paths (`/dev/null`, `/dev/stdin`, `/dev/stdout`, `/dev/stderr`), and StringIO-based file handle support. Usage: `Bash.Filesystem.ETS.new(%{"/path" => "content"})` then pass to `Bash.Session.new(filesystem: {Bash.Filesystem.ETS, table})`.
 - There is now a pluggable Filesystem
 - The test suite has been massively improved and therefore improved parser correctness
 
