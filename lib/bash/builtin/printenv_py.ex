@@ -1,22 +1,23 @@
 defmodule Bash.Builtin.PrintenvPy do
-  @moduledoc """
-  `printenv.py [VAR ...]`
+  @moduledoc false
 
-  Spec test helper that prints environment variable values.
+  # `printenv.py [VAR ...]`
+  #
+  # Spec test helper that prints environment variable values.
+  #
+  # For each variable name given, prints the value if the variable exists
+  # and is exported, or `None` if it is not set or not exported.
+  #
+  # This emulates the Oils test suite `printenv.py` helper.
+  #
+  # ## Examples
+  #
+  #     FOO=bar printenv.py FOO
+  #     # bar
+  #
+  #     printenv.py NONEXISTENT
+  #     # None
 
-  For each variable name given, prints the value if the variable exists
-  and is exported, or `None` if it is not set or not exported.
-
-  This emulates the Oils test suite `printenv.py` helper.
-
-  ## Examples
-
-      FOO=bar printenv.py FOO
-      # bar
-
-      printenv.py NONEXISTENT
-      # None
-  """
   use Bash.Builtin
 
   alias Bash.Variable
