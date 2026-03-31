@@ -223,7 +223,12 @@ defmodule Bash.ProcessSubst do
   def terminate(_reason, state) do
     if state.temp_path do
       filesystem = Bash.Filesystem.from_state(state.session_state)
-      Bash.Filesystem.rm(filesystem, state.temp_path)
+
+      try do
+        Bash.Filesystem.rm(filesystem, state.temp_path)
+      rescue
+        ArgumentError -> :ok
+      end
     end
 
     :ok
