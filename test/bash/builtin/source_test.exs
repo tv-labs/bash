@@ -49,5 +49,50 @@ defmodule Bash.Builtin.SourceTest do
 
       assert get_stdout(result) == "42\n"
     end
+
+    test "sources bare filename from working directory", %{session: session} do
+      result =
+        run_script(session, """
+        echo 'export SOURCED_VAR=it_worked' > myconfig.sh
+        source myconfig.sh
+        echo $SOURCED_VAR
+        """)
+
+      assert result.exit_code == 0
+      assert get_stdout(result) == "it_worked\n"
+    end
+  end
+
+  describe "source with virtual filesystem" do
+    setup context do
+      alias Bash.Filesystem.ETS, as: FS
+
+      table =
+        FS.new(%{
+          "/app/config.sh" => "export DB_HOST=localhost\nexport DB_PORT=5432"
+        })
+
+      registry_name = Module.concat([context.module, VFSRegistry, context.test])
+      supervisor_name = Module.concat([context.module, VFSSupervisor, context.test])
+      start_supervised!({Registry, keys: :unique, name: registry_name})
+      start_supervised!({DynamicSupervisor, strategy: :one_for_one, name: supervisor_name})
+
+      {:ok, session} =
+        Bash.Session.new(
+          id: "vfs_#{context.test}",
+          filesystem: {FS, table},
+          working_dir: "/app",
+          registry: registry_name,
+          supervisor: supervisor_name
+        )
+
+      {:ok, %{session: session}}
+    end
+
+    test "sources bare filename from working directory in VFS", %{session: session} do
+      result = run_script(session, "source config.sh && echo $DB_HOST:$DB_PORT")
+      assert result.exit_code == 0
+      assert get_stdout(result) == "localhost:5432\n"
+    end
   end
 end

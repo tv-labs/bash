@@ -77,18 +77,24 @@ defmodule Bash.Builtin.Source do
         full_path = Path.join(session_state.working_dir, filename)
         if Filesystem.exists?(fs, full_path), do: full_path, else: nil
 
-      # Search in PATH
+      # Bare filename: check working directory first, then PATH
       true ->
-        path_dirs =
-          session_state.variables
-          |> Map.get("PATH", Variable.new(""))
-          |> Variable.get(nil)
-          |> String.split(":")
+        cwd_path = Path.join(session_state.working_dir, filename)
 
-        Enum.find_value(path_dirs, fn dir ->
-          full_path = Path.join(dir, filename)
-          if Filesystem.exists?(fs, full_path), do: full_path, else: nil
-        end)
+        if Filesystem.exists?(fs, cwd_path) do
+          cwd_path
+        else
+          path_dirs =
+            session_state.variables
+            |> Map.get("PATH", Variable.new(""))
+            |> Variable.get(nil)
+            |> String.split(":")
+
+          Enum.find_value(path_dirs, fn dir ->
+            full_path = Path.join(dir, filename)
+            if Filesystem.exists?(fs, full_path), do: full_path, else: nil
+          end)
+        end
     end
   end
 

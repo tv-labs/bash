@@ -31,12 +31,11 @@ Bash.stdout(result)
 
 # Start a session and run many commands
 result = Bash.with_session(fn session ->
-  session
-  |> Bash.run("echo hello")
-  |> Bash.run("echo uhoh >&2")
+  Bash.run("export NAME=world", session)
+  |> Bash.run("echo hello $NAME")
   |> Bash.stdout()
 end)
-#=> "hello\n"
+#=> "hello world\n"
 
 # Or use the sigil for compile-time parsing
 import Bash.Sigil
@@ -55,7 +54,7 @@ iex> ~BASH"echo { foo"
 > 1 | echo { foo
               ^
 
-  hint: expected '}' to close brace group
+  hint: expected '}' to close group
 ```
 
 Use as your Bash formatter.
