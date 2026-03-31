@@ -369,7 +369,20 @@ defmodule Bash.Filesystem.ETS do
 
   defp insert_seed(tid, path, %{content: content} = spec) do
     mode = Map.get(spec, :mode, 0o644)
-    stat = file_stat(content, mode)
+    now = :calendar.universal_time()
+
+    stat = %File.Stat{
+      type: :regular,
+      size: byte_size(content),
+      access: :read_write,
+      mode: mode,
+      mtime: Map.get(spec, :mtime, now),
+      atime: Map.get(spec, :atime, now),
+      ctime: now,
+      inode: Map.get(spec, :inode, 0),
+      major_device: Map.get(spec, :major_device, 0)
+    }
+
     :ets.insert(tid, {path, :file, content, stat})
   end
 

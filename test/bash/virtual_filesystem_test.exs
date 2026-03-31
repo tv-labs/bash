@@ -3,330 +3,6 @@ defmodule Bash.VirtualFilesystemTest do
 
   alias Bash.Session
 
-  defmodule InMemory do
-    @moduledoc false
-    @behaviour Bash.Filesystem
-
-    def start(initial_files \\ %{}) do
-      {:ok, pid} = Agent.start(fn -> initial_files end)
-      {__MODULE__, pid}
-    end
-
-    def stop({__MODULE__, pid}) do
-      Agent.stop(pid)
-    catch
-      :exit, _ -> :ok
-    end
-
-    defp normalize(path), do: Path.expand(path)
-
-    @impl true
-    def exists?(pid, path) do
-      path = normalize(path)
-
-      Agent.get(pid, fn files ->
-        case Map.get(files, path) do
-          nil ->
-            Enum.any?(files, fn
-              {{:_device, _}, _} -> false
-              {k, _v} -> String.starts_with?(k, path <> "/")
-            end)
-
-          _ ->
-            true
-        end
-      end)
-    end
-
-    @impl true
-    def dir?(pid, path) do
-      path = normalize(path)
-
-      Agent.get(pid, fn files ->
-        Map.get(files, path) == :directory or
-          Enum.any?(files, fn
-            {{:_device, _}, _} ->
-              false
-
-            {k, _v} ->
-              k != path and String.starts_with?(k, path <> "/")
-          end)
-      end)
-    end
-
-    @impl true
-    def regular?(pid, path) do
-      path = normalize(path)
-
-      Agent.get(pid, fn files ->
-        case Map.get(files, path) do
-          nil -> false
-          :directory -> false
-          {_content, opts} when is_list(opts) -> Keyword.get(opts, :type, :regular) != :directory
-          _ -> true
-        end
-      end)
-    end
-
-    @impl true
-    def stat(pid, path) do
-      path = normalize(path)
-
-      Agent.get(pid, fn files ->
-        case Map.get(files, path) do
-          nil ->
-            if Enum.any?(files, fn
-                 {{:_device, _}, _} -> false
-                 {k, _} -> k != path and String.starts_with?(k, path <> "/")
-               end) do
-              {:ok,
-               %File.Stat{
-                 type: :directory,
-                 size: 0,
-                 mode: 0o755,
-                 mtime: {{2024, 1, 1}, {0, 0, 0}},
-                 atime: {{2024, 1, 1}, {0, 0, 0}},
-                 inode: 0,
-                 major_device: 0
-               }}
-            else
-              {:error, :enoent}
-            end
-
-          :directory ->
-            {:ok,
-             %File.Stat{
-               type: :directory,
-               size: 0,
-               mode: 0o755,
-               mtime: {{2024, 1, 1}, {0, 0, 0}},
-               atime: {{2024, 1, 1}, {0, 0, 0}},
-               inode: 0,
-               major_device: 0
-             }}
-
-          {content, opts} when is_binary(content) and is_list(opts) ->
-            {:ok,
-             %File.Stat{
-               type: Keyword.get(opts, :type, :regular),
-               size: byte_size(content),
-               mode: Keyword.get(opts, :mode, 0o644),
-               mtime: Keyword.get(opts, :mtime, {{2024, 1, 1}, {0, 0, 0}}),
-               atime: Keyword.get(opts, :atime, {{2024, 1, 1}, {0, 0, 0}}),
-               inode: Keyword.get(opts, :inode, 0),
-               major_device: Keyword.get(opts, :major_device, 0)
-             }}
-
-          content when is_binary(content) ->
-            {:ok,
-             %File.Stat{
-               type: :regular,
-               size: byte_size(content),
-               mode: 0o644,
-               mtime: {{2024, 1, 1}, {0, 0, 0}},
-               atime: {{2024, 1, 1}, {0, 0, 0}},
-               inode: 0,
-               major_device: 0
-             }}
-        end
-      end)
-    end
-
-    @impl true
-    def read(pid, path) do
-      path = normalize(path)
-
-      Agent.get(pid, fn files ->
-        case Map.get(files, path) do
-          nil -> {:error, :enoent}
-          :directory -> {:error, :eisdir}
-          {content, opts} when is_binary(content) and is_list(opts) -> {:ok, content}
-          content when is_binary(content) -> {:ok, content}
-        end
-      end)
-    end
-
-    @impl true
-    def write(pid, path, content, opts) do
-      path = normalize(path)
-
-      Agent.update(pid, fn files ->
-        current = Map.get(files, path, "")
-
-        current_content =
-          case current do
-            {bin, _opts} when is_binary(bin) -> bin
-            bin when is_binary(bin) -> bin
-            _ -> ""
-          end
-
-        new_content =
-          if Keyword.get(opts, :append, false) do
-            current_content <> IO.iodata_to_binary(content)
-          else
-            IO.iodata_to_binary(content)
-          end
-
-        Map.put(files, path, new_content)
-      end)
-    end
-
-    @impl true
-    def mkdir_p(pid, path) do
-      path = normalize(path)
-      Agent.update(pid, fn files -> Map.put(files, path, :directory) end)
-    end
-
-    @impl true
-    def rm(pid, path) do
-      path = normalize(path)
-      Agent.update(pid, fn files -> Map.delete(files, path) end)
-    end
-
-    @impl true
-    def open(pid, path, modes) do
-      path = normalize(path)
-
-      cond do
-        :write in modes or :append in modes ->
-          is_append = :append in modes
-
-          existing_content =
-            if is_append do
-              case Agent.get(pid, &Map.get(&1, path, "")) do
-                {bin, _opts} when is_binary(bin) -> bin
-                bin when is_binary(bin) -> bin
-                _ -> ""
-              end
-            else
-              ""
-            end
-
-          {:ok, device} = StringIO.open("")
-
-          Agent.update(pid, fn files ->
-            Map.put(files, {:_device, device}, {:write_to, path, is_append, existing_content})
-          end)
-
-          {:ok, device}
-
-        :read in modes ->
-          case Agent.get(pid, &Map.get(&1, path)) do
-            nil ->
-              {:error, :enoent}
-
-            :directory ->
-              {:error, :eisdir}
-
-            {content, _opts} when is_binary(content) ->
-              {:ok, device} = StringIO.open(content)
-              {:ok, device}
-
-            content when is_binary(content) ->
-              {:ok, device} = StringIO.open(content)
-              {:ok, device}
-          end
-
-        true ->
-          {:error, :einval}
-      end
-    end
-
-    @impl true
-    def handle_write(_pid, device, data) do
-      IO.binwrite(device, data)
-    end
-
-    @impl true
-    def handle_close(pid, device) do
-      case Agent.get(pid, &Map.get(&1, {:_device, device})) do
-        {:write_to, path, is_append, existing_content} ->
-          {_input, output} = StringIO.contents(device)
-
-          final_content =
-            if is_append do
-              existing_content <> output
-            else
-              output
-            end
-
-          Agent.update(pid, fn files ->
-            files
-            |> Map.delete({:_device, device})
-            |> Map.put(path, final_content)
-          end)
-
-          StringIO.close(device)
-          :ok
-
-        nil ->
-          StringIO.close(device)
-          :ok
-      end
-    end
-
-    @impl true
-    def ls(pid, dir_path) do
-      dir_path = normalize(dir_path)
-
-      Agent.get(pid, fn files ->
-        entries =
-          files
-          |> Enum.filter(fn
-            {{:_device, _}, _} ->
-              false
-
-            {k, _v} ->
-              parent = Path.dirname(k)
-              parent == dir_path or (dir_path == "/" and parent == "/")
-          end)
-          |> Enum.map(fn {k, _v} -> Path.basename(k) end)
-          |> Enum.uniq()
-          |> Enum.sort()
-
-        if entries == [] do
-          if Map.has_key?(files, dir_path) or
-               Enum.any?(files, fn
-                 {{:_device, _}, _} -> false
-                 {k, _} -> k != dir_path and String.starts_with?(k, dir_path <> "/")
-               end) do
-            {:ok, []}
-          else
-            {:error, :enoent}
-          end
-        else
-          {:ok, entries}
-        end
-      end)
-    end
-
-    @impl true
-    def wildcard(pid, pattern, _opts) do
-      Agent.get(pid, fn files ->
-        regex_str =
-          pattern
-          |> Regex.escape()
-          |> String.replace("\\*", "[^/]*")
-          |> String.replace("\\?", "[^/]")
-
-        case Regex.compile("^#{regex_str}$") do
-          {:ok, regex} ->
-            files
-            |> Map.keys()
-            |> Enum.filter(fn
-              {:_device, _} -> false
-              k when is_binary(k) -> Regex.match?(regex, k)
-              _ -> false
-            end)
-            |> Enum.sort()
-
-          {:error, _} ->
-            []
-        end
-      end)
-    end
-  end
-
   @enforcement_base "/nonexistent_vfs_enforcement_path/workspace"
 
   defp start_enforcement_session(context, initial_files, opts \\ []) do
@@ -334,26 +10,24 @@ defmodule Bash.VirtualFilesystemTest do
   end
 
   defp start_vfs_session(context, initial_files, opts \\ []) do
-    fs = InMemory.start(initial_files)
+    table = Bash.Filesystem.ETS.new(initial_files)
     working_dir = Keyword.get(opts, :working_dir, "/workspace")
 
     registry_name = Module.concat([context.module, VFSRegistry, context.test])
     supervisor_name = Module.concat([context.module, VFSSupervisor, context.test])
 
-    _registry =
-      start_supervised!({Registry, keys: :unique, name: registry_name}, id: registry_name)
+    start_supervised!({Registry, keys: :unique, name: registry_name}, id: registry_name)
 
-    _supervisor =
-      start_supervised!(
-        {DynamicSupervisor, strategy: :one_for_one, name: supervisor_name},
-        id: supervisor_name
-      )
+    start_supervised!(
+      {DynamicSupervisor, strategy: :one_for_one, name: supervisor_name},
+      id: supervisor_name
+    )
 
     command_policy_opt = Keyword.get(opts, :command_policy, nil)
 
     session_opts =
       [
-        filesystem: fs,
+        filesystem: {Bash.Filesystem.ETS, table},
         working_dir: working_dir,
         id: "#{context.test}",
         registry: registry_name,
@@ -363,9 +37,7 @@ defmodule Bash.VirtualFilesystemTest do
 
     {:ok, session} = Session.new(session_opts)
 
-    on_exit(fn -> InMemory.stop(fs) end)
-
-    {session, fs}
+    {session, {Bash.Filesystem.ETS, table}}
   end
 
   describe "default (no filesystem option) is unchanged" do
@@ -395,7 +67,7 @@ defmodule Bash.VirtualFilesystemTest do
       {session, _fs} =
         start_vfs_session(context, %{
           "/workspace/file.txt" => "content",
-          "/workspace/dir" => :directory
+          "/workspace/dir" => {:dir, nil}
         })
 
       result = run_script(session, "test -f file.txt && echo yes || echo no")
@@ -408,7 +80,7 @@ defmodule Bash.VirtualFilesystemTest do
     test "test -d checks VFS for directory", context do
       {session, _fs} =
         start_vfs_session(context, %{
-          "/workspace/dir" => :directory,
+          "/workspace/dir" => {:dir, nil},
           "/workspace/file.txt" => "content"
         })
 
@@ -466,28 +138,24 @@ defmodule Bash.VirtualFilesystemTest do
 
   describe "output redirections with virtual filesystem" do
     test "echo > file writes to VFS", context do
-      {session, fs} =
-        start_vfs_session(context, %{"/workspace" => :directory})
+      {session, {Bash.Filesystem.ETS, table}} =
+        start_vfs_session(context, %{"/workspace" => {:dir, nil}})
 
       run_script(session, "echo hello > output.txt")
 
-      {_, pid} = fs
-      content = Agent.get(pid, &Map.get(&1, "/workspace/output.txt"))
-      assert content == "hello\n"
+      assert Bash.Filesystem.ETS.read(table, "/workspace/output.txt") == {:ok, "hello\n"}
     end
 
     test "echo >> file appends to VFS", context do
-      {session, fs} =
+      {session, {Bash.Filesystem.ETS, table}} =
         start_vfs_session(context, %{
-          "/workspace" => :directory,
+          "/workspace" => {:dir, nil},
           "/workspace/output.txt" => "first\n"
         })
 
       run_script(session, "echo second >> output.txt")
 
-      {_, pid} = fs
-      content = Agent.get(pid, &Map.get(&1, "/workspace/output.txt"))
-      assert content == "first\nsecond\n"
+      assert Bash.Filesystem.ETS.read(table, "/workspace/output.txt") == {:ok, "first\nsecond\n"}
     end
   end
 
@@ -507,7 +175,7 @@ defmodule Bash.VirtualFilesystemTest do
     test "cd validates against VFS directories", context do
       {session, _fs} =
         start_vfs_session(context, %{
-          "/workspace/subdir" => :directory
+          "/workspace/subdir" => {:dir, nil}
         })
 
       result = run_script(session, "cd subdir && pwd")
@@ -608,7 +276,7 @@ defmodule Bash.VirtualFilesystemTest do
     test "test -d detects directory in VFS", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/mydir") => :directory
+          (@enforcement_base <> "/mydir") => {:dir, nil}
         })
 
       result = run_script(session, "test -d mydir && echo yes || echo no")
@@ -628,7 +296,7 @@ defmodule Bash.VirtualFilesystemTest do
     test "test -r detects readable file via VFS stat", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/readable.txt") => {"content", mode: 0o644}
+          (@enforcement_base <> "/readable.txt") => %{content: "content", mode: 0o644}
         })
 
       result = run_script(session, "test -r readable.txt && echo yes || echo no")
@@ -638,8 +306,8 @@ defmodule Bash.VirtualFilesystemTest do
     test "test -w detects writable file via VFS stat", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/writable.txt") => {"content", mode: 0o644},
-          (@enforcement_base <> "/readonly.txt") => {"content", mode: 0o444}
+          (@enforcement_base <> "/writable.txt") => %{content: "content", mode: 0o644},
+          (@enforcement_base <> "/readonly.txt") => %{content: "content", mode: 0o444}
         })
 
       result = run_script(session, "test -w writable.txt && echo yes || echo no")
@@ -652,8 +320,8 @@ defmodule Bash.VirtualFilesystemTest do
     test "test -x detects executable file via VFS stat", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/script.sh") => {"#!/bin/bash", mode: 0o755},
-          (@enforcement_base <> "/data.txt") => {"content", mode: 0o644}
+          (@enforcement_base <> "/script.sh") => %{content: "#!/bin/bash", mode: 0o755},
+          (@enforcement_base <> "/data.txt") => %{content: "content", mode: 0o644}
         })
 
       result = run_script(session, "test -x script.sh && echo yes || echo no")
@@ -666,7 +334,7 @@ defmodule Bash.VirtualFilesystemTest do
     test "test -g detects setgid via VFS stat", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/setgid_file") => {"content", mode: 0o2755}
+          (@enforcement_base <> "/setgid_file") => %{content: "content", mode: 0o2755}
         })
 
       result = run_script(session, "test -g setgid_file && echo yes || echo no")
@@ -676,7 +344,7 @@ defmodule Bash.VirtualFilesystemTest do
     test "test -u detects setuid via VFS stat", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/setuid_file") => {"content", mode: 0o4755}
+          (@enforcement_base <> "/setuid_file") => %{content: "content", mode: 0o4755}
         })
 
       result = run_script(session, "test -u setuid_file && echo yes || echo no")
@@ -686,7 +354,7 @@ defmodule Bash.VirtualFilesystemTest do
     test "test -k detects sticky bit via VFS stat", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/sticky_dir") => {"content", mode: 0o1755}
+          (@enforcement_base <> "/sticky_dir") => %{content: "content", mode: 0o1755}
         })
 
       result = run_script(session, "test -k sticky_dir && echo yes || echo no")
@@ -696,8 +364,11 @@ defmodule Bash.VirtualFilesystemTest do
     test "test -N detects file modified since read via VFS stat", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/modified.txt") =>
-            {"content", mtime: {{2024, 6, 1}, {12, 0, 0}}, atime: {{2024, 1, 1}, {0, 0, 0}}}
+          (@enforcement_base <> "/modified.txt") => %{
+            content: "content",
+            mtime: {{2024, 6, 1}, {12, 0, 0}},
+            atime: {{2024, 1, 1}, {0, 0, 0}}
+          }
         })
 
       result = run_script(session, "test -N modified.txt && echo yes || echo no")
@@ -707,8 +378,14 @@ defmodule Bash.VirtualFilesystemTest do
     test "test file1 -nt file2 compares via VFS stat", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/newer.txt") => {"content", mtime: {{2024, 6, 1}, {0, 0, 0}}},
-          (@enforcement_base <> "/older.txt") => {"content", mtime: {{2024, 1, 1}, {0, 0, 0}}}
+          (@enforcement_base <> "/newer.txt") => %{
+            content: "content",
+            mtime: {{2024, 6, 1}, {0, 0, 0}}
+          },
+          (@enforcement_base <> "/older.txt") => %{
+            content: "content",
+            mtime: {{2024, 1, 1}, {0, 0, 0}}
+          }
         })
 
       result = run_script(session, "test newer.txt -nt older.txt && echo yes || echo no")
@@ -718,8 +395,14 @@ defmodule Bash.VirtualFilesystemTest do
     test "test file1 -ot file2 compares via VFS stat", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/newer.txt") => {"content", mtime: {{2024, 6, 1}, {0, 0, 0}}},
-          (@enforcement_base <> "/older.txt") => {"content", mtime: {{2024, 1, 1}, {0, 0, 0}}}
+          (@enforcement_base <> "/newer.txt") => %{
+            content: "content",
+            mtime: {{2024, 6, 1}, {0, 0, 0}}
+          },
+          (@enforcement_base <> "/older.txt") => %{
+            content: "content",
+            mtime: {{2024, 1, 1}, {0, 0, 0}}
+          }
         })
 
       result = run_script(session, "test older.txt -ot newer.txt && echo yes || echo no")
@@ -729,8 +412,12 @@ defmodule Bash.VirtualFilesystemTest do
     test "test file1 -ef file2 compares inode via VFS stat", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/file1.txt") => {"content", inode: 42, major_device: 1},
-          (@enforcement_base <> "/hardlink.txt") => {"content", inode: 42, major_device: 1}
+          (@enforcement_base <> "/file1.txt") => %{content: "content", inode: 42, major_device: 1},
+          (@enforcement_base <> "/hardlink.txt") => %{
+            content: "content",
+            inode: 42,
+            major_device: 1
+          }
         })
 
       result = run_script(session, "test file1.txt -ef hardlink.txt && echo yes || echo no")
@@ -763,31 +450,30 @@ defmodule Bash.VirtualFilesystemTest do
 
   describe "VFS enforcement: output redirections on non-host paths" do
     test "echo > file writes to VFS, not host", context do
-      {session, fs} =
+      {session, {Bash.Filesystem.ETS, table}} =
         start_enforcement_session(context, %{
-          @enforcement_base => :directory
+          @enforcement_base => {:dir, nil}
         })
 
       run_script(session, "echo enforced > output.txt")
 
-      {_, pid} = fs
-      content = Agent.get(pid, &Map.get(&1, @enforcement_base <> "/output.txt"))
-      assert content == "enforced\n"
+      assert Bash.Filesystem.ETS.read(table, @enforcement_base <> "/output.txt") ==
+               {:ok, "enforced\n"}
+
       refute File.exists?(@enforcement_base <> "/output.txt")
     end
 
     test "echo >> file appends to VFS, not host", context do
-      {session, fs} =
+      {session, {Bash.Filesystem.ETS, table}} =
         start_enforcement_session(context, %{
-          @enforcement_base => :directory,
+          @enforcement_base => {:dir, nil},
           (@enforcement_base <> "/log.txt") => "line1\n"
         })
 
       run_script(session, "echo line2 >> log.txt")
 
-      {_, pid} = fs
-      content = Agent.get(pid, &Map.get(&1, @enforcement_base <> "/log.txt"))
-      assert content == "line1\nline2\n"
+      assert Bash.Filesystem.ETS.read(table, @enforcement_base <> "/log.txt") ==
+               {:ok, "line1\nline2\n"}
     end
   end
 
@@ -824,7 +510,7 @@ defmodule Bash.VirtualFilesystemTest do
     test "cd validates directory existence in VFS only", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/vfs_only_dir") => :directory
+          (@enforcement_base <> "/vfs_only_dir") => {:dir, nil}
         })
 
       result = run_script(session, "cd vfs_only_dir && pwd")
@@ -834,8 +520,8 @@ defmodule Bash.VirtualFilesystemTest do
     test "cd - switches to previous VFS directory", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/dir_a") => :directory,
-          (@enforcement_base <> "/dir_b") => :directory
+          (@enforcement_base <> "/dir_a") => {:dir, nil},
+          (@enforcement_base <> "/dir_b") => {:dir, nil}
         })
 
       run_script(session, "cd dir_a")
@@ -904,7 +590,7 @@ defmodule Bash.VirtualFilesystemTest do
     test "subshell cd validates against VFS", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/sub") => :directory
+          (@enforcement_base <> "/sub") => {:dir, nil}
         })
 
       result = run_script(session, "(cd sub && pwd)")
@@ -916,7 +602,7 @@ defmodule Bash.VirtualFilesystemTest do
     test "pushd validates directory in VFS", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/pushdir") => :directory
+          (@enforcement_base <> "/pushdir") => {:dir, nil}
         })
 
       result = run_script(session, "pushd pushdir && pwd")
@@ -933,8 +619,8 @@ defmodule Bash.VirtualFilesystemTest do
     test "popd validates directory in VFS", context do
       {session, _fs} =
         start_enforcement_session(context, %{
-          (@enforcement_base <> "/first") => :directory,
-          (@enforcement_base <> "/second") => :directory
+          (@enforcement_base <> "/first") => {:dir, nil},
+          (@enforcement_base <> "/second") => {:dir, nil}
         })
 
       run_script(session, "pushd first")
@@ -946,15 +632,14 @@ defmodule Bash.VirtualFilesystemTest do
 
   describe "VFS enforcement: file descriptors on non-host paths" do
     test "exec 3>file writes through VFS", context do
-      {session, fs} =
+      {session, {Bash.Filesystem.ETS, table}} =
         start_enforcement_session(context, %{
-          @enforcement_base => :directory
+          @enforcement_base => {:dir, nil}
         })
 
       run_script(session, "exec 3> fdout.txt; echo hello >&3; exec 3>&-")
 
-      {_, pid} = fs
-      content = Agent.get(pid, &Map.get(&1, @enforcement_base <> "/fdout.txt"))
+      {:ok, content} = Bash.Filesystem.ETS.read(table, @enforcement_base <> "/fdout.txt")
       assert content =~ "hello"
     end
 
@@ -975,7 +660,7 @@ defmodule Bash.VirtualFilesystemTest do
 
       {session, _fs} =
         start_enforcement_session(context, %{
-          (cdpath_base <> "/target") => :directory
+          (cdpath_base <> "/target") => {:dir, nil}
         })
 
       run_script(session, "export CDPATH=#{cdpath_base}")
@@ -1029,7 +714,7 @@ defmodule Bash.VirtualFilesystemTest do
 
       {session, _fs} =
         start_enforcement_session(context, %{
-          (vfs_bin <> "/mycmd") => {"#!/bin/bash", mode: 0o755}
+          (vfs_bin <> "/mycmd") => %{content: "#!/bin/bash", mode: 0o755}
         })
 
       run_script(session, "export PATH=#{vfs_bin}")
@@ -1042,7 +727,7 @@ defmodule Bash.VirtualFilesystemTest do
 
       {session, _fs} =
         start_enforcement_session(context, %{
-          (vfs_bin <> "/findme") => {"#!/bin/bash", mode: 0o755}
+          (vfs_bin <> "/findme") => %{content: "#!/bin/bash", mode: 0o755}
         })
 
       run_script(session, "export PATH=#{vfs_bin}")
@@ -1055,7 +740,7 @@ defmodule Bash.VirtualFilesystemTest do
 
       {session, _fs} =
         start_enforcement_session(context, %{
-          (vfs_bin <> "/hashme") => {"#!/bin/bash", mode: 0o755}
+          (vfs_bin <> "/hashme") => %{content: "#!/bin/bash", mode: 0o755}
         })
 
       run_script(session, "export PATH=#{vfs_bin}")
@@ -1068,8 +753,8 @@ defmodule Bash.VirtualFilesystemTest do
     test "input process substitution writes temp file to VFS", context do
       {session, _fs} =
         start_vfs_session(context, %{
-          "/workspace" => :directory,
-          "/tmp" => :directory
+          "/workspace" => {:dir, nil},
+          "/tmp" => {:dir, nil}
         })
 
       # Snapshot host /tmp before — stale files from prior runs must not skew the check.
@@ -1100,7 +785,7 @@ defmodule Bash.VirtualFilesystemTest do
         start_vfs_session(
           context,
           %{
-            "/tmp" => :directory
+            "/tmp" => {:dir, nil}
           },
           working_dir: "/tmp"
         )
@@ -1126,8 +811,8 @@ defmodule Bash.VirtualFilesystemTest do
     test "process substitution with VFS creates no host files", context do
       {session, _fs} =
         start_vfs_session(context, %{
-          "/workspace" => :directory,
-          "/tmp" => :directory
+          "/workspace" => {:dir, nil},
+          "/tmp" => {:dir, nil}
         })
 
       before_subst = MapSet.new(Path.wildcard("/tmp/runcom_proc_subst_*"))
