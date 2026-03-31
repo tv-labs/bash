@@ -46,6 +46,7 @@ defmodule Bash.AST.Command do
   @type t :: %__MODULE__{
           meta: AST.Meta.t(),
           name: AST.Word.t(),
+          literal_name: String.t() | nil,
           args: [AST.Word.t()],
           redirects: [AST.Redirect.t()],
           env_assignments: [{String.t(), AST.Word.t()}],
@@ -57,6 +58,7 @@ defmodule Bash.AST.Command do
   defstruct [
     :meta,
     :name,
+    :literal_name,
     args: [],
     redirects: [],
     env_assignments: [],

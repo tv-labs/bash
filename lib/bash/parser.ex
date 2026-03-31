@@ -869,6 +869,7 @@ defmodule Bash.Parser do
                     cmd = %AST.Command{
                       meta: AST.meta(line, col),
                       name: name,
+                      literal_name: literal_name(name),
                       args: args,
                       redirects: redirects,
                       env_assignments: assignments
@@ -890,6 +891,7 @@ defmodule Bash.Parser do
                 cmd = %AST.Command{
                   meta: AST.meta(line, col),
                   name: name,
+                  literal_name: name_str,
                   args: args,
                   redirects: redirects,
                   env_assignments: assignments
@@ -912,6 +914,7 @@ defmodule Bash.Parser do
             cmd = %AST.Command{
               meta: AST.meta(line, col),
               name: name,
+              literal_name: literal_name(name),
               args: args,
               redirects: redirects,
               env_assignments: assignments
@@ -929,11 +932,13 @@ defmodule Bash.Parser do
 
         case current_token(next_state) do
           {:eof, _, _} ->
-            name = build_word([{:literal, Atom.to_string(keyword)}], kline, kcol)
+            keyword_str = Atom.to_string(keyword)
+            name = build_word([{:literal, keyword_str}], kline, kcol)
 
             cmd = %AST.Command{
               meta: AST.meta(line, col),
               name: name,
+              literal_name: keyword_str,
               args: [],
               redirects: [],
               env_assignments: assignments
@@ -986,6 +991,7 @@ defmodule Bash.Parser do
             cmd = %AST.Command{
               meta: AST.meta(line, col),
               name: name,
+              literal_name: literal_name(name),
               args: cmd_args,
               redirects: redirects,
               env_assignments: []
@@ -2574,6 +2580,9 @@ defmodule Bash.Parser do
     end
   end
 
+  defp literal_name(%AST.Word{parts: [{:literal, name} | _]}), do: name
+  defp literal_name(_), do: nil
+
   defp build_word(parts, line, col) do
     {quoted, converted_parts} = convert_word_parts(parts)
 
@@ -2996,6 +3005,7 @@ defmodule Bash.Parser do
         cmd = %AST.Command{
           meta: AST.meta(line, col),
           name: name,
+          literal_name: "coproc",
           args: args,
           redirects: redirects
         }

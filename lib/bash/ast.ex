@@ -62,7 +62,7 @@ defmodule Bash.AST do
       end
   """
   defguard command_name(node)
-           when is_tuple(hd(node.name.parts)) and elem(hd(node.name.parts), 1)
+           when is_binary(node.literal_name) and node.literal_name
 
   @doc """
   Returns `true` if `node` is a `Command` with the given literal name.
@@ -79,12 +79,10 @@ defmodule Bash.AST do
       end)
   """
   defguard is_command(node)
-           when is_struct(node, AST.Command) and
-                  is_tuple(hd(node.name.parts)) and
-                  elem(hd(node.name.parts), 0) == :literal
+           when is_struct(node, AST.Command) and is_binary(node.literal_name)
 
   defguard is_command(node, name)
-           when is_command(node) and command_name(node) == name
+           when is_command(node) and node.literal_name == name
 
   @doc """
   Extracts the variable name from an `Assignment` node.

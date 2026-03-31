@@ -43,7 +43,7 @@ defmodule Bash.ASTTest do
         AST.prewalk(script, fn
           %Command{} = c ->
             if command_name(c) == "foo" do
-              %{c | name: word("replaced")}
+              %{c | name: word("replaced"), literal_name: "replaced"}
             else
               c
             end
@@ -66,7 +66,8 @@ defmodule Bash.ASTTest do
       result =
         AST.postwalk(pipeline, fn
           %Command{} = c ->
-            %{c | name: word(command_name(c) <> "_v2")}
+            new_name = command_name(c) <> "_v2"
+            %{c | name: word(new_name), literal_name: new_name}
 
           node ->
             node
@@ -199,7 +200,7 @@ defmodule Bash.ASTTest do
       result =
         AST.prewalk(compound, fn
           %Command{} = c ->
-            if command_name(c) == "b", do: %{c | name: word("b2")}, else: c
+            if command_name(c) == "b", do: %{c | name: word("b2"), literal_name: "b2"}, else: c
 
           node ->
             node
@@ -842,6 +843,8 @@ defmodule Bash.ASTTest do
   end
 
   defp word(text), do: %Word{parts: [{:literal, text}]}
-  defp cmd(name), do: %Command{name: word(name), args: []}
-  defp cmd(name, args), do: %Command{name: word(name), args: Enum.map(args, &word/1)}
+  defp cmd(name), do: %Command{name: word(name), literal_name: name, args: []}
+
+  defp cmd(name, args),
+    do: %Command{name: word(name), literal_name: name, args: Enum.map(args, &word/1)}
 end
