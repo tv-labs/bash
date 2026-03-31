@@ -265,6 +265,13 @@ defmodule Bash.SessionCase do
         []
       end
 
+    opts =
+      if context[:filesystem] do
+        [{:filesystem, context[:filesystem]} | opts]
+      else
+        opts
+      end
+
     # Create unique registry and supervisor names for this test
     # This ensures complete isolation between concurrent tests
     registry_name = Module.concat([context.module, SessionRegistry, context.test])

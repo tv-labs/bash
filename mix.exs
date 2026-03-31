@@ -79,7 +79,10 @@ defmodule Bash.MixProject do
           Bash.Session,
           Bash.Sigil,
           Bash.Formatter,
-          Bash.Telemetry
+          Bash.Telemetry,
+          Bash.Filesystem,
+          Bash.Filesystem.ETS,
+          Bash.Filesystem.LockDisk
         ],
         "Elixir Interop": [
           Bash.Interop,
