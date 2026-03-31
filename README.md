@@ -248,6 +248,45 @@ and Elixir interop calls always work regardless of policy.
 
 Rules are evaluated in order — first match wins. See `Bash.CommandPolicy` for details.
 
+### Virtual Filesystem
+
+Run scripts in a sandboxed in-memory filesystem that never touches disk:
+
+```elixir
+alias Bash.Filesystem.ETS, as: FS
+
+# Create an in-memory filesystem with some files
+table = FS.new(%{
+  "/app/config.sh"  => "export DB_HOST=localhost\nexport DB_PORT=5432",
+  "/app/deploy.sh"  => %{content: "#!/bin/bash\nsource config.sh\necho deploying to $DB_HOST", mode: 0o755},
+  "/var/log"        => {:dir, nil}
+})
+
+# Start a session using the virtual filesystem
+{:ok, session} = Bash.Session.new(
+  filesystem: {FS, table},
+  working_dir: "/app"
+)
+
+# Scripts read from and write to the VFS
+{:ok, result, _} = Bash.run("source config.sh && echo $DB_HOST:$DB_PORT", session)
+Bash.stdout(result)
+#=> "localhost:5432\n"
+
+# Redirections write to the VFS — inspect directly
+Bash.run("echo 'started deploy' > /var/log/deploy.log", session)
+{:ok, content} = FS.read(table, "/var/log/deploy.log")
+#=> "started deploy\n"
+```
+
+Seed values can be strings (mode `0o644`), maps with explicit mode (`%{content: "...", mode: 0o755}`),
+or empty directories (`{:dir, nil}`). Parent directories are auto-created.
+
+The ETS table is owned by the creating process and cleaned up automatically when it exits.
+
+> **Note:** External OS commands (`cat`, `grep`, etc.) cannot access the virtual filesystem.
+> Use builtins and redirections for file operations within the sandbox.
+
 ## Supported Features
 
 ### Control Flow
