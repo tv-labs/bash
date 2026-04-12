@@ -229,6 +229,23 @@ defmodule Bash.AST.FunctionTest do
     end
   end
 
+  describe "working_dir propagation from functions" do
+    setup :start_session
+
+    test "cd inside function changes caller working directory", %{session: session} do
+      run_script(session, "mycd() { cd /tmp; }")
+      run_script(session, "mycd")
+      assert Session.get_cwd(session) == "/tmp"
+    end
+
+    test "cd inside function persists after return", %{session: session} do
+      run_script(session, ~s|changedir() { cd /tmp; echo "inside"; }|)
+      result = run_script(session, "changedir")
+      assert get_stdout(result) == "inside\n"
+      assert Session.get_cwd(session) == "/tmp"
+    end
+  end
+
   describe "local variables in functions" do
     setup :start_session
 

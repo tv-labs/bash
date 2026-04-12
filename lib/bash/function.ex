@@ -95,6 +95,7 @@ defmodule Bash.AST.Function do
 
     pre_call_vars = Keyword.get(opts, :pre_prefix_vars) || session_state.variables
     pre_call_funcs = session_state.functions
+    pre_call_working_dir = session_state.working_dir
 
     # Build save frame for prefix/temp bindings so `unset` can restore them
     save_frame =
@@ -125,7 +126,8 @@ defmodule Bash.AST.Function do
 
     case result do
       {:return, exit_code, final_state} ->
-        state_updates = collect_global_updates(final_state, pre_call_vars, pre_call_funcs)
+        state_updates =
+          collect_global_updates(final_state, pre_call_vars, pre_call_funcs, pre_call_working_dir)
 
         {:ok,
          %CommandResult{
@@ -135,15 +137,21 @@ defmodule Bash.AST.Function do
          }, state_updates}
 
       {:ok, last_result, final_state} ->
-        state_updates = collect_global_updates(final_state, pre_call_vars, pre_call_funcs)
+        state_updates =
+          collect_global_updates(final_state, pre_call_vars, pre_call_funcs, pre_call_working_dir)
+
         {:ok, last_result, state_updates}
 
       {:error, error_result, final_state} ->
-        state_updates = collect_global_updates(final_state, pre_call_vars, pre_call_funcs)
+        state_updates =
+          collect_global_updates(final_state, pre_call_vars, pre_call_funcs, pre_call_working_dir)
+
         {:error, error_result, state_updates}
 
       {:exit, exit_result, final_state} ->
-        state_updates = collect_global_updates(final_state, pre_call_vars, pre_call_funcs)
+        state_updates =
+          collect_global_updates(final_state, pre_call_vars, pre_call_funcs, pre_call_working_dir)
+
         {:exit, exit_result, state_updates}
     end
   end
@@ -240,7 +248,7 @@ defmodule Bash.AST.Function do
     end
   end
 
-  defp collect_global_updates(final_state, pre_call_vars, pre_call_funcs) do
+  defp collect_global_updates(final_state, pre_call_vars, pre_call_funcs, pre_call_working_dir) do
     local_vars = Map.get(final_state, :local_vars, MapSet.new())
 
     changed_vars =
@@ -270,8 +278,13 @@ defmodule Bash.AST.Function do
         do: Map.put(updates, :variables, var_updates),
         else: updates
 
-    if map_size(func_changes) > 0,
-      do: Map.put(updates, :function_updates, func_changes),
+    updates =
+      if map_size(func_changes) > 0,
+        do: Map.put(updates, :function_updates, func_changes),
+        else: updates
+
+    if final_state.working_dir != pre_call_working_dir,
+      do: Map.put(updates, :working_dir, final_state.working_dir),
       else: updates
   end
 
