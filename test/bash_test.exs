@@ -309,6 +309,14 @@ defmodule BashTest do
       assert_received {:chunk, {:stderr, "err\n"}}
     end
 
+    test "on_output works through Bash.run/3 without an existing session" do
+      test_pid = self()
+
+      Bash.run("echo hello", nil, on_output: fn event -> send(test_pid, event) end)
+
+      assert_receive {:stdout, "hello\n"}
+    end
+
     test "stdout_into streams stdout to collectable", %{session: session} do
       buf = StringIO.open("") |> elem(1)
 
