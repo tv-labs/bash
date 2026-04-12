@@ -424,6 +424,13 @@ defmodule Bash.SessionTest do
       Session.stop(session)
     end
 
+    test "returns clear error when module does not exist" do
+      assert {:error, {%ArgumentError{message: message}, _stacktrace}} =
+               Session.new(apis: [DoesNotExist.Module.AtAll])
+
+      assert message =~ "could not be loaded"
+    end
+
     test "load_api adds module after creation", %{session: session} do
       Session.load_api(session, Bash.SessionTest.TestAPI)
       state = Session.get_state(session)
