@@ -523,6 +523,11 @@ defmodule Bash.Session do
   @doc false
   @spec do_load_api(t(), module()) :: t()
   def do_load_api(%__MODULE__{} = state, module) when is_atom(module) do
+    case Code.ensure_loaded(module) do
+      {:module, _} -> :ok
+      {:error, _} -> raise ArgumentError, "module #{inspect(module)} could not be loaded"
+    end
+
     unless function_exported?(module, :__bash_namespace__, 0) do
       raise ArgumentError,
             "#{inspect(module)} does not use Bash.Interop"
