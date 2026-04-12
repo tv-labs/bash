@@ -22,6 +22,9 @@ defmodule Bash do
     - Keyword list - creates a new session with these initialization options
   - `opts`: Execution options:
     - `await: true|false` - whether to wait for result (default: true)
+    - `on_output: callback` - Stream output as it's produced. The callback receives
+      `{:stdout, binary}` or `{:stderr, binary}` tuples. Output is still accumulated
+      in the result.
 
   Returns:
   - When `await: true` (default): `{:ok, result, session_pid}` or `{:error, result, session_pid}`
@@ -57,6 +60,13 @@ defmodule Bash do
       |> Bash.run("echo $x")
       |> Bash.stdout()
       #=> "5\\n"
+
+      # Streaming output
+      Bash.run("for i in 1 2 3; do echo $i; done", session,
+        on_output: fn
+          {:stdout, data} -> IO.write(data)
+          {:stderr, data} -> IO.write(:stderr, data)
+        end)
 
   """
   # 1-arity: just a script, creates new session
