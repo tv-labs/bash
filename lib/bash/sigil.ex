@@ -128,24 +128,31 @@ defmodule Bash.Sigil do
       {_line, _col, [single], [], _scope} when is_list(single) ->
         {:static, :elixir_interpolation.unescape_string(raw, &unescape_map/1)}
 
+      {_line, _col, [single], [], _, _scope} when is_list(single) ->
+        {:static, :elixir_interpolation.unescape_string(raw, &unescape_map/1)}
+
       {_line, _col, parts, [], _scope} ->
-        pieces =
-          Enum.map(parts, fn
-            charlist when is_list(charlist) ->
-              List.to_string(charlist)
+        {:dynamic, build_pieces(parts)}
 
-            {_start, _end, tokens} ->
-              expr =
-                case :elixir.tokens_to_quoted(tokens, "nofile", []) do
-                  {:ok, expr} -> expr
-                  {:ok, expr, _rest} -> expr
-                end
-
-              {{:., [], [Kernel, :to_string]}, [from_interpolation: true], [expr]}
-          end)
-
-        {:dynamic, pieces}
+      {_line, _col, parts, [], _, _scope} ->
+        {:dynamic, build_pieces(parts)}
     end
+  end
+
+  defp build_pieces(parts) do
+    Enum.map(parts, fn
+      charlist when is_list(charlist) ->
+        List.to_string(charlist)
+
+      {_start, _end, tokens} ->
+        expr =
+          case :elixir.tokens_to_quoted(tokens, "nofile", []) do
+            {:ok, expr} -> expr
+            {:ok, expr, _rest} -> expr
+          end
+
+        {{:., [], [Kernel, :to_string]}, [from_interpolation: true], [expr]}
+    end)
   end
 
   defp placeholder_script(pieces) do
