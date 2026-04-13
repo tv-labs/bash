@@ -63,8 +63,8 @@ defmodule Bash.AST.Formatter do
     formatted =
       statements
       |> Enum.reduce([], fn
-        {:seperator, _sep}, [] -> []
-        {:seperator, sep}, acc -> [{:seperator, sep} | acc]
+        {:separator, _sep}, [] -> []
+        {:separator, sep}, acc -> [{:separator, sep} | acc]
         content, acc -> ["#{indent_str}#{to_bash(content, fmt)}" | acc]
       end)
       |> Enum.reverse()
@@ -72,14 +72,14 @@ defmodule Bash.AST.Formatter do
     formatted
     |> Enum.with_index()
     |> Enum.map_join("", fn
-      {{:seperator, sep}, _idx} ->
+      {{:separator, sep}, _idx} ->
         sep
 
       {content, idx} ->
         next = Enum.at(formatted, idx + 1)
 
         case next do
-          {:seperator, _} -> content
+          {:separator, _} -> content
           _ -> content <> "\n"
         end
     end)
