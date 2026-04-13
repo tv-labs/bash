@@ -1,5 +1,6 @@
 defmodule Bash.SessionTest do
   use Bash.SessionCase, async: true
+  import ExUnit.CaptureLog
 
   alias Bash.Session
   alias Bash.Variable
@@ -425,10 +426,12 @@ defmodule Bash.SessionTest do
     end
 
     test "returns clear error when module does not exist" do
-      assert {:error, {%ArgumentError{message: message}, _stacktrace}} =
-               Session.new(apis: [DoesNotExist.Module.AtAll])
+      capture_log(fn ->
+        assert {:error, {%ArgumentError{message: message}, _stacktrace}} =
+                 Session.new(apis: [DoesNotExist.Module.AtAll])
 
-      assert message =~ "could not be loaded"
+        assert message =~ "could not be loaded"
+      end)
     end
 
     test "load_api adds module after creation", %{session: session} do
