@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.1 (2026-04-13)
+
+- Load API modules before executing. thanks @lostbean
+- fixed bug: Propagate `working_dir` out of function scope. thanks @lostbean
+- Document on_output option in `Bash.run/3`. thanks @lostbean
+- fixed formatter bug: typo in the word separator vs seperator
+
 ## 0.5.0 (2026-03-31)
 
 - The test suite has been massively improved and therefore improved parser correctness. Parser/Evaluator differences are revealed when running tests with `@tag :spec`.
