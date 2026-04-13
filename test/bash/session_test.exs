@@ -596,6 +596,61 @@ defmodule Bash.SessionTest do
     end
   end
 
+  describe "cancel_execution" do
+    test "cancels a running execution and returns error with exit code 130", %{session: session} do
+      run_script(session, "x=42")
+
+      {:ok, ast} = Bash.Parser.parse("while true; do echo x; done")
+
+      task =
+        Task.async(fn ->
+          Session.execute(session, ast)
+        end)
+
+      Process.sleep(50)
+      assert :ok = Session.cancel_execution(session)
+      assert {:error, result} = Task.await(task, 5000)
+      assert result.exit_code == 130
+    end
+
+    test "session state is preserved after cancellation", %{session: session} do
+      run_script(session, "x=42")
+
+      {:ok, ast} = Bash.Parser.parse("while true; do echo x; done")
+
+      task =
+        Task.async(fn ->
+          Session.execute(session, ast)
+        end)
+
+      Process.sleep(50)
+      Session.cancel_execution(session)
+      Task.await(task, 5000)
+
+      assert get_var(session, "x") == "42"
+    end
+
+    test "session is usable after cancellation", %{session: session} do
+      {:ok, ast} = Bash.Parser.parse("while true; do echo x; done")
+
+      task =
+        Task.async(fn ->
+          Session.execute(session, ast)
+        end)
+
+      Process.sleep(50)
+      Session.cancel_execution(session)
+      Task.await(task, 5000)
+
+      result = run_script(session, "echo hello")
+      assert get_stdout(result) == "hello\n"
+    end
+
+    test "cancel_execution is a no-op when nothing is running", %{session: session} do
+      assert :ok = Session.cancel_execution(session)
+    end
+  end
+
   defmodule TestAPI do
     @moduledoc false
     use Bash.Interop, namespace: "session_test"
