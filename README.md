@@ -161,6 +161,66 @@ Bash.stdout(result)
 #=> "/tmp\n"
 ```
 
+### Async Execution & Cancellation
+
+`Bash.Session.execute_async/3` returns a handle so you can cancel a long-running
+script — including running any user-defined `trap` handlers before exit.
+
+```elixir
+{:ok, session} = Bash.Session.new()
+{:ok, ast} = Bash.Parser.parse("""
+  trap 'echo cleanup' EXIT
+  while true; do echo working; done
+  """)
+
+{:ok, exec_ref} = Bash.Session.execute_async(session, ast)
+
+# ... later, from anywhere with the session pid or the ref ...
+:ok = Bash.Session.signal(exec_ref, :sigint)
+
+{:error, result} = Bash.Session.await(exec_ref, 5_000)
+result.exit_code
+#=> 130
+
+# `cleanup` was emitted by the EXIT trap before the script exited
+Bash.Session.get_output(session) |> elem(0)
+#=> "working\n...working\ncleanup\n"
+```
+
+**Signals:**
+
+  * `:sigint` — cooperative cancel, runs `INT` then `EXIT` traps, exit 130
+  * `:sigterm` — cooperative cancel, runs `TERM` then `EXIT` traps, exit 143
+  * `:sigkill` — untrappable hard kill, exit 137 (use when traps may hang)
+
+**Grace period:** Pass `grace: ms` to escalate a cooperative cancel to
+`:sigkill` if it doesn't land within the window. Useful when a script may
+be stuck in a non-yielding operation.
+
+```elixir
+:ok = Bash.Session.signal(exec_ref, :sigint, grace: 5_000)
+# If INT cancel hasn't landed within 5s, sigkill is sent automatically.
+```
+
+**Queueing:** Calling `execute_async/3` while another execution is in flight
+queues the new one. Each chunk gets its own `ExecRef` and runs sequentially with
+shared session state (variables, traps, cwd). To cancel a queued execution
+before it runs, signal its ref — it's removed from the queue and `await/2`
+returns the matching error result.
+
+```elixir
+{:ok, ref1} = Bash.Session.execute_async(session, slow_ast)
+{:ok, ref2} = Bash.Session.execute_async(session, follow_up_ast)
+{:ok, ref3} = Bash.Session.execute_async(session, never_run_ast)
+
+:ok = Bash.Session.signal(ref3, :sigint)   # cancel before it runs
+{:error, %{exit_code: 130}} = Bash.Session.await(ref3)
+
+# ref1 still running, ref2 still queued — both proceed normally
+{:ok, _} = Bash.Session.await(ref1, 30_000)
+{:ok, _} = Bash.Session.await(ref2, 30_000)
+```
+
 ### Elixir Interop
 
 Define Elixir functions callable from Bash:

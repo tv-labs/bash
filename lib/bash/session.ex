@@ -65,6 +65,8 @@ defmodule Bash.Session do
   alias Bash.Variable
   alias Bash.AST.Function
   alias Bash.Execution
+  alias Bash.Builtin.Trap
+  alias Bash.Session.ExecRef
 
   defstruct [
     :id,
@@ -132,7 +134,10 @@ defmodule Bash.Session do
     # Callback for starting background jobs synchronously (used by Script executor)
     start_background_job_fn: nil,
     signal_jobs_fn: nil,
-    pipe_stdin: nil
+    pipe_stdin: nil,
+    current_execution: nil,
+    pending_executions: [],
+    in_trap: false
   ]
 
   @type t :: %__MODULE__{
@@ -175,8 +180,26 @@ defmodule Bash.Session do
           completed_jobs: [Job.t()],
           command_history: [CommandResult.t()],
           special_vars: %{String.t() => integer() | String.t() | nil},
-          positional_params: [[String.t()]]
+          positional_params: [[String.t()]],
+          current_execution: running_execution() | nil,
+          pending_executions: [pending_execution()],
+          in_trap: boolean()
         }
+
+  @typep running_execution :: %{
+           ref: reference(),
+           caller: pid(),
+           task_pid: pid(),
+           task_ref: reference(),
+           collector: pid()
+         }
+
+  @typep pending_execution :: %{
+           ref: reference(),
+           caller: pid(),
+           ast: term(),
+           opts: keyword()
+         }
 
   # Client API
 
@@ -394,26 +417,202 @@ defmodule Bash.Session do
       end)
 
   """
+  @spec execute(pid(), AST.t(), keyword()) :: term()
   def execute(session, ast, opts \\ []) do
-    GenServer.call(session, {:execute, ast, opts}, :infinity)
+    {:ok, exec_ref} = execute_async(session, ast, opts)
+    await(exec_ref, Keyword.get(opts, :timeout, :infinity))
   end
 
   @doc """
-  Executes a command AST within this session asynchronously.
+  Executes a command AST asynchronously and returns a handle.
 
-  Returns immediately without waiting for the command to complete.
-  The result will be stored in the session's command history.
+  Returns `{:ok, exec_ref}` immediately. Pass the `exec_ref` to `await/2`
+  to retrieve the result, or to `signal/2` to interrupt the execution.
+
+  Bash semantics allow only one foreground execution per session at a time.
+  If another execution is already running, this call queues behind it; the
+  queued execution starts as soon as the current one finishes (or is
+  cancelled). State (variables, traps, working directory) flows from one
+  chunk to the next, so two `execute_async/3` calls behave like appending
+  AST chunks to a single sequential script — but each chunk has its own
+  awaitable handle and can be cancelled independently.
 
   ## Examples
 
       {:ok, session} = Session.new()
-      :ok = Session.execute_async(session, ast)
-      # Command executes in background
+      {:ok, exec_ref} = Session.execute_async(session, ast)
+      {:ok, result} = Session.await(exec_ref)
+
+      # Cancel an in-flight execution; user-defined `trap` handlers run.
+      {:ok, exec_ref} = Session.execute_async(session, long_running_ast)
+      :ok = Session.signal(exec_ref, :sigint)
+      {:error, %CommandResult{exit_code: 130}} = Session.await(exec_ref)
+
+      # Queue multiple chunks; each runs after the previous one completes.
+      {:ok, ref1} = Session.execute_async(session, parsed("echo first"))
+      {:ok, ref2} = Session.execute_async(session, parsed("echo second"))
+      {:ok, _} = Session.await(ref1)
+      {:ok, _} = Session.await(ref2)
+
+      # Cancel a queued chunk before it runs:
+      {:ok, ref3} = Session.execute_async(session, parsed("never"))
+      :ok = Session.signal(ref3, :sigint)
+      {:error, %CommandResult{exit_code: 130}} = Session.await(ref3)
 
   """
-  def execute_async(session, ast) do
-    GenServer.cast(session, {:execute_async, ast})
+  @spec execute_async(pid(), AST.t(), keyword()) :: {:ok, ExecRef.t()}
+  def execute_async(session, ast, opts \\ []) do
+    monitor = Process.monitor(session)
+
+    case GenServer.call(session, {:execute_async, ast, opts, self()}) do
+      {:ok, ref} ->
+        {:ok, %ExecRef{session: session, ref: ref, monitor: monitor}}
+
+      {:error, _} = error ->
+        Process.demonitor(monitor, [:flush])
+        error
+    end
   end
+
+  @doc """
+  Awaits the result of an execution started with `execute_async/3`.
+
+  Blocks until the execution completes, is cancelled, or `timeout` elapses.
+
+  Returns:
+
+    * `{:ok | :error | :exit | :exec, CommandResult.t()}` — execution finished
+      (or was cancelled — exit code reflects the signal: 130/143/137 with
+      `error: :cancelled`).
+    * `{:error, :timeout}` — `timeout` exceeded; the execution is still in
+      flight or queued. Call again later or `signal/2` to cancel.
+    * `{:error, {:session_down, reason}}` — the session GenServer crashed
+      while this execution was outstanding.
+
+  ## Examples
+
+      {:ok, exec_ref} = Session.execute_async(session, ast)
+
+      # Wait indefinitely
+      {:ok, result} = Session.await(exec_ref)
+
+      # Wait at most 5 seconds; cancel and try again on timeout
+      case Session.await(exec_ref, 5_000) do
+        {:error, :timeout} ->
+          Session.signal(exec_ref, :sigint)
+          Session.await(exec_ref)
+
+        result ->
+          result
+      end
+
+  """
+  @spec await(ExecRef.t(), timeout()) ::
+          {:ok | :error | :exit | :exec, CommandResult.t()}
+          | {:error, :timeout | {:session_down, term()}}
+  def await(%ExecRef{ref: ref, monitor: monitor}, timeout \\ :infinity) do
+    receive do
+      {^ref, result} ->
+        Process.demonitor(monitor, [:flush])
+        result
+
+      {:DOWN, ^monitor, :process, _, reason} ->
+        {:error, {:session_down, reason}}
+    after
+      timeout -> {:error, :timeout}
+    end
+  end
+
+  @doc """
+  Sends a signal to a foreground execution.
+
+  ## Targeting
+
+    * Pass a session `pid()` — signals the currently running foreground
+      execution, if any. Pending (queued) executions are unaffected.
+    * Pass an `ExecRef.t()` — signals that specific execution, whether it's
+      currently running or still queued.
+
+  Returns `:ok` if a signal was delivered, `{:error, :not_found}` if no
+  matching execution is in flight.
+
+  ## Signals
+
+    * `:sigint` — cooperative cancel. The script's `INT` and `EXIT` traps run
+      (with output captured in the session's collector); exit code 130.
+    * `:sigterm` — cooperative cancel. The script's `TERM` and `EXIT` traps
+      run; exit code 143.
+    * `:sigkill` — untrappable hard kill. No traps run. Use this when traps
+      could hang. Exit code 137.
+
+  Cancelling a queued (not-yet-running) execution removes it from the queue
+  and produces an `{:error, %CommandResult{exit_code: ..., error: :cancelled}}`
+  via `await/2`. No traps run because the script never executed.
+
+  For signaling background jobs (started via `&` or job control), use
+  `signal_job/3`.
+
+  ## Options
+
+    * `:grace` — milliseconds to wait for a cooperative `:sigint`/`:sigterm`
+      to land before escalating to `:sigkill`. Useful when a script may be
+      stuck in a non-yielding builtin or a misbehaving trap. Ignored for
+      `:sigkill` and for queued (not-running) executions.
+
+  ## Examples
+
+      # Signal a specific execution by ref
+      {:ok, exec_ref} = Session.execute_async(session, long_ast)
+      :ok = Session.signal(exec_ref, :sigint)
+      {:error, %CommandResult{exit_code: 130}} = Session.await(exec_ref)
+
+      # Signal whatever is running by session pid (no ref needed)
+      :ok = Session.signal(session, :sigterm)
+
+      # Hard kill — bypasses traps
+      :ok = Session.signal(exec_ref, :sigkill)
+
+      # Cooperative cancel with automatic escalation to :sigkill after 5s
+      :ok = Session.signal(exec_ref, :sigint, grace: 5_000)
+
+      # Cancel a queued execution before it runs
+      {:ok, ref1} = Session.execute_async(session, current_ast)
+      {:ok, ref2} = Session.execute_async(session, queued_ast)
+      :ok = Session.signal(ref2, :sigint)
+      {:error, %CommandResult{exit_code: 130}} = Session.await(ref2)
+
+  """
+  @spec signal(pid() | ExecRef.t(), signal(), keyword()) :: :ok | {:error, :not_found}
+  def signal(session_or_ref, sig, opts \\ [])
+
+  def signal(%ExecRef{session: pid, ref: ref}, sig, opts) do
+    GenServer.call(pid, {:signal_exec, ref, sig, opts})
+  end
+
+  def signal(session, sig, opts) when is_pid(session) do
+    GenServer.call(session, {:signal_current, sig, opts})
+  end
+
+  @type signal ::
+          :sigint
+          | :sigkill
+          | :sigterm
+          | :sighup
+          | :sigquit
+          | :sigusr1
+          | :sigusr2
+          | :sigcont
+          | :sigstop
+          | :int
+          | :kill
+          | :term
+          | :hup
+          | :quit
+          | :usr1
+          | :usr2
+          | :cont
+          | :stop
+          | integer()
 
   @doc """
   Start a background job and return its job number and OS PID.
@@ -1132,79 +1331,427 @@ defmodule Bash.Session do
     {:reply, env_map, state}
   end
 
-  def handle_call({:execute, ast}, from, state) do
-    handle_call({:execute, ast, []}, from, state)
+  def handle_call({:execute_async, ast, opts, caller}, _from, state) do
+    ref = make_ref()
+
+    if state.current_execution do
+      pending = %{ref: ref, caller: caller, ast: ast, opts: opts}
+      {:reply, {:ok, ref}, %{state | pending_executions: state.pending_executions ++ [pending]}}
+    else
+      {:reply, {:ok, ref}, start_execution(ref, ast, opts, caller, state)}
+    end
   end
 
-  def handle_call({:execute, ast, opts}, from, state) do
-    {:ok, collector} = OutputCollector.start_link()
-    Process.link(collector)
+  def handle_call({:signal_current, _sig, _opts}, _from, %{current_execution: nil} = state) do
+    {:reply, {:error, :not_found}, state}
+  end
 
-    # Create sinks from opts or use collector-backed sinks
-    stdout_sink =
-      case Keyword.get(opts, :stdout_into) do
-        nil -> Sink.collector(collector)
-        callback when is_function(callback, 1) -> callback
-        collectable -> Sink.stream(collectable, stream_type: :stdout)
+  def handle_call({:signal_current, sig, opts}, _from, state) do
+    {:reply, :ok, do_cancel(state.current_execution, sig, state, opts)}
+  end
+
+  def handle_call(
+        {:signal_exec, ref, sig, opts},
+        _from,
+        %{current_execution: %{ref: ref} = exec} = state
+      ) do
+    {:reply, :ok, do_cancel(exec, sig, state, opts)}
+  end
+
+  def handle_call({:signal_exec, ref, sig, _opts}, _from, state) do
+    case Enum.split_with(state.pending_executions, &(&1.ref == ref)) do
+      {[pending], remaining} ->
+        result = %CommandResult{
+          command: "cancelled",
+          exit_code: cancel_exit_code(sig),
+          error: :cancelled
+        }
+
+        send(pending.caller, {pending.ref, {:error, result}})
+        {:reply, :ok, %{state | pending_executions: remaining}}
+
+      {[], _} ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  def handle_call({:start_background_job, opts}, _from, state) do
+    command = Keyword.fetch!(opts, :command)
+    args = Keyword.get(opts, :args, [])
+
+    job_number = state.next_job_number
+
+    job_opts = [
+      job_number: job_number,
+      command: command,
+      args: args,
+      session_pid: self(),
+      working_dir: state.working_dir,
+      env:
+        Map.new(state.variables, fn {k, v} ->
+          {k, Variable.get(v, nil)}
+        end)
+        |> Map.to_list(),
+      # Pass sinks so job output streams directly to destination
+      stdout_sink: state.stdout_sink,
+      stderr_sink: state.stderr_sink,
+      # Also pass the session's persistent output collector for later retrieval
+      output_collector: state.output_collector
+    ]
+
+    case DynamicSupervisor.start_child(state.job_supervisor, {JobProcess, job_opts}) do
+      {:ok, job_pid} ->
+        new_state = %{
+          state
+          | jobs: Map.put(state.jobs, job_number, job_pid),
+            next_job_number: job_number + 1,
+            previous_job: state.current_job,
+            current_job: job_number
+        }
+
+        # We don't know the OS PID yet - it will come via job_started message
+        {:reply, {:ok, job_number, nil}, new_state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call(:list_jobs, _from, state) do
+    jobs =
+      state.jobs
+      |> Enum.map(fn {_job_num, pid} ->
+        try do
+          JobProcess.get_job(pid)
+        catch
+          :exit, _ -> nil
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.sort_by(& &1.job_number)
+
+    {:reply, jobs, state}
+  end
+
+  def handle_call({:get_job, job_number}, _from, state) do
+    case Map.get(state.jobs, job_number) do
+      nil ->
+        {:reply, {:error, :not_found}, state}
+
+      pid ->
+        try do
+          job = JobProcess.get_job(pid)
+          {:reply, {:ok, job}, state}
+        catch
+          :exit, _ -> {:reply, {:error, :not_found}, state}
+        end
+    end
+  end
+
+  def handle_call({:foreground_job, job_spec}, _from, state) do
+    job_number = resolve_job_spec(job_spec, state)
+
+    case Map.get(state.jobs, job_number) do
+      nil ->
+        {:reply, {:error, :no_such_job}, state}
+
+      pid ->
+        # This blocks until the job completes
+        result = JobProcess.foreground(pid)
+        {:reply, result, state}
+    end
+  end
+
+  def handle_call({:background_job, job_spec}, _from, state) do
+    job_number = resolve_job_spec(job_spec, state)
+
+    case state.jobs[job_number] do
+      pid when is_pid(pid) ->
+        result = JobProcess.background(pid)
+        {:reply, result, state}
+
+      _ ->
+        {:reply, {:error, :no_such_job}, state}
+    end
+  end
+
+  def handle_call({:wait_for_jobs, nil}, _from, state) do
+    # Wait for all jobs
+    exit_codes =
+      Enum.map(state.jobs, fn {_job_num, pid} ->
+        case JobProcess.wait(pid) do
+          {:ok, code} -> code
+          {:error, _} -> 1
+        end
+      end)
+
+    {:reply, {:ok, exit_codes}, state}
+  end
+
+  def handle_call({:wait_for_jobs, job_specs}, _from, state) do
+    exit_codes =
+      Enum.map(job_specs, fn job_spec ->
+        job_number = resolve_job_spec(job_spec, state)
+
+        case Map.get(state.jobs, job_number) do
+          nil ->
+            127
+
+          pid ->
+            case JobProcess.wait(pid) do
+              {:ok, code} -> code
+              {:error, _} -> 1
+            end
+        end
+      end)
+
+    {:reply, {:ok, exit_codes}, state}
+  end
+
+  def handle_call({:signal_job, job_spec, signal}, _from, state) do
+    job_number = resolve_job_spec(job_spec, state)
+
+    case Map.get(state.jobs, job_number) do
+      nil ->
+        {:reply, {:error, :no_such_job}, state}
+
+      pid ->
+        result = JobProcess.signal(pid, signal)
+        {:reply, result, state}
+    end
+  end
+
+  def handle_call(:pop_completed_jobs, _from, state) do
+    {:reply, state.completed_jobs, %{state | completed_jobs: []}}
+  end
+
+  def handle_call(:get_state, _from, state) do
+    {:reply, state, state}
+  end
+
+  def handle_call({:load_api, module}, _from, state) do
+    new_state = do_load_api(state, module)
+    {:reply, :ok, new_state}
+  end
+
+  def handle_call(:get_command_history, _from, state) do
+    {:reply, state.command_history, state}
+  end
+
+  def handle_call(:get_output, _from, state) do
+    {stdout, stderr} = OutputCollector.output(state.output_collector)
+    {:reply, {IO.iodata_to_binary(stdout), IO.iodata_to_binary(stderr)}, state}
+  end
+
+  def handle_call(:flush_output, _from, state) do
+    chunks = OutputCollector.flush(state.output_collector)
+
+    {stdout, stderr} =
+      Enum.reduce(chunks, {[], []}, fn
+        {:stdout, data}, {out, err} -> {[data | out], err}
+        {:stderr, data}, {out, err} -> {out, [data | err]}
+      end)
+
+    {:reply,
+     {stdout |> Enum.reverse() |> IO.iodata_to_binary(),
+      stderr |> Enum.reverse() |> IO.iodata_to_binary()}, state}
+  end
+
+  @impl GenServer
+  def handle_info({:job_started, %Job{} = job}, state) do
+    # Update $! to the OS PID of the most recent background job
+    new_state =
+      if job.os_pid do
+        %{state | special_vars: Map.put(state.special_vars, "!", to_string(job.os_pid))}
+      else
+        state
       end
 
-    stderr_sink =
-      case Keyword.get(opts, :stderr_into) do
-        nil -> Sink.collector(collector)
-        callback when is_function(callback, 1) -> callback
-        collectable -> Sink.stream(collectable, stream_type: :stderr)
+    {:noreply, new_state}
+  end
+
+  def handle_info({:job_completed, %Job{} = job}, state) do
+    # Remove from active jobs and add to completed for notification
+    new_jobs = Map.delete(state.jobs, job.job_number)
+    new_completed = [job | state.completed_jobs]
+
+    # Update current/previous job references
+    new_state =
+      cond do
+        state.current_job == job.job_number ->
+          %{state | current_job: state.previous_job, previous_job: nil}
+
+        state.previous_job == job.job_number ->
+          %{state | previous_job: nil}
+
+        true ->
+          state
       end
 
-    # Also support on_output callback by wrapping both sinks
-    {stdout_sink, stderr_sink} =
-      case Keyword.get(opts, :on_output) do
-        nil ->
-          {stdout_sink, stderr_sink}
+    {:noreply, %{new_state | jobs: new_jobs, completed_jobs: new_completed}}
+  end
 
-        callback when is_function(callback, 1) ->
-          # Create sinks that write to both collector and callback
-          wrapped_stdout = fn chunk ->
-            stdout_sink.(chunk)
-            callback.(chunk)
-            :ok
-          end
+  def handle_info({:job_stopped, %Job{} = _job}, state), do: {:noreply, state}
+  def handle_info({:job_resumed, %Job{} = _job}, state), do: {:noreply, state}
 
-          wrapped_stderr = fn chunk ->
-            stderr_sink.(chunk)
-            callback.(chunk)
-            :ok
-          end
+  def handle_info(
+        {task_ref, execution_result},
+        %{current_execution: %{task_ref: task_ref} = exec} = state
+      )
+      when is_reference(task_ref) do
+    Process.demonitor(task_ref, [:flush])
+    synthetic_from = {exec.caller, exec.ref}
 
-          {wrapped_stdout, wrapped_stderr}
-      end
+    case handle_execution_result(execution_result, exec.collector, synthetic_from, state) do
+      {:reply, reply, new_state} ->
+        send(exec.caller, {exec.ref, reply})
+        {:noreply, start_next_or_idle(new_state)}
 
-    # Create a callback function for starting background jobs synchronously
-    # This allows Scripts to start jobs immediately and get the OS PID for $!
-    start_bg_job_fn = fn foreground_ast, current_state ->
-      start_background_job_sync(foreground_ast, current_state, state)
+      {:noreply, new_state} ->
+        # A continuation handler will reply later via the synthetic from.
+        {:noreply, start_next_or_idle(new_state)}
+    end
+  end
+
+  # Grace period elapsed for a cooperative cancel that never landed.
+  # Escalate to :sigkill if the same execution is still current.
+  def handle_info(
+        {:force_kill, ref},
+        %{current_execution: %{ref: ref} = exec} = state
+      ) do
+    {:noreply, do_cancel(exec, :sigkill, state, [])}
+  end
+
+  def handle_info({:force_kill, _ref}, state), do: {:noreply, state}
+
+  # Task crashed unexpectedly (not via do_cancel, which demonitors first).
+  # Surface a crash result to the caller so await/2 doesn't hang.
+  def handle_info(
+        {:DOWN, task_ref, :process, _pid, reason},
+        %{current_execution: %{task_ref: task_ref} = exec} = state
+      ) do
+    cleanup_collector(exec.collector)
+
+    result = %CommandResult{
+      command: "crashed",
+      exit_code: 1,
+      error: {:task_crashed, reason}
+    }
+
+    send(exec.caller, {exec.ref, {:error, result}})
+    {:noreply, start_next_or_idle(state)}
+  end
+
+  def handle_info({:EXIT, pid, reason}, state) do
+    # Check if it's our job_supervisor - if so, we need to stop
+    if pid == state.job_supervisor do
+      {:stop, reason, state}
+    else
+      # Other linked processes exiting normally (like ports) - ignore
+      {:noreply, state}
+    end
+  end
+
+  def handle_info({:continue_after_wait, executed_script, script_updates, from}, state) do
+    current_state = apply_state_updates(state, script_updates)
+
+    # Set up sinks and callbacks for continuation output
+    # start_background_job_fn and signal_jobs_fn must be set so background jobs
+    # started during continuation are executed immediately (not deferred)
+    start_bg_job_fn = fn foreground_ast, current_session_state ->
+      start_background_job_sync(foreground_ast, current_session_state, state)
     end
 
-    # Create a callback function for sending signals to jobs/processes synchronously
-    # This allows Scripts to send signals immediately (kill builtin)
-    signal_jobs_fn = fn signal, targets, current_state ->
-      send_signals_sync(signal, targets, current_state, state)
+    signal_jobs_fn = fn signal, targets, current_session_state ->
+      send_signals_sync(signal, targets, current_session_state, state)
     end
 
-    state_with_sinks = %{
-      state
-      | output_collector: collector,
-        stdout_sink: stdout_sink,
-        stderr_sink: stderr_sink,
+    continuation_state = %{
+      current_state
+      | stdout_sink: Sink.collector(state.output_collector),
+        stderr_sink: Sink.collector(state.output_collector),
         start_background_job_fn: start_bg_job_fn,
         signal_jobs_fn: signal_jobs_fn
     }
 
-    # No executor_opts needed - sinks are on state now
-    case execute_command_in_session(ast, state_with_sinks, []) do
+    case Script.continue_execution(executed_script, continuation_state) do
+      {:ok, final_script, continuation_updates} ->
+        new_state =
+          current_state
+          |> apply_state_updates(continuation_updates)
+          |> append_to_history(final_script)
+          |> update_exit_status(final_script)
+
+        GenServer.reply(from, {:ok, final_script})
+        {:noreply, new_state}
+
+      {:wait_for_jobs, job_specs, continued_script, continuation_updates} ->
+        merged_updates = Map.merge(script_updates, continuation_updates)
+
+        handle_wait_for_jobs_with_script(
+          job_specs,
+          continued_script,
+          merged_updates,
+          from,
+          current_state
+        )
+
+      {terminal, final_script, continuation_updates}
+      when terminal in [:exit, :error] ->
+        new_state =
+          current_state
+          |> apply_state_updates(continuation_updates)
+          |> append_to_history(final_script)
+          |> update_exit_status(final_script)
+
+        GenServer.reply(from, {terminal, final_script})
+        {:noreply, new_state}
+
+      _ ->
+        # Fallback: no remaining statements, reply with what we have
+        new_state =
+          current_state
+          |> append_to_history(executed_script)
+          |> update_exit_status(executed_script)
+
+        GenServer.reply(from, {:ok, executed_script})
+        {:noreply, new_state}
+    end
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
+
+  @impl GenServer
+  def terminate(_reason, state) do
+    stop_all_coprocs(state)
+    close_all_file_descriptors(state)
+
+    if state.job_supervisor && Process.alive?(state.job_supervisor) do
+      DynamicSupervisor.stop(state.job_supervisor, :shutdown)
+    end
+
+    :ok
+  end
+
+  # Process the result of an execution Task and return either an immediate
+  # reply tuple (delivered via send to the caller) or :noreply when a
+  # continuation handler (e.g. fg/wait) will reply later via the synthetic
+  # `from`.
+  defp handle_execution_result(execution_result, collector, from, state) do
+    case execution_result do
+      {:cancelled, sig} ->
+        transfer_and_cleanup_collector(collector, state.output_collector)
+
+        result = %CommandResult{
+          command: "cancelled",
+          exit_code: cancel_exit_code(sig),
+          error: :cancelled
+        }
+
+        {:reply, {:error, result}, state}
+
       {:background, foreground_ast, _session_state} ->
         # Command should be run in the background
-        # Create sinks backed by the session's PERSISTENT output_collector for the job
-        # The temporary sinks are used for the job notification [1], then transferred
         persistent_stdout_sink = Sink.collector(state.output_collector)
         persistent_stderr_sink = Sink.collector(state.output_collector)
 
@@ -1214,11 +1761,10 @@ defmodule Bash.Session do
             stderr_sink: persistent_stderr_sink
         }
 
-        # Use temp sinks for job notification output (the [1] message)
-        state_with_sinks.stdout_sink.({:stdout, ""})
+        # Use temp collector sink for job notification output (the [1] message)
+        Sink.collector(collector).({:stdout, ""})
 
         {:reply, reply_value, new_state} = do_start_background_job(foreground_ast, bg_state)
-        # Transfer job notification output to session's persistent collector
         transfer_and_cleanup_collector(collector, state.output_collector)
         {:reply, reply_value, new_state}
 
@@ -1474,341 +2020,140 @@ defmodule Bash.Session do
     end
   end
 
-  def handle_call({:start_background_job, opts}, _from, state) do
-    command = Keyword.fetch!(opts, :command)
-    args = Keyword.get(opts, :args, [])
+  # Spawn a Task running the AST and stash its bookkeeping in current_execution.
+  defp start_execution(ref, ast, opts, caller, state) do
+    {:ok, collector} = OutputCollector.start_link()
+    Process.link(collector)
 
-    job_number = state.next_job_number
+    session_pid = self()
+    original_state = state
 
-    job_opts = [
-      job_number: job_number,
-      command: command,
-      args: args,
-      session_pid: self(),
-      working_dir: state.working_dir,
-      env:
-        Map.new(state.variables, fn {k, v} ->
-          {k, Variable.get(v, nil)}
-        end)
-        |> Map.to_list(),
-      # Pass sinks so job output streams directly to destination
-      stdout_sink: state.stdout_sink,
-      stderr_sink: state.stderr_sink,
-      # Also pass the session's persistent output collector for later retrieval
-      output_collector: state.output_collector
-    ]
+    task =
+      Task.async(fn ->
+        sinks = build_sinks(opts, collector)
 
-    case DynamicSupervisor.start_child(state.job_supervisor, {JobProcess, job_opts}) do
-      {:ok, job_pid} ->
-        new_state = %{
-          state
-          | jobs: Map.put(state.jobs, job_number, job_pid),
-            next_job_number: job_number + 1,
-            previous_job: state.current_job,
-            current_job: job_number
+        state_with_sinks = %{
+          original_state
+          | output_collector: collector,
+            stdout_sink: sinks.stdout,
+            stderr_sink: sinks.stderr,
+            start_background_job_fn: fn fg, current ->
+              start_background_job_sync(fg, current, original_state, session_pid)
+            end,
+            signal_jobs_fn: fn s, t, current ->
+              send_signals_sync(s, t, current, original_state)
+            end
         }
 
-        # We don't know the OS PID yet - it will come via job_started message
-        {:reply, {:ok, job_number, nil}, new_state}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
-    end
-  end
-
-  def handle_call(:list_jobs, _from, state) do
-    jobs =
-      state.jobs
-      |> Enum.map(fn {_job_num, pid} ->
         try do
-          JobProcess.get_job(pid)
+          execute_command_in_session(ast, state_with_sinks, [])
         catch
-          :exit, _ -> nil
-        end
-      end)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.sort_by(& &1.job_number)
-
-    {:reply, jobs, state}
-  end
-
-  def handle_call({:get_job, job_number}, _from, state) do
-    case Map.get(state.jobs, job_number) do
-      nil ->
-        {:reply, {:error, :not_found}, state}
-
-      pid ->
-        try do
-          job = JobProcess.get_job(pid)
-          {:reply, {:ok, job}, state}
-        catch
-          :exit, _ -> {:reply, {:error, :not_found}, state}
-        end
-    end
-  end
-
-  def handle_call({:foreground_job, job_spec}, _from, state) do
-    job_number = resolve_job_spec(job_spec, state)
-
-    case Map.get(state.jobs, job_number) do
-      nil ->
-        {:reply, {:error, :no_such_job}, state}
-
-      pid ->
-        # This blocks until the job completes
-        result = JobProcess.foreground(pid)
-        {:reply, result, state}
-    end
-  end
-
-  def handle_call({:background_job, job_spec}, _from, state) do
-    job_number = resolve_job_spec(job_spec, state)
-
-    case state.jobs[job_number] do
-      pid when is_pid(pid) ->
-        result = JobProcess.background(pid)
-        {:reply, result, state}
-
-      _ ->
-        {:reply, {:error, :no_such_job}, state}
-    end
-  end
-
-  def handle_call({:wait_for_jobs, nil}, _from, state) do
-    # Wait for all jobs
-    exit_codes =
-      Enum.map(state.jobs, fn {_job_num, pid} ->
-        case JobProcess.wait(pid) do
-          {:ok, code} -> code
-          {:error, _} -> 1
+          :throw, {:cancelled, sig, runtime_state} ->
+            run_cancel_traps(sig, runtime_state)
+            {:cancelled, sig}
         end
       end)
 
-    {:reply, {:ok, exit_codes}, state}
-  end
-
-  def handle_call({:wait_for_jobs, job_specs}, _from, state) do
-    exit_codes =
-      Enum.map(job_specs, fn job_spec ->
-        job_number = resolve_job_spec(job_spec, state)
-
-        case Map.get(state.jobs, job_number) do
-          nil ->
-            127
-
-          pid ->
-            case JobProcess.wait(pid) do
-              {:ok, code} -> code
-              {:error, _} -> 1
-            end
-        end
-      end)
-
-    {:reply, {:ok, exit_codes}, state}
-  end
-
-  def handle_call({:signal_job, job_spec, signal}, _from, state) do
-    job_number = resolve_job_spec(job_spec, state)
-
-    case Map.get(state.jobs, job_number) do
-      nil ->
-        {:reply, {:error, :no_such_job}, state}
-
-      pid ->
-        result = JobProcess.signal(pid, signal)
-        {:reply, result, state}
-    end
-  end
-
-  def handle_call(:pop_completed_jobs, _from, state) do
-    {:reply, state.completed_jobs, %{state | completed_jobs: []}}
-  end
-
-  def handle_call(:get_state, _from, state) do
-    {:reply, state, state}
-  end
-
-  def handle_call({:load_api, module}, _from, state) do
-    new_state = do_load_api(state, module)
-    {:reply, :ok, new_state}
-  end
-
-  def handle_call(:get_command_history, _from, state) do
-    {:reply, state.command_history, state}
-  end
-
-  def handle_call(:get_output, _from, state) do
-    {stdout, stderr} = OutputCollector.output(state.output_collector)
-    {:reply, {IO.iodata_to_binary(stdout), IO.iodata_to_binary(stderr)}, state}
-  end
-
-  def handle_call(:flush_output, _from, state) do
-    chunks = OutputCollector.flush(state.output_collector)
-
-    {stdout, stderr} =
-      Enum.reduce(chunks, {[], []}, fn
-        {:stdout, data}, {out, err} -> {[data | out], err}
-        {:stderr, data}, {out, err} -> {out, [data | err]}
-      end)
-
-    {:reply,
-     {stdout |> Enum.reverse() |> IO.iodata_to_binary(),
-      stderr |> Enum.reverse() |> IO.iodata_to_binary()}, state}
-  end
-
-  @impl GenServer
-  def handle_cast({:execute_async, ast}, state) do
-    # Execute command asynchronously - don't reply to caller
-    case execute_command_in_session(ast, state) do
-      {:ok, result, state_updates} ->
-        # Note: append to history first, then apply updates
-        # This allows history -c to clear including itself
-        new_state =
-          state
-          |> append_to_history(result)
-          |> apply_state_updates(state_updates)
-
-        {:noreply, new_state}
-
-      {:ok, result} ->
-        new_state = append_to_history(state, result)
-        {:noreply, new_state}
-
-      {:error, result} ->
-        new_state = append_to_history(state, result)
-        {:noreply, new_state}
-
-      _other ->
-        # For background jobs and other special cases, just continue
-        {:noreply, state}
-    end
-  end
-
-  @impl GenServer
-  def handle_info({:job_started, %Job{} = job}, state) do
-    # Update $! to the OS PID of the most recent background job
-    new_state =
-      if job.os_pid do
-        %{state | special_vars: Map.put(state.special_vars, "!", to_string(job.os_pid))}
-      else
-        state
-      end
-
-    {:noreply, new_state}
-  end
-
-  def handle_info({:job_completed, %Job{} = job}, state) do
-    # Remove from active jobs and add to completed for notification
-    new_jobs = Map.delete(state.jobs, job.job_number)
-    new_completed = [job | state.completed_jobs]
-
-    # Update current/previous job references
-    new_state =
-      cond do
-        state.current_job == job.job_number ->
-          %{state | current_job: state.previous_job, previous_job: nil}
-
-        state.previous_job == job.job_number ->
-          %{state | previous_job: nil}
-
-        true ->
-          state
-      end
-
-    {:noreply, %{new_state | jobs: new_jobs, completed_jobs: new_completed}}
-  end
-
-  def handle_info({:job_stopped, %Job{} = _job}, state), do: {:noreply, state}
-  def handle_info({:job_resumed, %Job{} = _job}, state), do: {:noreply, state}
-
-  def handle_info({:EXIT, pid, reason}, state) do
-    # Check if it's our job_supervisor - if so, we need to stop
-    if pid == state.job_supervisor do
-      {:stop, reason, state}
-    else
-      # Other linked processes exiting normally (like ports) - ignore
-      {:noreply, state}
-    end
-  end
-
-  def handle_info({:continue_after_wait, executed_script, script_updates, from}, state) do
-    current_state = apply_state_updates(state, script_updates)
-
-    # Set up sinks and callbacks for continuation output
-    # start_background_job_fn and signal_jobs_fn must be set so background jobs
-    # started during continuation are executed immediately (not deferred)
-    start_bg_job_fn = fn foreground_ast, current_session_state ->
-      start_background_job_sync(foreground_ast, current_session_state, state)
-    end
-
-    signal_jobs_fn = fn signal, targets, current_session_state ->
-      send_signals_sync(signal, targets, current_session_state, state)
-    end
-
-    continuation_state = %{
-      current_state
-      | stdout_sink: Sink.collector(state.output_collector),
-        stderr_sink: Sink.collector(state.output_collector),
-        start_background_job_fn: start_bg_job_fn,
-        signal_jobs_fn: signal_jobs_fn
+    exec = %{
+      ref: ref,
+      caller: caller,
+      task_pid: task.pid,
+      task_ref: task.ref,
+      collector: collector
     }
 
-    case Script.continue_execution(executed_script, continuation_state) do
-      {:ok, final_script, continuation_updates} ->
-        new_state =
-          current_state
-          |> apply_state_updates(continuation_updates)
-          |> append_to_history(final_script)
-          |> update_exit_status(final_script)
+    %{state | current_execution: exec}
+  end
 
-        GenServer.reply(from, {:ok, final_script})
-        {:noreply, new_state}
+  # Drain the head of the pending queue and start it; clears current_execution
+  # if the queue is empty.
+  defp start_next_or_idle(%{pending_executions: []} = state) do
+    %{state | current_execution: nil}
+  end
 
-      {:wait_for_jobs, job_specs, continued_script, continuation_updates} ->
-        merged_updates = Map.merge(script_updates, continuation_updates)
+  defp start_next_or_idle(%{pending_executions: [next | rest]} = state) do
+    start_execution(
+      next.ref,
+      next.ast,
+      next.opts,
+      next.caller,
+      %{state | pending_executions: rest, current_execution: nil}
+    )
+  end
 
-        handle_wait_for_jobs_with_script(
-          job_specs,
-          continued_script,
-          merged_updates,
-          from,
-          current_state
-        )
+  defp build_sinks(opts, collector) do
+    stdout = sink_from_opt(Keyword.get(opts, :stdout_into), collector, :stdout)
+    stderr = sink_from_opt(Keyword.get(opts, :stderr_into), collector, :stderr)
 
-      {terminal, final_script, continuation_updates}
-      when terminal in [:exit, :error] ->
-        new_state =
-          current_state
-          |> apply_state_updates(continuation_updates)
-          |> append_to_history(final_script)
-          |> update_exit_status(final_script)
+    case Keyword.get(opts, :on_output) do
+      nil ->
+        %{stdout: stdout, stderr: stderr}
 
-        GenServer.reply(from, {terminal, final_script})
-        {:noreply, new_state}
-
-      _ ->
-        # Fallback: no remaining statements, reply with what we have
-        new_state =
-          current_state
-          |> append_to_history(executed_script)
-          |> update_exit_status(executed_script)
-
-        GenServer.reply(from, {:ok, executed_script})
-        {:noreply, new_state}
+      callback when is_function(callback, 1) ->
+        %{
+          stdout: wrap_with_callback(stdout, callback),
+          stderr: wrap_with_callback(stderr, callback)
+        }
     end
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  defp sink_from_opt(nil, collector, _type), do: Sink.collector(collector)
+  defp sink_from_opt(callback, _collector, _type) when is_function(callback, 1), do: callback
 
-  @impl GenServer
-  def terminate(_reason, state) do
-    stop_all_coprocs(state)
-    close_all_file_descriptors(state)
+  defp sink_from_opt(collectable, _collector, type),
+    do: Sink.stream(collectable, stream_type: type)
 
-    if state.job_supervisor && Process.alive?(state.job_supervisor) do
-      DynamicSupervisor.stop(state.job_supervisor, :shutdown)
+  defp wrap_with_callback(sink, callback) do
+    fn chunk ->
+      sink.(chunk)
+      callback.(chunk)
+      :ok
+    end
+  end
+
+  # Cooperative cancel: signal the Task. It yields at the next loop iteration,
+  # runs any matching trap and the EXIT trap, then returns {:cancelled, sig}
+  # which flows through handle_execution_result like any other completion.
+  # If opts has :grace, schedules a force-kill if the cooperative cancel
+  # hasn't landed within that many milliseconds.
+  defp do_cancel(exec, sig, state, opts) when sig in [:int, :sigint, :term, :sigterm, 2, 15] do
+    send(exec.task_pid, {:cancel, sig})
+
+    case Keyword.get(opts, :grace) do
+      nil -> :ok
+      grace when is_integer(grace) -> Process.send_after(self(), {:force_kill, exec.ref}, grace)
     end
 
+    state
+  end
+
+  # Hard cancel: untrappable kill. No traps run; partial output is preserved.
+  defp do_cancel(exec, sig, state, _opts) when sig in [:kill, :sigkill, 9] do
+    Process.demonitor(exec.task_ref, [:flush])
+    Process.exit(exec.task_pid, :kill)
+    transfer_and_cleanup_collector(exec.collector, state.output_collector)
+
+    result = %CommandResult{
+      command: "cancelled",
+      exit_code: 137,
+      error: :cancelled
+    }
+
+    send(exec.caller, {exec.ref, {:error, result}})
+    start_next_or_idle(state)
+  end
+
+  defp cancel_exit_code(sig) when sig in [:int, :sigint, 2], do: 130
+  defp cancel_exit_code(sig) when sig in [:term, :sigterm, 15], do: 143
+  defp cancel_exit_code(_), do: 130
+
+  defp signal_name(sig) when sig in [:int, :sigint, 2], do: "INT"
+  defp signal_name(sig) when sig in [:term, :sigterm, 15], do: "TERM"
+  defp signal_name(_), do: "INT"
+
+  defp run_cancel_traps(sig, state) do
+    Trap.run(state, signal_name(sig))
+    Trap.run(state, "EXIT")
     :ok
   end
 
@@ -1877,7 +2222,7 @@ defmodule Bash.Session do
 
   defp resolve_job_spec(_, state), do: state.current_job
 
-  defp execute_command_in_session(ast, state, opts \\ []),
+  defp execute_command_in_session(ast, state, opts),
     do: Executor.execute(ast, state, nil, opts)
 
   # Check if errexit should cause shell to exit
@@ -2082,7 +2427,12 @@ defmodule Bash.Session do
   # Start a background job synchronously and return the OS PID
   # This is used by Script executor to get $! immediately when & is encountered
   # Returns {os_pid_string, updated_session_state} or {:error, reason}
-  defp start_background_job_sync(foreground_ast, current_session_state, original_state) do
+  defp start_background_job_sync(
+         foreground_ast,
+         current_session_state,
+         original_state,
+         session_pid \\ self()
+       ) do
     {command, args, _command_string} =
       case foreground_ast do
         %Compound{} ->
@@ -2108,7 +2458,8 @@ defmodule Bash.Session do
           args,
           foreground_ast,
           current_session_state,
-          original_state
+          original_state,
+          session_pid
         )
     end
   end
@@ -2118,7 +2469,8 @@ defmodule Bash.Session do
          args,
          _foreground_ast,
          current_session_state,
-         original_state
+         original_state,
+         session_pid
        ) do
     job_number =
       case Map.get(current_session_state, :next_job_number) do
@@ -2134,7 +2486,7 @@ defmodule Bash.Session do
       job_number: job_number,
       command: command,
       args: args,
-      session_pid: self(),
+      session_pid: session_pid,
       working_dir: current_session_state.working_dir,
       env:
         Enum.map(current_session_state.variables, fn {k, v} ->
@@ -2762,7 +3114,6 @@ defmodule Bash.Session do
   end
 
   defp extract_command_info(%Compound{statements: statements}, state) do
-    # Find the first actual command (skip operators)
     first_cmd =
       Enum.find(statements, fn
         {:operator, _} -> false
@@ -2779,9 +3130,7 @@ defmodule Bash.Session do
   defp extract_command_info(_ast, _state), do: {"", []}
 
   # Build a command string from AST for display
-  defp build_command_string(ast) do
-    to_string(ast)
-  end
+  defp build_command_string(ast), do: to_string(ast)
 
   # Convert a Word to string, expanding variables
   defp word_to_string(%Bash.AST.Word{parts: parts}, state) do
@@ -3031,19 +3380,9 @@ defmodule Bash.Session do
 
   # Transfer output from temporary collector to session's persistent collector before cleanup
   defp transfer_and_cleanup_collector(temp_collector, session_collector) do
-    # Get output from temporary collector
     {stdout_iodata, stderr_iodata} = OutputCollector.output(temp_collector)
-
-    # Write to session's persistent collector (convert iodata to binary)
-    if IO.iodata_length(stdout_iodata) > 0 do
-      OutputCollector.write(session_collector, :stdout, IO.iodata_to_binary(stdout_iodata))
-    end
-
-    if IO.iodata_length(stderr_iodata) > 0 do
-      OutputCollector.write(session_collector, :stderr, IO.iodata_to_binary(stderr_iodata))
-    end
-
-    # Now cleanup the temporary collector
+    write_if_present(session_collector, :stdout, stdout_iodata)
+    write_if_present(session_collector, :stderr, stderr_iodata)
     cleanup_collector(temp_collector)
   end
 
@@ -3056,49 +3395,41 @@ defmodule Bash.Session do
   # Transfer output from temp collector to session's persistent collector
   # For Scripts, also keep the temp collector alive for result.collector access
   defp transfer_to_persistent_collector(temp_collector, session_collector, %Bash.Script{}) do
-    # Copy output to session's persistent collector (for session_stdout access)
     {stdout_iodata, stderr_iodata} = OutputCollector.output(temp_collector)
-
-    if IO.iodata_length(stdout_iodata) > 0 do
-      OutputCollector.write(session_collector, :stdout, IO.iodata_to_binary(stdout_iodata))
-    end
-
-    if IO.iodata_length(stderr_iodata) > 0 do
-      OutputCollector.write(session_collector, :stderr, IO.iodata_to_binary(stderr_iodata))
-    end
-
-    # Keep temp collector alive for result.collector access (get_stdout/get_stderr)
+    write_if_present(session_collector, :stdout, stdout_iodata)
+    write_if_present(session_collector, :stderr, stderr_iodata)
     :ok
   end
 
   defp transfer_to_persistent_collector(temp_collector, session_collector, _result) do
-    # Non-Script results: transfer and cleanup
     transfer_and_cleanup_collector(temp_collector, session_collector)
   end
 
-  # Helper to append command result to history
-  # Accept both CommandResult (legacy) and AST nodes with execution results
+  defp write_if_present(_collector, _stream, []), do: :ok
+  defp write_if_present(_collector, _stream, ""), do: :ok
+
+  defp write_if_present(collector, stream, iodata),
+    do: OutputCollector.write(collector, stream, IO.iodata_to_binary(iodata))
+
   defp append_to_history(state, %CommandResult{} = result) do
     %{state | command_history: state.command_history ++ [result]}
   end
 
   defp append_to_history(state, %{exit_code: exit_code} = result) when not is_nil(exit_code) do
-    # AST node with execution results
     %{state | command_history: state.command_history ++ [result]}
   end
 
   defp append_to_history(state, _result), do: state
 
-  # Convert signal name to number
   defp signal_to_number(sig) when is_integer(sig), do: sig
-  defp signal_to_number(:sigterm), do: 15
-  defp signal_to_number(:sigkill), do: 9
-  defp signal_to_number(:sigstop), do: 19
-  defp signal_to_number(:sigcont), do: 18
-  defp signal_to_number(:sighup), do: 1
-  defp signal_to_number(:sigint), do: 2
-  defp signal_to_number(:sigquit), do: 3
-  defp signal_to_number(:sigusr1), do: 10
-  defp signal_to_number(:sigusr2), do: 12
+  defp signal_to_number(sig) when sig in ~w[sigterm term]a, do: 15
+  defp signal_to_number(sig) when sig in ~w[sigkill kill]a, do: 9
+  defp signal_to_number(sig) when sig in ~w[sigstop stop]a, do: 19
+  defp signal_to_number(sig) when sig in ~w[sigcont cont]a, do: 18
+  defp signal_to_number(sig) when sig in ~w[sighup hup]a, do: 1
+  defp signal_to_number(sig) when sig in ~w[sigint int]a, do: 2
+  defp signal_to_number(sig) when sig in ~w[sigquit quit]a, do: 3
+  defp signal_to_number(sig) when sig in ~w[sigusr1 usr1]a, do: 10
+  defp signal_to_number(sig) when sig in ~w[sigusr2 usr2]a, do: 12
   defp signal_to_number(other), do: other
 end
