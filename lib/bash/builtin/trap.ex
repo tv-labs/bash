@@ -423,4 +423,29 @@ defmodule Bash.Builtin.Trap do
   def get_return_trap(session_state) do
     get_trap(session_state, "RETURN")
   end
+
+  # Run the trap registered for the given signal name (e.g. "INT", "EXIT").
+  # No-op if no trap is set, the trap is :ignore, the signal name is invalid,
+  # or the session is already inside a trap (the :in_trap flag prevents
+  # recursion). Returns :ok regardless of trap success.
+  @doc false
+  @spec run(Bash.Session.t(), String.t()) :: :ok
+  def run(%{in_trap: true}, _signal_name), do: :ok
+
+  def run(session_state, signal_name) do
+    session_state
+    |> get_trap(signal_name)
+    |> do_run(session_state)
+  end
+
+  defp do_run(nil, _state), do: :ok
+  defp do_run(:ignore, _state), do: :ok
+
+  defp do_run(command, state) when is_binary(command) do
+    with {:ok, ast} <- Bash.Parser.parse(command) do
+      Bash.AST.Helpers.execute_body(ast.statements, %{state | in_trap: true}, %{})
+    end
+
+    :ok
+  end
 end

@@ -47,6 +47,8 @@ defmodule Bash.AST.Helpers do
               options: acc_options
           }
 
+          Executor.check_cancel(stmt_session)
+
           case Executor.execute(stmt, stmt_session, nil) do
             {:ok, result, updates} ->
               variables_from_stmt = Map.get(updates, :variables, %{})

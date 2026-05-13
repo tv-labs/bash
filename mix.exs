@@ -138,7 +138,8 @@ defmodule Bash.MixProject do
         ],
         "Job Control": [
           Bash.Job,
-          Bash.JobProcess
+          Bash.JobProcess,
+          Bash.Session.ExecRef
         ],
         Builtins: [
           Bash.Builtin,

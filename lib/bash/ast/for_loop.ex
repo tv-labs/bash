@@ -231,6 +231,7 @@ defmodule Bash.AST.ForLoop do
   end
 
   defp execute_for_loop([item | rest], var_name, body, session_state, env_acc, count, _last_exit) do
+    Executor.check_cancel(session_state)
     # Set the loop variable in the session state with accumulated updates
     new_variables =
       Map.merge(

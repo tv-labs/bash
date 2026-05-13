@@ -599,6 +599,540 @@ defmodule Bash.SessionTest do
     end
   end
 
+  describe "execute_async/3 and await/2" do
+    test "returns ExecRef and resolves via await", %{session: session} do
+      {:ok, ast} = Bash.Parser.parse("echo hello")
+      assert {:ok, %Session.ExecRef{} = ref} = Session.execute_async(session, ast)
+      assert {:ok, _result} = Session.await(ref)
+    end
+
+    test "await with timeout returns {:error, :timeout} for long script", %{session: session} do
+      {:ok, ast} = Bash.Parser.parse("while true; do :; done")
+      {:ok, ref} = Session.execute_async(session, ast)
+      assert {:error, :timeout} = Session.await(ref, 50)
+      Session.signal(ref, :sigint)
+    end
+
+    test "await reports session_down if session crashes mid-execution", %{session: session} do
+      {:ok, ast} = Bash.Parser.parse("while true; do :; done")
+      {:ok, ref} = Session.execute_async(session, ast)
+
+      capture_log(fn ->
+        Process.exit(session, :kill)
+        assert {:error, {:session_down, :killed}} = Session.await(ref, 1000)
+      end)
+    end
+
+    test "concurrent execute_async calls queue and run sequentially", %{session: session} do
+      Session.load_api(session, Bash.SessionTest.TestAPI)
+      pid = pid_arg(self())
+
+      # Each chunk reports when it starts. Sequential execution implies
+      # ast1 reports start, finishes, ast2 reports start. Any parallel
+      # execution would interleave or deliver ast2's start before ast1's
+      # body completes.
+      {:ok, ast1} =
+        Bash.Parser.parse("session_test.notify '#{pid}'; echo a; echo b")
+
+      {:ok, ast2} =
+        Bash.Parser.parse("session_test.notify '#{pid}'; echo c; echo d")
+
+      {:ok, ref1} = Session.execute_async(session, ast1)
+      {:ok, ref2} = Session.execute_async(session, ast2)
+      assert ref1 != ref2
+
+      # ast1 begins immediately; ast2 must NOT have started yet
+      assert_receive :script_running, 1000
+      refute_received :script_running
+
+      # await ast1; only after that does ast2 start
+      assert {:ok, _} = Session.await(ref1, 1000)
+      assert_receive :script_running, 1000
+
+      assert {:ok, _} = Session.await(ref2, 1000)
+
+      # Output appears in strictly sequential order.
+      assert session_stdout(session) == "a\nb\nc\nd\n"
+    end
+  end
+
+  describe "signal/2" do
+    setup %{session: session} do
+      Session.load_api(session, Bash.SessionTest.TestAPI)
+      :ok
+    end
+
+    defp running_loop_script(test_pid) do
+      """
+      session_test.notify '#{pid_arg(test_pid)}'
+      while true; do :; done
+      """
+    end
+
+    defp start_loop(session) do
+      {:ok, ast} = Bash.Parser.parse(running_loop_script(self()))
+      {:ok, ref} = Session.execute_async(session, ast)
+      assert_receive :script_running, 1000
+      ref
+    end
+
+    test "signal(session, :sigint) cancels foreground with exit 130", %{session: session} do
+      ref = start_loop(session)
+      assert :ok = Session.signal(session, :sigint)
+      assert {:error, %{exit_code: 130, error: :cancelled}} = Session.await(ref, 1000)
+    end
+
+    test "signal(ref, :sigint) cancels that specific execution", %{session: session} do
+      ref = start_loop(session)
+      assert :ok = Session.signal(ref, :sigint)
+      assert {:error, %{exit_code: 130}} = Session.await(ref, 1000)
+    end
+
+    test "signal(ref, :sigkill) returns exit code 137", %{session: session} do
+      ref = start_loop(session)
+      assert :ok = Session.signal(ref, :sigkill)
+      assert {:error, %{exit_code: 137}} = Session.await(ref, 1000)
+    end
+
+    test "signal(session, :sigint) is {:error, :not_found} when idle", %{session: session} do
+      assert {:error, :not_found} = Session.signal(session, :sigint)
+    end
+
+    test "signal(stale_ref, :sigint) returns :not_found after that execution finishes",
+         %{session: session} do
+      {:ok, ast} = Bash.Parser.parse("echo done")
+      {:ok, ref} = Session.execute_async(session, ast)
+      {:ok, _} = Session.await(ref)
+      assert {:error, :not_found} = Session.signal(ref, :sigint)
+    end
+
+    test "session state is preserved after cancellation", %{session: session} do
+      run_script(session, "x=42")
+      ref = start_loop(session)
+      Session.signal(ref, :sigint)
+      Session.await(ref, 1000)
+
+      assert get_var(session, "x") == "42"
+    end
+
+    test "session is usable after cancellation", %{session: session} do
+      ref = start_loop(session)
+      Session.signal(ref, :sigint)
+      Session.await(ref, 1000)
+
+      result = run_script(session, "echo hello")
+      assert get_stdout(result) == "hello\n"
+    end
+
+    test "stdout written before cancel is preserved on the session", %{session: session} do
+      pid = pid_arg(self())
+
+      {:ok, ast} =
+        Bash.Parser.parse("""
+        echo before-cancel
+        session_test.notify '#{pid}'
+        while true; do :; done
+        """)
+
+      {:ok, ref} = Session.execute_async(session, ast)
+      assert_receive :script_running, 1000
+      Session.signal(ref, :sigint)
+      Session.await(ref, 1000)
+
+      assert session_stdout(session) =~ "before-cancel"
+    end
+
+    test "stderr written before cancel is preserved on the session", %{session: session} do
+      pid = pid_arg(self())
+
+      {:ok, ast} =
+        Bash.Parser.parse("""
+        echo oops >&2
+        session_test.notify '#{pid}'
+        while true; do :; done
+        """)
+
+      {:ok, ref} = Session.execute_async(session, ast)
+      assert_receive :script_running, 1000
+      Session.signal(ref, :sigint)
+      Session.await(ref, 1000)
+
+      assert session_stderr(session) =~ "oops"
+    end
+
+    test "INT trap runs on :sigint and its output is collected", %{session: session} do
+      pid = pid_arg(self())
+
+      {:ok, ast} =
+        Bash.Parser.parse("""
+        trap 'echo trap-ran' INT
+        session_test.notify '#{pid}'
+        while true; do :; done
+        """)
+
+      {:ok, ref} = Session.execute_async(session, ast)
+      assert_receive :script_running, 1000
+      Session.signal(ref, :sigint)
+      assert {:error, %{exit_code: 130}} = Session.await(ref, 1000)
+
+      assert session_stdout(session) =~ "trap-ran"
+    end
+
+    test "EXIT trap also runs on :sigint", %{session: session} do
+      pid = pid_arg(self())
+
+      {:ok, ast} =
+        Bash.Parser.parse("""
+        trap 'echo on-exit' EXIT
+        session_test.notify '#{pid}'
+        while true; do :; done
+        """)
+
+      {:ok, ref} = Session.execute_async(session, ast)
+      assert_receive :script_running, 1000
+      Session.signal(ref, :sigint)
+      assert {:error, %{exit_code: 130}} = Session.await(ref, 1000)
+
+      assert session_stdout(session) =~ "on-exit"
+    end
+
+    test ":sigterm runs TERM trap and exits 143", %{session: session} do
+      pid = pid_arg(self())
+
+      {:ok, ast} =
+        Bash.Parser.parse("""
+        trap 'echo term-ran' TERM
+        session_test.notify '#{pid}'
+        while true; do :; done
+        """)
+
+      {:ok, ref} = Session.execute_async(session, ast)
+      assert_receive :script_running, 1000
+      Session.signal(ref, :sigterm)
+      assert {:error, %{exit_code: 143}} = Session.await(ref, 1000)
+
+      assert session_stdout(session) =~ "term-ran"
+    end
+
+    test ":sigkill bypasses traps", %{session: session} do
+      pid = pid_arg(self())
+
+      {:ok, ast} =
+        Bash.Parser.parse("""
+        trap 'echo should-not-run' INT
+        trap 'echo also-not' EXIT
+        session_test.notify '#{pid}'
+        while true; do :; done
+        """)
+
+      {:ok, ref} = Session.execute_async(session, ast)
+      assert_receive :script_running, 1000
+      Session.signal(ref, :sigkill)
+      assert {:error, %{exit_code: 137}} = Session.await(ref, 1000)
+
+      refute session_stdout(session) =~ "should-not-run"
+      refute session_stdout(session) =~ "also-not"
+    end
+
+    test "non-loop scripts also yield to cancellation between statements",
+         %{session: session} do
+      pid = pid_arg(session)
+
+      {:ok, ast} =
+        Bash.Parser.parse("""
+        echo first
+        session_test.cancel_now '#{pid}'
+        echo should-not-run
+        """)
+
+      {:ok, ref} = Session.execute_async(session, ast)
+      assert {:error, %{exit_code: 130}} = Session.await(ref, 1000)
+
+      stdout = session_stdout(session)
+      assert stdout =~ "first"
+      refute stdout =~ "should-not-run"
+    end
+
+    test ":grace escalates to :sigkill when cooperative cancel doesn't land",
+         %{session: session} do
+      pid = pid_arg(self())
+
+      # session_test.spin is a defbash with no yield points — cooperative
+      # cancel can't land while it's running.
+      {:ok, ast} =
+        Bash.Parser.parse("""
+        session_test.notify '#{pid}'
+        session_test.spin
+        """)
+
+      {:ok, ref} = Session.execute_async(session, ast)
+      assert_receive :script_running, 1000
+
+      Session.signal(ref, :sigint, grace: 50)
+      assert {:error, %{exit_code: 137, error: :cancelled}} = Session.await(ref, 1000)
+    end
+
+    test ":grace does not escalate when cancel lands within the window",
+         %{session: session} do
+      pid = pid_arg(self())
+
+      # while-true yields every iteration — cancel lands fast.
+      {:ok, ast} =
+        Bash.Parser.parse("""
+        session_test.notify '#{pid}'
+        while true; do :; done
+        """)
+
+      {:ok, %Session.ExecRef{ref: internal_ref} = ref} = Session.execute_async(session, ast)
+      assert_receive :script_running, 1000
+
+      Session.signal(ref, :sigint, grace: 5_000)
+      assert {:error, %{exit_code: 130}} = Session.await(ref, 1000)
+
+      # Simulate the stale force_kill timer firing after the cooperative
+      # cancel already cleared current_execution. The catch-all handle_info
+      # clause must absorb it without affecting subsequent work.
+      send(session, {:force_kill, internal_ref})
+
+      assert {:error, :not_found} = Session.signal(session, :sigint)
+      assert {:ok, _} = Session.execute(session, elem(Bash.Parser.parse("echo ok"), 1))
+    end
+
+    test "abnormal Task crash surfaces an error and clears current_execution",
+         %{session: session} do
+      {:ok, ast} = Bash.Parser.parse("session_test.boom")
+
+      capture_log(fn ->
+        {:ok, ref} = Session.execute_async(session, ast)
+        assert {:error, %{error: {:task_crashed, _}}} = Session.await(ref, 1000)
+      end)
+
+      # Session is still alive and accepts new executions
+      assert {:error, :not_found} = Session.signal(session, :sigint)
+      assert {:ok, _result} = Session.execute(session, elem(Bash.Parser.parse("echo ok"), 1))
+    end
+  end
+
+  describe "execute_async queue" do
+    setup %{session: session} do
+      Session.load_api(session, Bash.SessionTest.TestAPI)
+      :ok
+    end
+
+    test "cancelling current drains pending and runs the next", %{session: session} do
+      pid_self = pid_arg(self())
+      pid_session = pid_arg(session)
+
+      {:ok, looping} =
+        Bash.Parser.parse("""
+        session_test.notify '#{pid_self}'
+        while true; do :; done
+        """)
+
+      {:ok, follow_up} = Bash.Parser.parse("echo follow-up")
+
+      {:ok, ref1} = Session.execute_async(session, looping)
+      {:ok, ref2} = Session.execute_async(session, follow_up)
+
+      assert_receive :script_running, 1000
+      Session.signal(session, :sigint)
+
+      assert {:error, %{exit_code: 130}} = Session.await(ref1, 1000)
+      assert {:ok, _} = Session.await(ref2, 1000)
+      assert session_stdout(session) =~ "follow-up"
+
+      # State after cancel + drain: idle, ready for more
+      assert {:error, :not_found} = Session.signal(session, :sigint)
+      _ = pid_session
+    end
+
+    test "signal(pending_ref, :sigint) cancels a queued execution with exit 130",
+         %{session: session} do
+      {:ok, ast1} =
+        Bash.Parser.parse(
+          "session_test.notify '#{pid_arg(self())}'; sleep_loop=true; while $sleep_loop; do :; done"
+        )
+
+      {:ok, ast2} = Bash.Parser.parse("echo should-not-run")
+
+      {:ok, ref1} = Session.execute_async(session, ast1)
+      {:ok, ref2} = Session.execute_async(session, ast2)
+
+      assert_receive :script_running, 1000
+      assert :ok = Session.signal(ref2, :sigint)
+      assert {:error, %{exit_code: 130, error: :cancelled}} = Session.await(ref2, 1000)
+
+      Session.signal(ref1, :sigint)
+      Session.await(ref1, 1000)
+
+      refute session_stdout(session) =~ "should-not-run"
+    end
+
+    test "signal(pending_ref, :sigterm) yields exit 143", %{session: session} do
+      {:ok, ast1} =
+        Bash.Parser.parse("session_test.notify '#{pid_arg(self())}'; while true; do :; done")
+
+      {:ok, ast2} = Bash.Parser.parse("echo never")
+
+      {:ok, ref1} = Session.execute_async(session, ast1)
+      {:ok, ref2} = Session.execute_async(session, ast2)
+
+      assert_receive :script_running, 1000
+      assert :ok = Session.signal(ref2, :sigterm)
+      assert {:error, %{exit_code: 143}} = Session.await(ref2, 1000)
+
+      Session.signal(ref1, :sigint)
+      Session.await(ref1, 1000)
+    end
+
+    test "signal(unknown_ref, :sigint) returns :not_found", %{session: session} do
+      stale = %Session.ExecRef{
+        session: session,
+        ref: make_ref(),
+        monitor: Process.monitor(session)
+      }
+
+      assert {:error, :not_found} = Session.signal(stale, :sigint)
+    end
+
+    test "cancelling pending does not affect current or other pending", %{session: session} do
+      {:ok, looping} =
+        Bash.Parser.parse("session_test.notify '#{pid_arg(self())}'; while true; do :; done")
+
+      {:ok, ast2} = Bash.Parser.parse("echo two")
+      {:ok, ast3} = Bash.Parser.parse("echo three")
+
+      {:ok, ref1} = Session.execute_async(session, looping)
+      {:ok, ref2} = Session.execute_async(session, ast2)
+      {:ok, ref3} = Session.execute_async(session, ast3)
+
+      assert_receive :script_running, 1000
+      assert :ok = Session.signal(ref2, :sigint)
+
+      Session.signal(ref1, :sigint)
+      assert {:error, %{exit_code: 130}} = Session.await(ref1, 1000)
+      assert {:error, %{exit_code: 130}} = Session.await(ref2, 1000)
+      assert {:ok, _} = Session.await(ref3, 1000)
+
+      assert session_stdout(session) =~ "three"
+      refute session_stdout(session) =~ "two"
+    end
+  end
+
+  describe "cancellation with command policy and virtual filesystem" do
+    alias Bash.Filesystem.ETS, as: FS
+
+    defp start_restricted_ets_session(context) do
+      table = FS.new(%{"/workspace/data.txt" => "seed\n"})
+
+      registry_name = Module.concat([context.module, ETSRegistry, context.test])
+      supervisor_name = Module.concat([context.module, ETSSupervisor, context.test])
+
+      start_supervised!({Registry, keys: :unique, name: registry_name}, id: registry_name)
+
+      start_supervised!(
+        {DynamicSupervisor, strategy: :one_for_one, name: supervisor_name},
+        id: supervisor_name
+      )
+
+      {:ok, session} =
+        Session.new(
+          id: "#{context.test}",
+          filesystem: {FS, table},
+          working_dir: "/workspace",
+          registry: registry_name,
+          supervisor: supervisor_name,
+          command_policy: [commands: :no_external],
+          apis: [Bash.SessionTest.TestAPI]
+        )
+
+      {session, table}
+    end
+
+    defp pid_arg(pid), do: pid |> :erlang.pid_to_list() |> to_string()
+
+    test "cancels mid-stream while writing to virtual filesystem", context do
+      {session, table} = start_restricted_ets_session(context)
+      pid = pid_arg(session)
+
+      {:ok, ast} =
+        Bash.Parser.parse("""
+        i=0
+        while [ $i -lt 100 ]; do
+          echo "line $i" >> output.txt
+          if [ $i -eq 5 ]; then
+            session_test.cancel_now '#{pid}'
+          fi
+          i=$((i + 1))
+        done
+        """)
+
+      {:ok, ref} = Session.execute_async(session, ast)
+      assert {:error, %{exit_code: 130}} = Session.await(ref, 5000)
+
+      # Partial writes that landed before the cancel are preserved in the VFS
+      assert {:ok, contents} = FS.read(table, "/workspace/output.txt")
+      for i <- 1..5, do: assert(contents =~ "line #{i}")
+      refute contents =~ "line 6"
+
+      # The session is still alive and the VFS still works
+      run_script(session, "echo done >> done.txt")
+      assert {:ok, "done\n"} = FS.read(table, "/workspace/done.txt")
+    end
+
+    test "cancels mid-stream while reading from virtual filesystem", context do
+      {session, _table} = start_restricted_ets_session(context)
+      pid = pid_arg(session)
+
+      run_script(session, "echo content > big.txt")
+
+      {:ok, ast} =
+        Bash.Parser.parse("""
+        n=0
+        while [ $n -lt 100 ]; do
+          contents=$(cat big.txt)
+          echo "$contents" >> log.txt
+          n=$((n + 1))
+          if [ $n -eq 10 ]; then
+            session_test.cancel_now '#{pid}'
+          fi
+        done
+        """)
+
+      {:ok, ref} = Session.execute_async(session, ast)
+      assert {:error, %{exit_code: 130}} = Session.await(ref, 5000)
+
+      result = run_script(session, "echo still-here")
+      assert get_stdout(result) =~ "still-here"
+    end
+
+    test "command policy still enforces after cancellation", context do
+      {session, _table} = start_restricted_ets_session(context)
+      pid = pid_arg(session)
+
+      {:ok, ast} = Bash.Parser.parse("session_test.cancel_now '#{pid}'; :")
+      {:ok, ref} = Session.execute_async(session, ast)
+      Session.await(ref, 5000)
+
+      # External commands remain blocked by policy after cancel
+      result = run_script(session, "ls /etc")
+      assert result.exit_code != 0
+    end
+
+    test "session state persists across cancel with VFS + policy", context do
+      {session, table} = start_restricted_ets_session(context)
+      pid = pid_arg(session)
+      run_script(session, "x=hello-world")
+
+      {:ok, ast} = Bash.Parser.parse("session_test.cancel_now '#{pid}'; :")
+      {:ok, ref} = Session.execute_async(session, ast)
+      Session.await(ref, 5000)
+
+      assert get_var(session, "x") == "hello-world"
+      assert {:ok, "seed\n"} = FS.read(table, "/workspace/data.txt")
+    end
+  end
+
   defmodule TestAPI do
     @moduledoc false
     use Bash.Interop, namespace: "session_test"
@@ -607,5 +1141,27 @@ defmodule Bash.SessionTest do
       Bash.puts("pong\n")
       :ok
     end
+
+    defbash cancel_now([pid_str], _state) do
+      pid = pid_str |> String.to_charlist() |> :erlang.list_to_pid()
+      Bash.Session.signal(pid, :sigint)
+      :ok
+    end
+
+    defbash notify([pid_str], _state) do
+      pid = pid_str |> String.to_charlist() |> :erlang.list_to_pid()
+      send(pid, :script_running)
+      :ok
+    end
+
+    defbash boom(_args, _state) do
+      raise "boom"
+    end
+
+    defbash spin(_args, _state) do
+      spin_loop()
+    end
+
+    defp spin_loop, do: spin_loop()
   end
 end

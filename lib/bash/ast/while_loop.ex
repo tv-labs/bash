@@ -217,6 +217,8 @@ defmodule Bash.AST.WhileLoop do
          iteration,
          effective_stdin
        ) do
+    Executor.check_cancel(session_state)
+
     # Safety check to prevent infinite loops
     if iteration >= @max_loop_iterations do
       # Write error to stderr sink

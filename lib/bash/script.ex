@@ -20,11 +20,9 @@ defmodule Bash.Script do
   """
 
   alias Bash.AST
-  alias Bash.AST.Helpers
   alias Bash.AST.Pipeline
   alias Bash.Builtin.Trap
   alias Bash.Executor
-  alias Bash.Parser
   alias Bash.Variable
 
   @type separator :: {:separator, String.t()}
@@ -247,34 +245,7 @@ defmodule Bash.Script do
   defp mark_executed(%{exit_code: _} = stmt, code), do: %{stmt | exit_code: code}
   defp mark_executed(stmt, _code), do: stmt
 
-  # Execute EXIT trap if one is set
-  # The EXIT trap runs when the shell exits (script finishes)
-  defp execute_exit_trap(session_state) do
-    # Skip if already executing a trap (prevent infinite recursion)
-    if Map.get(session_state, :in_trap, false) do
-      :ok
-    else
-      case Trap.get_exit_trap(session_state) do
-        nil ->
-          :ok
-
-        :ignore ->
-          :ok
-
-        trap_command when is_binary(trap_command) ->
-          # Parse and execute the trap command
-          case Parser.parse(trap_command) do
-            {:ok, ast} ->
-              # Execute trap with in_trap flag to prevent recursion
-              trap_session = Map.put(session_state, :in_trap, true)
-              Helpers.execute_body(ast.statements, trap_session, %{})
-
-            {:error, _, _, _} ->
-              :ok
-          end
-      end
-    end
-  end
+  defp execute_exit_trap(session_state), do: Trap.run(session_state, "EXIT")
 
   # Execute statements sequentially, accumulating results
   defp execute_statements([], _session_state, executed, last_exit_code, output, updates) do
@@ -321,6 +292,8 @@ defmodule Bash.Script do
       # In noexec mode, read but don't execute - continue with exit code 0
       execute_statements(rest, session_state, [stmt | executed], 0, output, updates)
     else
+      Executor.check_cancel(updated_session)
+
       case Executor.execute(stmt, updated_session, nil) do
         {:ok, executed_stmt, stmt_updates} ->
           new_output = output ++ extract_output(executed_stmt)

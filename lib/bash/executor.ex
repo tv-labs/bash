@@ -84,4 +84,25 @@ defmodule Bash.Executor do
   def execute(token, _session_state, _stdin, _opts) do
     {:error, {:invalid_ast, token}}
   end
+
+  @doc """
+  Yield to a pending cooperative cancel.
+
+  Loop iterators call this at the start of each iteration with the current
+  threaded session state. If the session has signalled this Task with
+  `{:cancel, signal}` (via `Bash.Session.signal/2` with `:sigint`/`:sigterm`),
+  this throws `{:cancelled, signal, state}` so the Task closure can run any
+  matching trap (using the current traps map) and return a cancellation
+  result. Returns `:ok` when no cancel is pending.
+  """
+  @spec check_cancel(map()) :: :ok | no_return()
+  def check_cancel(%{in_trap: true}), do: :ok
+
+  def check_cancel(state) do
+    receive do
+      {:cancel, signal} -> throw({:cancelled, signal, state})
+    after
+      0 -> :ok
+    end
+  end
 end
