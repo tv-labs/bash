@@ -126,8 +126,6 @@ defmodule Bash.Builtin.Eval do
     end
   end
 
-  defp return_terminated?(_), do: false
-
   # Wrap Parser.parse to catch tokenizer errors that raise exceptions
   defp safe_parse(command_string) do
     Parser.parse(command_string)
