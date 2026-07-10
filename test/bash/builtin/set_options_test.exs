@@ -182,17 +182,23 @@ defmodule Bash.Builtin.SetOptionsTest do
       temp_file = Path.join(tmp_dir, "noclobber_test")
       File.write!(temp_file, "original content")
 
+      # Quote the redirect target: the tmp_dir path can contain shell-special
+      # characters (e.g. "(" from the test name), which would otherwise break
+      # parsing of an unquoted redirect target.
       result =
         run_script(session, """
         set -C
-        echo "new content" > #{temp_file}
+        echo "new content" > "#{temp_file}"
         """)
 
-      # Command should have non-zero exit code
-      assert result.exit_code != 0
+      # Command should have a non-zero exit code
+      assert result.exit_code not in [0, nil]
 
-      # Error message should be in stderr
-      assert String.contains?(get_stderr(result), "cannot overwrite existing file")
+      # Error message should be in stderr. Read from the session rather than the
+      # result: the result-embedded collector is transferred to the session's
+      # persistent collector and cleaned up asynchronously after execution.
+      {_out, err} = flush_session_output(session)
+      assert String.contains?(err, "cannot overwrite existing file")
 
       # Original content should be preserved
       assert File.read!(temp_file) == "original content"
