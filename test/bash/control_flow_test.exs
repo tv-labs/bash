@@ -399,5 +399,41 @@ defmodule Bash.ControlFlowTest do
 
       assert String.contains?(get_stdout(result), "should reach here")
     end
+
+    test "set -e exits from a looping function called inside a for loop", %{session: session} do
+      script = """
+      set -e
+      fails() { for j in 1; do false; done; }
+      for i in 1 2; do
+        echo $i
+        fails
+      done
+      echo "should not reach here"
+      """
+
+      {:ok, ast} = Parser.parse(String.trim(script))
+      {:exit, result} = Session.execute(session, ast)
+
+      assert result.exit_code == 1
+      assert get_stdout(result) == "1\n"
+    end
+
+    test "set -e exits from a looping function called inside a while loop", %{session: session} do
+      script = """
+      set -e
+      fails() { for j in 1; do false; done; }
+      while true; do
+        echo looped
+        fails
+      done
+      echo "should not reach here"
+      """
+
+      {:ok, ast} = Parser.parse(String.trim(script))
+      {:exit, result} = Session.execute(session, ast)
+
+      assert result.exit_code == 1
+      assert get_stdout(result) == "looped\n"
+    end
   end
 end

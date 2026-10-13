@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.6.0 (2026-10-13)
+
+- BREAKING - `Bash.Session.execute_async/3` now returns `{:ok, exec_ref}` instead of `:ok`. Pass the `Bash.Session.ExecRef` to `Bash.Session.await/2` to get the result. Only one foreground execution runs per session at a time; additional calls queue behind it and share state like sequential chunks of one script.
+- Add `Bash.Session.await/2` with an optional timeout. `Bash.Session.execute/3` also accepts a `:timeout` option.
+- Add `Bash.Session.signal/3` to cancel a running or queued execution by session pid or `ExecRef`. `:sigint` and `:sigterm` run the script's `INT`/`TERM` and `EXIT` traps (exit codes 130/143); `:sigkill` skips traps (exit code 137). The `:grace` option escalates to `:sigkill` if a cooperative cancel doesn't land in time.
+- Fix type warning on Elixir 1.20.
+
 ## 0.5.1 (2026-04-13)
 
 - Load API modules before executing. thanks @lostbean
