@@ -858,12 +858,9 @@ defmodule Bash.SessionTest do
       pid = pid_arg(self())
 
       # session_test.spin is a defbash with no yield points — cooperative
-      # cancel can't land while it's running.
-      {:ok, ast} =
-        Bash.Parser.parse("""
-        session_test.notify '#{pid}'
-        session_test.spin
-        """)
+      # cancel can't land while it's running. It notifies from inside the
+      # builtin so the signal can't land in the yield before it starts.
+      {:ok, ast} = Bash.Parser.parse("session_test.spin '#{pid}'")
 
       {:ok, ref} = Session.execute_async(session, ast)
       assert_receive :script_running, 1000
@@ -1158,7 +1155,9 @@ defmodule Bash.SessionTest do
       raise "boom"
     end
 
-    defbash spin(_args, _state) do
+    defbash spin([pid_str], _state) do
+      pid = pid_str |> String.to_charlist() |> :erlang.list_to_pid()
+      send(pid, :script_running)
       spin_loop()
     end
 

@@ -395,6 +395,9 @@ defmodule Bash.AST.ForLoop do
       {:exit, result} ->
         {:exit, %{exit_code: result.exit_code}, env_acc}
 
+      {:exit, result, _updates} ->
+        {:exit, %{exit_code: result.exit_code}, env_acc}
+
       {:error, result} ->
         {:error, result}
     end
